@@ -94,6 +94,26 @@ body {
   color: #e7e9ee;
 }
 
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tab {
+  padding: 6px 14px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: #9aa1ad;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: #1b2030;
+  color: #fff;
+}
+
 .app-body {
   display: flex;
   flex: 1;

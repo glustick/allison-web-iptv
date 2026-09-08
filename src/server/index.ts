@@ -117,6 +117,69 @@ app.post('/api/connect', (req, res) => {
   res.json({ ok: true })
 })
 
+// Resolves a client-relative stream path (e.g. /live/user/pass/123.m3u8, exactly what
+// xtreamClient.ts's getStreamUrl() already returns) into the real, absolute upstream URL —
+// needed here because ffmpeg (unlike the browser) fetches its source directly over the
+// network itself, not through this app's own proxy, so it needs a real reachable URL rather
+// than a same-origin relative one. Mirrors the desktop app's own Player.tsx, which passes
+// nowPlaying.url (already the raw upstream URL there) straight to transcode:start.
+function resolveUpstreamUrl(relativeOrAbsolute: string): string {
+  if (!proxyTargetBase) throw new Error('Not connected to an Xtream server')
+  return new URL(relativeOrAbsolute, proxyTargetBase).href
+}
+
+app.post('/api/transcode/start', (req, res) => {
+  const { sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex } = req.body ?? {}
+  if (typeof sourceUrl !== 'string' || typeof sessionId !== 'string') {
+    res.status(400).json({ error: 'Missing sourceUrl/sessionId' })
+    return
+  }
+  transcodeService
+    .startTranscode(resolveUpstreamUrl(sourceUrl), Boolean(isVod), sessionId, subtitleStreamIndex, audioStreamIndex)
+    .then(({ playlistPath, subtitleTracks }) => {
+      // Same reasoning as the desktop app's own transcode:start handler: the filename varies
+      // (playlist.m3u8 normally, master.m3u8 when a subtitle rendition got included), so
+      // basename() rather than a hardcoded name is what makes that switch actually reach the
+      // player. Relative, same-origin — the public Express app's own relay middleware already
+      // forwards anything under /__transcode/ into the internal proxy that serves it.
+      res.json({ sessionId, url: `/__transcode/${sessionId}/${path.basename(playlistPath)}`, subtitleTracks })
+    })
+    .catch((err) => {
+      console.error('[transcode] start failed:', err)
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    })
+})
+
+app.post('/api/transcode/stop', (req, res) => {
+  const sessionId = req.body?.sessionId
+  if (typeof sessionId !== 'string') {
+    res.status(400).json({ error: 'Missing sessionId' })
+    return
+  }
+  transcodeService
+    .stopTranscode(sessionId)
+    .then(() => res.json({ ok: true }))
+    .catch((err) => {
+      console.error('[transcode] stop failed:', err)
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    })
+})
+
+app.post('/api/transcode/probeTracks', (req, res) => {
+  const sourceUrl = req.body?.sourceUrl
+  if (typeof sourceUrl !== 'string') {
+    res.status(400).json({ error: 'Missing sourceUrl' })
+    return
+  }
+  transcodeService
+    .probeTracks(resolveUpstreamUrl(sourceUrl))
+    .then((tracks) => res.json(tracks))
+    .catch((err) => {
+      console.error('[transcode] probe failed:', err)
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    })
+})
+
 // Every request the ported proxy owns — the Xtream-base-relative path, plus its two explicit
 // prefixes — gets relayed into the internal proxy server rather than reimplemented here.
 function relayToProxy(req: IncomingMessage, res: ServerResponse): void {
@@ -158,3 +221,16 @@ app.get('*', (_req, res) => {
 createHttpServer(app).listen(PUBLIC_PORT, () => {
   console.log(`[server] Allison Web IPTV listening on http://localhost:${PUBLIC_PORT}`)
 })
+
+// Same reasoning as the desktop app's own 'before-quit' handler: an active transcode session
+// is a real ffmpeg child process reading from the account's connection — left running, it
+// competes with whatever plays next (fatal on a single-connection account) and just wastes
+// CPU/disk otherwise. Confirmed live during this project's own testing: killing this server
+// process directly (not through a graceful stop) orphaned exactly one of these, still running
+// minutes later with nothing left to serve its output to.
+function shutdown(): void {
+  transcodeService.stopAll()
+  process.exit(0)
+}
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
