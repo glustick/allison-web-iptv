@@ -1,0 +1,655 @@
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type Server } from 'http'
+import { EventEmitter } from 'events'
+import { AddressInfo } from 'net'
+import {
+  createProxyServer,
+  rewriteM3u8ForProxy,
+  type ProxyServerDeps,
+  type UpstreamClientRequest,
+  type UpstreamResponse
+} from './proxyServer.js'
+
+// Real Node http.request-backed stand-in for Electron's net.request, satisfying exactly the
+// UpstreamClientRequest surface createProxyServer actually calls (see proxyServer.ts's own doc
+// comment on why the real thing can't be used here — this app deliberately never runs against a
+// plain Node http/https client in production, only Electron's net module). This is what lets
+// createProxyServer's own retry/timeout/header/redirect logic be exercised against a genuine
+// local HTTP server instead of a hand-rolled fake response object.
+//
+// Backed by a real EventEmitter (not a hand-rolled listener list) because createProxyServer
+// pipes the client request into this object (req.pipe(upstreamReq)) — Node's own pipe()
+// machinery subscribes to generic stream events ('drain', 'close', etc.) on the destination
+// that have nothing to do with 'response'/'redirect'/'error', and a fake that only understood
+// those three would crash the moment pipe() tried to listen for anything else.
+function createNodeHttpUpstreamRequest(opts: { method: string | undefined; url: string }): UpstreamClientRequest {
+  const emitter = new EventEmitter()
+  let pendingRedirectUrl: string | null = null
+  let activeReq: ReturnType<typeof httpRequest> | null = null
+
+  function issue(url: string): void {
+    const req = httpRequest(url, { method: opts.method }, (res: IncomingMessage) => {
+      const statusCode = res.statusCode ?? 0
+      const location = res.headers.location
+      if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
+        pendingRedirectUrl = new URL(location, url).href
+        emitter.emit('redirect', statusCode, opts.method ?? 'GET', pendingRedirectUrl)
+        return
+      }
+      const upstreamRes: UpstreamResponse = {
+        statusCode,
+        headers: res.headers,
+        pipe: (dest) => {
+          res.pipe(dest)
+        },
+        // res is a genuine Node http.IncomingMessage (a real Readable stream) — forwarding
+        // straight to its own .on() is enough to satisfy this narrowed interface's 'data'/'end',
+        // the same way pipe() above just forwards to its real pipe().
+        on: (event: 'data' | 'end', listener: (...args: any[]) => void) => {
+          res.on(event, listener)
+          return upstreamRes
+        }
+      }
+      emitter.emit('response', upstreamRes)
+    })
+    req.on('error', (err) => emitter.emit('error', err))
+    activeReq = req
+    // Deferred rather than called inline: the real proxy calls setHeader() on the object this
+    // function returns synchronously, right after construction — ending the request immediately
+    // here would make that throw ("Can't set headers after they are sent"). By the time this
+    // fires, the same-tick setHeader/on/pipe setup in attemptUpstream() has already run. Also
+    // covers followRedirect()'s re-issue, which otherwise has nothing else to ever end() it
+    // (the client request piped into the *original* upstreamReq only ever ends that one).
+    process.nextTick(() => req.end())
+  }
+
+  issue(opts.url)
+
+  return Object.assign(emitter, {
+    setHeader: (name: string, value: string) => activeReq?.setHeader(name, value),
+    followRedirect() {
+      if (pendingRedirectUrl) issue(pendingRedirectUrl)
+    },
+    // Node's http.ClientRequest doesn't have abort() as a distinct method the way Electron's
+    // net.ClientRequest does (Node's own .abort() was removed/deprecated in favor of
+    // .destroy(), which behaves correctly on a plain Node request regardless of redirects —
+    // unlike Electron's net module, this fake has no equivalent "silent no-op after a
+    // redirect" quirk to reproduce, since it isn't the thing that quirk was found in).
+    abort() {
+      activeReq?.destroy()
+    },
+    // Pipe compatibility for req.pipe(upstreamReq) — every request this proxy ever issues is
+    // GET/HEAD with nothing written, so these only need to exist, not do anything meaningful.
+    write: () => true,
+    end: () => activeReq?.end()
+  }) as unknown as UpstreamClientRequest
+}
+
+function baseUrl(server: Server): string {
+  const address = server.address() as AddressInfo
+  return `http://127.0.0.1:${address.port}`
+}
+
+async function startMockOrigin(
+  handler: (req: IncomingMessage, res: import('http').ServerResponse) => void
+): Promise<{ url: string; server: Server }> {
+  const server = createHttpServer(handler)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return { url: baseUrl(server), server }
+}
+
+function fetchViaProxy(
+  proxyServer: Server,
+  path: string,
+  init: { method?: string; headers?: Record<string, string> } = {}
+): Promise<{ statusCode: number; headers: IncomingMessage['headers']; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      `${baseUrl(proxyServer)}${path}`,
+      { method: init.method ?? 'GET', headers: init.headers },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () =>
+          resolve({ statusCode: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') })
+        )
+      }
+    )
+    req.on('error', reject)
+    req.end()
+  })
+}
+
+function makeDeps(overrides: Partial<ProxyServerDeps> = {}): ProxyServerDeps {
+  return {
+    getProxyTargetBase: () => null,
+    createUpstreamRequest: createNodeHttpUpstreamRequest,
+    clearHostResolverCache: () => Promise.resolve(),
+    isVpnConnected: () => false,
+    getVpnTunneledHost: () => null,
+    onOffTunnelRedirect: () => {},
+    getVpnTunneledIp: () => null,
+    resolveHostIp: () => Promise.resolve(null),
+    onTunneledHostIpChanged: () => {},
+    handleTranscodeRequest: () => {},
+    ...overrides
+  }
+}
+
+const openServers: Server[] = []
+
+afterEach(async () => {
+  await Promise.all(
+    openServers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve())))
+  )
+})
+
+async function startProxy(deps: ProxyServerDeps): Promise<Server> {
+  const server = createProxyServer(deps)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  openServers.push(server)
+  return server
+}
+
+describe('rewriteM3u8ForProxy', () => {
+  const source = new URL('http://origin.example/hls/playlist.m3u8')
+
+  it('rewrites a plain relative segment line', () => {
+    const out = rewriteM3u8ForProxy('#EXTM3U\nseg_00000.ts\n', source)
+    expect(out).toContain(`/__fetch/${encodeURIComponent('http://origin.example/hls/seg_00000.ts')}`)
+  })
+
+  it('rewrites a relative reference one directory up', () => {
+    const out = rewriteM3u8ForProxy('#EXTM3U\n../seg_00000.ts\n', source)
+    expect(out).toContain(`/__fetch/${encodeURIComponent('http://origin.example/seg_00000.ts')}`)
+  })
+
+  it('rewrites an already-absolute segment line too', () => {
+    const out = rewriteM3u8ForProxy('#EXTM3U\nhttp://cdn.example/seg.ts\n', source)
+    expect(out).toContain(`/__fetch/${encodeURIComponent('http://cdn.example/seg.ts')}`)
+  })
+
+  it('rewrites a URI="..." attribute on a tag line (EXT-X-MAP, EXT-X-KEY, EXT-X-MEDIA, ...)', () => {
+    const out = rewriteM3u8ForProxy('#EXT-X-MAP:URI="init.mp4"\n', source)
+    expect(out).toBe(`#EXT-X-MAP:URI="/__fetch/${encodeURIComponent('http://origin.example/hls/init.mp4')}"\n`)
+  })
+
+  it('leaves plain comment/tag lines with no URI reference untouched', () => {
+    const out = rewriteM3u8ForProxy('#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n', source)
+    expect(out).toBe('#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n')
+  })
+
+  it('leaves blank lines untouched', () => {
+    const out = rewriteM3u8ForProxy('#EXTM3U\n\nseg.ts\n', source)
+    expect(out.split('\n')[1]).toBe('')
+  })
+})
+
+describe('createProxyServer', () => {
+  it('proxies a request to the configured origin and stamps permissive CORS headers', async () => {
+    const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"ok":true}')
+    })
+    openServers.push(origin)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => originUrl }))
+
+    const res = await fetchViaProxy(proxy, '/player_api.php?action=get_live_categories')
+
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['access-control-allow-origin']).toBe('*')
+    expect(res.headers['access-control-allow-headers']).toBe('*')
+    expect(res.body).toBe('{"ok":true}')
+  })
+
+  it('answers an OPTIONS preflight directly without touching the origin', async () => {
+    const originHandler = vi.fn((_req: IncomingMessage, res: import('http').ServerResponse) => res.end())
+    const { url: originUrl, server: origin } = await startMockOrigin(originHandler)
+    openServers.push(origin)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => originUrl }))
+
+    const res = await fetchViaProxy(proxy, '/anything', { method: 'OPTIONS' })
+
+    expect(res.statusCode).toBe(204)
+    expect(res.headers['access-control-allow-methods']).toBe('*')
+    expect(originHandler).not.toHaveBeenCalled()
+  })
+
+  it('returns 502 when no upstream server is configured yet', async () => {
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => null }))
+
+    const res = await fetchViaProxy(proxy, '/player_api.php')
+
+    expect(res.statusCode).toBe(502)
+    expect(res.body).toContain('No upstream Xtream server configured')
+  })
+
+  it('returns 502 instead of crashing on a malformed upstream base URL', async () => {
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => 'not a url at all' }))
+
+    const res = await fetchViaProxy(proxy, '/player_api.php')
+
+    expect(res.statusCode).toBe(502)
+    expect(res.body).toContain('Invalid Xtream server address')
+  })
+
+  it('forwards the Range header for video-seek support', async () => {
+    let receivedRange: string | undefined
+    const { url: originUrl, server: origin } = await startMockOrigin((req, res) => {
+      receivedRange = req.headers.range
+      res.writeHead(206)
+      res.end('partial')
+    })
+    openServers.push(origin)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => originUrl }))
+
+    await fetchViaProxy(proxy, '/movie.mp4', { headers: { range: 'bytes=10-20' } })
+
+    expect(receivedRange).toBe('bytes=10-20')
+  })
+
+  it('strips content-encoding/content-length/CSP headers the origin sent', async () => {
+    // content-length is deliberately correct for the real bytes written here — this test is
+    // about the proxy unconditionally stripping the header (real gzip'd traffic makes the
+    // *value* wrong, per the comment in proxyServer.ts, but a wrong value at the raw HTTP-
+    // framing level this test operates at just hangs the client waiting for bytes that were
+    // never coming, which isn't what's under test).
+    const body = 'plain body, not actually gzipped'
+    const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {
+      res.writeHead(200, {
+        'content-encoding': 'gzip',
+        'content-length': String(Buffer.byteLength(body)),
+        'content-security-policy': "default-src 'self'",
+        'x-custom': 'kept'
+      })
+      res.end(body)
+    })
+    openServers.push(origin)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => originUrl }))
+
+    const res = await fetchViaProxy(proxy, '/movie.mp4')
+
+    expect(res.headers['content-encoding']).toBeUndefined()
+    expect(res.headers['content-length']).toBeUndefined()
+    expect(res.headers['content-security-policy']).toBeUndefined()
+    expect(res.headers['x-custom']).toBe('kept')
+  })
+
+  it('routes /__transcode/ requests to handleTranscodeRequest instead of proxying', async () => {
+    const handleTranscodeRequest = vi.fn((_url: string, res: import('http').ServerResponse) => {
+      res.writeHead(200)
+      res.end('segment data')
+    })
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => 'http://127.0.0.1:1', handleTranscodeRequest }))
+
+    const res = await fetchViaProxy(proxy, '/__transcode/session-1/playlist.m3u8')
+
+    expect(handleTranscodeRequest).toHaveBeenCalledTimes(1)
+    expect(handleTranscodeRequest.mock.calls[0][0]).toBe('/__transcode/session-1/playlist.m3u8')
+    expect(res.body).toBe('segment data')
+  })
+
+  describe('/__fetch/ passthrough (M3U/EPG support)', () => {
+    it('proxies to the URL encoded in the path instead of resolving against getProxyTargetBase', async () => {
+      const { url: originUrl, server: origin } = await startMockOrigin((req, res) => {
+        res.writeHead(200, { 'content-type': 'text/plain' })
+        res.end(`you asked for ${req.url}`)
+      })
+      openServers.push(origin)
+      // getProxyTargetBase intentionally returns null — /__fetch/ must work without any
+      // Xtream target ever having been configured, which is the whole point of the route.
+      const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => null }))
+
+      const res = await fetchViaProxy(proxy, `/__fetch/${encodeURIComponent(`${originUrl}/channel.ts?token=abc`)}`)
+
+      expect(res.statusCode).toBe(200)
+      expect(res.body).toBe('you asked for /channel.ts?token=abc')
+      expect(res.headers['access-control-allow-origin']).toBe('*')
+    })
+
+    it('returns 502 instead of crashing on an unparseable encoded URL', async () => {
+      const proxy = await startProxy(makeDeps())
+
+      const res = await fetchViaProxy(proxy, '/__fetch/not-a-url-at-all')
+
+      expect(res.statusCode).toBe(502)
+      expect(res.body).toContain('Invalid proxied URL')
+    })
+
+    // Found live, not anticipated: a real synthetic multi-segment HLS channel's every segment
+    // request 502'd once actually played. Root cause: hls.js resolves a *relative* reference
+    // inside a fetched .m3u8 (a segment file, a nested variant playlist) against the URL it was
+    // fetched from — which, from the browser's perspective, is this proxy's own
+    // /__fetch/<one giant percent-encoded path segment>. Standard relative-URL resolution
+    // replaces just that one segment, landing on /__fetch/seg_00001.ts instead of
+    // /__fetch/<the real upstream segment URL, encoded> — with nothing at that path to serve.
+    it('rewrites a relative segment reference inside a fetched .m3u8 into its own working /__fetch/ URL', async () => {
+      const { url: originUrl, server: origin } = await startMockOrigin((req, res) => {
+        if (req.url === '/hls/playlist.m3u8') {
+          res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' })
+          // A relative reference, exactly like a real provider's own multi-segment playlist —
+          // resolved against playlist.m3u8's own location, not the proxy's.
+          res.end('#EXTM3U\n#EXTINF:4,\nseg_00000.ts\n#EXT-X-ENDLIST\n')
+        } else if (req.url === '/hls/seg_00000.ts') {
+          res.writeHead(200, { 'content-type': 'video/mp2t' })
+          res.end('segment-bytes')
+        } else {
+          res.writeHead(404)
+          res.end()
+        }
+      })
+      openServers.push(origin)
+      const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => null }))
+
+      const playlistRes = await fetchViaProxy(proxy, `/__fetch/${encodeURIComponent(`${originUrl}/hls/playlist.m3u8`)}`)
+      expect(playlistRes.statusCode).toBe(200)
+      const rewrittenLine = playlistRes.body.split('\n').find((l) => l.includes('seg_00000.ts'))
+      expect(rewrittenLine).toBe(`/__fetch/${encodeURIComponent(`${originUrl}/hls/seg_00000.ts`)}`)
+
+      // Confirms the rewritten reference is actually fetchable, not just correctly *shaped* —
+      // the real bug's symptom was a 502 on exactly this follow-up request.
+      const segmentRes = await fetchViaProxy(proxy, rewrittenLine!)
+      expect(segmentRes.statusCode).toBe(200)
+      expect(segmentRes.body).toBe('segment-bytes')
+    })
+
+    it('rewrites an already-absolute reference too, so it still goes through this proxy rather than being fetched directly', async () => {
+      const { url: originUrl, server: origin } = await startMockOrigin((req, res) => {
+        if (req.url === '/hls/playlist.m3u8') {
+          res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' })
+          res.end(`#EXTM3U\n#EXTINF:4,\n${originUrl}/cdn/seg_00000.ts\n#EXT-X-ENDLIST\n`)
+        } else {
+          res.writeHead(404)
+          res.end()
+        }
+      })
+      openServers.push(origin)
+      const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => null }))
+
+      const res = await fetchViaProxy(proxy, `/__fetch/${encodeURIComponent(`${originUrl}/hls/playlist.m3u8`)}`)
+
+      expect(res.body).toContain(`/__fetch/${encodeURIComponent(`${originUrl}/cdn/seg_00000.ts`)}`)
+      expect(res.body).not.toContain(`${originUrl}/cdn/seg_00000.ts\n`)
+    })
+
+    it('leaves a non-.m3u8 /__fetch/ response (e.g. a segment) untouched', async () => {
+      const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {
+        res.writeHead(200, { 'content-type': 'video/mp2t' })
+        res.end('raw-binary-ish-content')
+      })
+      openServers.push(origin)
+      const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => null }))
+
+      const res = await fetchViaProxy(proxy, `/__fetch/${encodeURIComponent(`${originUrl}/seg.ts`)}`)
+
+      expect(res.body).toBe('raw-binary-ish-content')
+    })
+
+    // Caught live, not anticipated: a real server can (and this app's own m3uClient.ts always
+    // does, via its "audio/x-mpegurl" fetch) serve the *outer*, application-level .m3u provider
+    // playlist with the exact same generic mpegurl-family content-type an actual .m3u8 HLS media
+    // playlist uses. An earlier version of this fix keyed off content-type as well as the
+    // extension, which rewrote the outer playlist's own channel-entry lines here — before
+    // lib/m3uClient.ts's own client-side parser ever saw them — storing an already-/__fetch/-
+    // wrapped URL as the "raw" channel URL. getStreamUrl() then wrapped that a second time,
+    // producing a doubly-encoded URL nothing could parse (every channel 502ing from the very
+    // first request, confirmed live). The extension is now the only signal (matching
+    // Player.tsx/useHlsAttach.ts's own sourceUrl.endsWith('.m3u8') convention) specifically so
+    // a same-content-type .m3u file is never mistaken for one.
+    it('leaves the outer .m3u provider playlist untouched even when served with an mpegurl-family content-type', async () => {
+      const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {
+        res.writeHead(200, { 'content-type': 'audio/x-mpegurl' })
+        res.end('#EXTM3U\n#EXTINF:-1,Channel One\nhttp://channel.example/ch1/playlist.m3u8\n')
+      })
+      openServers.push(origin)
+      const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => null }))
+
+      const res = await fetchViaProxy(proxy, `/__fetch/${encodeURIComponent(`${originUrl}/playlist.m3u`)}`)
+
+      expect(res.body).toBe('#EXTM3U\n#EXTINF:-1,Channel One\nhttp://channel.example/ch1/playlist.m3u8\n')
+    })
+  })
+
+  describe('off-tunnel redirect detection', () => {
+    it('reports a redirect that lands on a different host while the VPN is connected', async () => {
+      const { url: originUrl, server: origin } = await startMockOrigin((req, res) => {
+        if (req.url === '/start') {
+          // Redirecting to "localhost" (a different hostname string than 127.0.0.1, even
+          // though it resolves to the same loopback server) is what lets this test exercise a
+          // genuine cross-host redirect without needing a second bindable loopback address.
+          res.writeHead(302, { location: originUrl.replace('127.0.0.1', 'localhost') + '/final' })
+          res.end()
+        } else {
+          res.writeHead(200)
+          res.end('final content')
+        }
+      })
+      openServers.push(origin)
+      const onOffTunnelRedirect = vi.fn()
+      const proxy = await startProxy(
+        makeDeps({
+          getProxyTargetBase: () => originUrl,
+          isVpnConnected: () => true,
+          getVpnTunneledHost: () => '127.0.0.1',
+          onOffTunnelRedirect
+        })
+      )
+
+      const res = await fetchViaProxy(proxy, '/start')
+
+      expect(onOffTunnelRedirect).toHaveBeenCalledWith('127.0.0.1', 'localhost')
+      // The redirect is still followed regardless — this is detection, not blocking.
+      expect(res.body).toBe('final content')
+    })
+
+    it('does not report a redirect to the same tunneled host', async () => {
+      const { url: originUrl, server: origin } = await startMockOrigin((req, res) => {
+        if (req.url === '/start') {
+          res.writeHead(302, { location: '/final' })
+          res.end()
+        } else {
+          res.writeHead(200)
+          res.end('final content')
+        }
+      })
+      openServers.push(origin)
+      const onOffTunnelRedirect = vi.fn()
+      const proxy = await startProxy(
+        makeDeps({
+          getProxyTargetBase: () => originUrl,
+          isVpnConnected: () => true,
+          getVpnTunneledHost: () => '127.0.0.1',
+          onOffTunnelRedirect
+        })
+      )
+
+      await fetchViaProxy(proxy, '/start')
+
+      expect(onOffTunnelRedirect).not.toHaveBeenCalled()
+    })
+
+    it('does not report anything while the VPN is not connected', async () => {
+      const { url: originUrl, server: origin } = await startMockOrigin((req, res) => {
+        if (req.url === '/start') {
+          res.writeHead(302, { location: originUrl.replace('127.0.0.1', 'localhost') + '/final' })
+          res.end()
+        } else {
+          res.writeHead(200)
+          res.end('final content')
+        }
+      })
+      openServers.push(origin)
+      const onOffTunnelRedirect = vi.fn()
+      const proxy = await startProxy(
+        makeDeps({
+          getProxyTargetBase: () => originUrl,
+          isVpnConnected: () => false,
+          getVpnTunneledHost: () => '127.0.0.1',
+          onOffTunnelRedirect
+        })
+      )
+
+      await fetchViaProxy(proxy, '/start')
+
+      expect(onOffTunnelRedirect).not.toHaveBeenCalled()
+    })
+  })
+
+  it('retries exactly once with a fresh request when the first attempt times out', async () => {
+    let attempts = 0
+    const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {
+      attempts += 1
+      if (attempts === 1) {
+        // Never respond — simulates the real hang this timeout/retry logic exists for.
+        return
+      }
+      res.writeHead(200)
+      res.end('recovered on retry')
+    })
+    openServers.push(origin)
+    const clearHostResolverCache = vi.fn(() => Promise.resolve())
+    const proxy = await startProxy(
+      makeDeps({ getProxyTargetBase: () => originUrl, clearHostResolverCache, upstreamTimeoutMs: 150 })
+    )
+
+    const res = await fetchViaProxy(proxy, '/slow')
+
+    expect(attempts).toBe(2)
+    expect(clearHostResolverCache).toHaveBeenCalledTimes(1)
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toBe('recovered on retry')
+  })
+
+  // A retry forces a fresh DNS lookup (clearHostResolverCache) — if that now resolves the
+  // tunneled host to a different IP than the one the VPN's OS route actually covers, this and
+  // every later request would silently bypass the tunnel. onOffTunnelRedirect can't catch this
+  // (same hostname, not a redirect at all), so this is its own dedicated check.
+  it('warns when a retry resolves the tunneled host to a different IP than the VPN route covers', async () => {
+    let attempts = 0
+    const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {
+      attempts += 1
+      if (attempts === 1) return // hang, forcing the retry path
+      res.writeHead(200)
+      res.end('recovered on retry')
+    })
+    openServers.push(origin)
+    const onTunneledHostIpChanged = vi.fn()
+    const proxy = await startProxy(
+      makeDeps({
+        getProxyTargetBase: () => originUrl,
+        upstreamTimeoutMs: 150,
+        isVpnConnected: () => true,
+        getVpnTunneledHost: () => '127.0.0.1',
+        getVpnTunneledIp: () => '127.0.0.1',
+        resolveHostIp: () => Promise.resolve('10.0.0.99'),
+        onTunneledHostIpChanged
+      })
+    )
+
+    await fetchViaProxy(proxy, '/slow')
+    // onTunneledHostIpChanged fires from a fire-and-forget .then(), not awaited by the
+    // response path — give it a moment to actually run before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(onTunneledHostIpChanged).toHaveBeenCalledWith('127.0.0.1', '127.0.0.1', '10.0.0.99')
+  })
+
+  it('does not warn when the retry resolves the same IP the VPN route already covers', async () => {
+    let attempts = 0
+    const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {
+      attempts += 1
+      if (attempts === 1) return
+      res.writeHead(200)
+      res.end('recovered on retry')
+    })
+    openServers.push(origin)
+    const onTunneledHostIpChanged = vi.fn()
+    const proxy = await startProxy(
+      makeDeps({
+        getProxyTargetBase: () => originUrl,
+        upstreamTimeoutMs: 150,
+        isVpnConnected: () => true,
+        getVpnTunneledHost: () => '127.0.0.1',
+        getVpnTunneledIp: () => '127.0.0.1',
+        resolveHostIp: () => Promise.resolve('127.0.0.1'),
+        onTunneledHostIpChanged
+      })
+    )
+
+    await fetchViaProxy(proxy, '/slow')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(onTunneledHostIpChanged).not.toHaveBeenCalled()
+  })
+
+  it('does not check IP resolution while the VPN is not connected', async () => {
+    let attempts = 0
+    const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {
+      attempts += 1
+      if (attempts === 1) return
+      res.writeHead(200)
+      res.end('recovered on retry')
+    })
+    openServers.push(origin)
+    const resolveHostIp = vi.fn(() => Promise.resolve('10.0.0.99'))
+    const onTunneledHostIpChanged = vi.fn()
+    const proxy = await startProxy(
+      makeDeps({
+        getProxyTargetBase: () => originUrl,
+        upstreamTimeoutMs: 150,
+        isVpnConnected: () => false,
+        getVpnTunneledHost: () => '127.0.0.1',
+        getVpnTunneledIp: () => '127.0.0.1',
+        resolveHostIp,
+        onTunneledHostIpChanged
+      })
+    )
+
+    await fetchViaProxy(proxy, '/slow')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(resolveHostIp).not.toHaveBeenCalled()
+    expect(onTunneledHostIpChanged).not.toHaveBeenCalled()
+  })
+
+  it('fails with a 502 after both attempts time out', async () => {
+    const { url: originUrl, server: origin } = await startMockOrigin(() => {
+      // Never respond, ever.
+    })
+    openServers.push(origin)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => originUrl, upstreamTimeoutMs: 100 }))
+
+    const res = await fetchViaProxy(proxy, '/slow')
+
+    expect(res.statusCode).toBe(502)
+    expect(res.body).toContain('Upstream request failed')
+  }, 10000)
+
+  // Exercises the exact shape of a real bug found live (see UpstreamClientRequest's own doc
+  // comment): a request that redirects to a host which then hangs forever with zero response —
+  // real movie/VOD stream URLs redirecting to a CDN host are exactly this shape. This confirms
+  // the orchestration logic (timeout still fires, retries, eventually gives up) is correct
+  // end-to-end; it can't reproduce the specific Electron net.ClientRequest quirk this bug
+  // actually came from (destroy() silently no-op-ing on a request that already followed a
+  // redirect — the fake upstream here is Node's http.request, which has no such quirk), since
+  // that lives entirely inside Electron's own net module, outside what a plain Node/vitest test
+  // can exercise. That part was verified separately with a one-off isolated Electron
+  // reproduction script, not as a permanent test in this suite.
+  it('times out and retries correctly even when the hang is on the far side of a redirect', async () => {
+    const { url: hangingUrl, server: hangingOrigin } = await startMockOrigin(() => {
+      // Never respond, ever — the redirect target itself is what hangs.
+    })
+    openServers.push(hangingOrigin)
+    const { url: redirectUrl, server: redirectOrigin } = await startMockOrigin((req, res) => {
+      res.writeHead(302, { location: `${hangingUrl}${req.url}` })
+      res.end()
+    })
+    openServers.push(redirectOrigin)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => redirectUrl, upstreamTimeoutMs: 100 }))
+
+    const res = await fetchViaProxy(proxy, '/movie.mp4')
+
+    expect(res.statusCode).toBe(502)
+    expect(res.body).toContain('Upstream request failed')
+  }, 10000)
+})
