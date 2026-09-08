@@ -6,7 +6,7 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.3.0 — auto-login and a real Gantt-chart EPG grid)
+## Current state (v0.4.0 — Docker packaging, published to GHCR)
 
 The two most technically risky pieces of the desktop app were already Electron-free and
 dependency-injected, so they're ported here essentially unchanged:
@@ -135,6 +135,66 @@ Environment variables:
   Electron's net module did in the desktop app (see `nodeUpstreamRequest.ts`'s own doc comment).
   Point it at a PEM bundle containing that network's root CA if you hit either error — e.g. on
   macOS: `security find-certificate -a -c "<your CA issuer's name>" -p > ca-bundle.pem`.
+
+## Running it via Docker
+
+A multi-arch image (`linux/amd64` + `linux/arm64`) is built and published to GitHub Container
+Registry automatically by `.github/workflows/docker.yml` on every push to `main` and on version
+tags — `linux/arm64` specifically because a NAS (see the Synology section below) is very often
+ARM-based, not Intel/AMD. The `Dockerfile` deliberately uses a Debian ("bookworm-slim"), not
+Alpine, base image: `ffmpeg-static`'s prebuilt binaries are linked against glibc, and running
+them on Alpine's musl libc is a common, easy-to-hit way for the bundled ffmpeg to silently fail
+to execute at all.
+
+```bash
+docker pull ghcr.io/glustick/allison-web-iptv:latest
+docker run -d --name allison-web-iptv \
+  -p 8085:8085 \
+  -e ACCESS_PASSWORD=changeme \
+  ghcr.io/glustick/allison-web-iptv:latest
+```
+
+Or with the provided `docker-compose.yml` (edit `ACCESS_PASSWORD` first):
+
+```bash
+docker compose up -d
+```
+
+If your network does TLS inspection (see `NODE_EXTRA_CA_CERTS` above), mount your CA bundle
+into the container and set that same environment variable to point at it — `docker-compose.yml`
+has the relevant lines commented out, ready to uncomment.
+
+Building the image yourself instead of pulling: `docker build -t allison-web-iptv .` (single-
+platform, whatever `docker build` is running on) or `docker buildx build --platform
+linux/amd64,linux/arm64 -t allison-web-iptv .` for both, same as CI does.
+
+## Deploying on a Synology NAS
+
+Confirmed compatible (not yet confirmed *deployed* — see the effort assessment for the caveats
+this carries as a genuinely personal/self-hosted project): `ffmpeg-static` ships binaries for
+Linux `x64`, `arm64`, and `arm`, covering both Intel/AMD and ARM-based Synology models, and
+`ffmpegResolver.ts` already prefers a system-installed ffmpeg first — many Synology models
+already have one bundled for Video Station/Surveillance Station transcoding, so the container
+may not even need its own bundled copy at runtime.
+
+**Requires DSM 7.2+ with Container Manager** (the renamed, current version of the older Docker
+package — the same steps apply there under the name "Docker" instead).
+
+1. Open **Container Manager → Registry**, search for `glustick/allison-web-iptv`, or skip
+   straight to step 2 and let Container Manager pull it by full name.
+2. Open **Container Manager → Project → Create**.
+3. Give it a name, pick a shared folder for it (any empty one is fine — this app doesn't need
+   persistent storage), and choose **Create docker-compose.yml**.
+4. Paste in this repo's `docker-compose.yml` content, replacing `image: ghcr.io/glustick/...`
+   with your own fork's path if you're building from a fork, and set a real `ACCESS_PASSWORD`.
+5. Build and run the project. Container Manager will pull the correct architecture's image
+   automatically — that's the whole point of the multi-arch build above.
+6. Visit `http://<your-nas-ip>:8085` once it's up.
+
+For a cleaner URL and HTTPS instead of a bare IP:port, Synology's own **Control Panel → Login
+Portal → Advanced → Reverse Proxy** can front this on a real hostname (e.g.
+`iptv.your-nas.local`) with a Let's Encrypt certificate — point it at `localhost:8085` (or
+whatever port you mapped) the same way you would for any other self-hosted service on the NAS.
 
 ## Testing
 

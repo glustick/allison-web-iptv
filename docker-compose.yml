@@ -1,0 +1,15 @@
+services:
+  allison-web-iptv:
+    image: ghcr.io/glustick/allison-web-iptv:latest
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      - PORT=8085
+      - ACCESS_PASSWORD=changeme
+      # Only needed if your own network does TLS inspection (a corporate proxy, some
+      # security appliances) — see the README's own account of hitting this directly.
+      # Mount a PEM bundle into the container and point this at it if so:
+      # - NODE_EXTRA_CA_CERTS=/certs/ca-bundle.pem
+    # volumes:
+    #   - ./ca-bundle.pem:/certs/ca-bundle.pem:ro
