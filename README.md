@@ -84,7 +84,7 @@ path above to serve.
 
 Environment variables:
 
-- `PORT` (default `8080`) — the public port.
+- `PORT` (default `8085`) — the public port.
 - `PROXY_INTERNAL_PORT` (default `4001`) — internal-only, do not expose this one.
 - `ACCESS_PASSWORD` — required for `/api/login` to accept anything.
 - `NODE_EXTRA_CA_CERTS` — only needed on a network with a TLS-inspecting corporate proxy, but

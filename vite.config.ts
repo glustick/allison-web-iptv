@@ -17,15 +17,15 @@ export default defineConfig({
     // dev, on PORT) instead of Vite's own dev server — the client's own fetch()/getStreamUrl()
     // calls are all relative, same-origin paths, so they'd otherwise 404 against Vite itself.
     proxy: {
-      '/api': 'http://localhost:8080',
-      '/player_api.php': 'http://localhost:8080',
-      '/xmltv.php': 'http://localhost:8080',
-      '/live': 'http://localhost:8080',
-      '/movie': 'http://localhost:8080',
-      '/series': 'http://localhost:8080',
-      '/timeshift': 'http://localhost:8080',
-      '/__fetch': 'http://localhost:8080',
-      '/__transcode': 'http://localhost:8080'
+      '/api': 'http://localhost:8085',
+      '/player_api.php': 'http://localhost:8085',
+      '/xmltv.php': 'http://localhost:8085',
+      '/live': 'http://localhost:8085',
+      '/movie': 'http://localhost:8085',
+      '/series': 'http://localhost:8085',
+      '/timeshift': 'http://localhost:8085',
+      '/__fetch': 'http://localhost:8085',
+      '/__transcode': 'http://localhost:8085'
     }
   }
 })

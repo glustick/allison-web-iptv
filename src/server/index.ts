@@ -22,7 +22,7 @@ const ffmpegStaticPath = require('ffmpeg-static') as string | null
 const execFileAsync = promisify(execFile)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const PUBLIC_PORT = Number(process.env.PORT ?? 8080)
+const PUBLIC_PORT = Number(process.env.PORT ?? 8085)
 // Internal-only — never exposed directly; the public Express app relays proxy-shaped requests
 // here (see relayToProxy below) so the whole app is reachable through one public port, the way
 // a personal self-hosted server actually needs to be (one port to forward through a router/
