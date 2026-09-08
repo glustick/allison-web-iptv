@@ -9,7 +9,7 @@ import tseslint from 'typescript-eslint'
 export default tseslint.config(
   { ignores: ['dist/**', 'node_modules/**', 'public/**'] },
   {
-    files: ['src/**/*.ts'],
+    files: ['src/server/**/*.ts'],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: { project: './tsconfig.json', tsconfigRootDir: import.meta.dirname }
@@ -18,6 +18,18 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-misused-promises': 'error'
+    }
+  },
+  {
+    files: ['src/client/src/**/*.ts', 'src/client/src/**/*.tsx'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: { project: './tsconfig.client.json', tsconfigRootDir: import.meta.dirname }
+    },
+    plugins: { '@typescript-eslint': tseslint.plugin },
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-misused-promises': ['error', { checksVoidReturn: { attributes: false } }]
     }
   }
 )

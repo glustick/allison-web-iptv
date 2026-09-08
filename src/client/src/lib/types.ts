@@ -1,0 +1,243 @@
+export type ProfileKind = 'xtream' | 'm3u'
+
+// A saved connection — either full Xtream Codes credentials or a bare M3U playlist (see
+// lib/m3uClient.ts). `kind` is optional so profiles saved before M3U support existed still load
+// correctly: undefined has always meant "xtream" for every profile that predates this field.
+export interface XtreamProfile {
+  id: string
+  name: string
+  kind?: ProfileKind
+  // Xtream fields — set when kind is 'xtream' or unset, absent for 'm3u'.
+  server?: string
+  username?: string
+  password?: string
+  // M3U fields — set when kind is 'm3u', absent for 'xtream'. epgUrl can stay unset even then:
+  // a playlist's own #EXTM3U url-tvg/x-tvg-url attribute can supply it instead (see parseM3u),
+  // and a playlist with neither just has no per-channel guide data.
+  m3uUrl?: string
+  epgUrl?: string
+}
+
+export interface XtreamUserInfo {
+  auth?: number
+  username: string
+  password: string
+  status: string
+  exp_date: string | null
+  is_trial: string
+  active_cons: string
+  created_at: string
+  max_connections: string
+}
+
+export interface XtreamServerInfo {
+  url: string
+  port: string
+  https_port: string
+  server_protocol: string
+  timezone: string
+}
+
+export interface XtreamAuthResponse {
+  user_info: XtreamUserInfo
+  server_info: XtreamServerInfo
+}
+
+export interface Category {
+  category_id: string
+  category_name: string
+  parent_id: number
+}
+
+export interface LiveStream {
+  num: number
+  name: string
+  stream_type: string
+  stream_id: number
+  stream_icon: string
+  epg_channel_id: string | null
+  added: string
+  category_id: string
+  custom_sid: string | null
+  tv_archive: number
+  direct_source: string
+  tv_archive_duration: number
+}
+
+export interface VodStream {
+  num: number
+  name: string
+  stream_type: string
+  stream_id: number
+  stream_icon: string
+  rating: string
+  rating_5based: number
+  added: string
+  category_id: string
+  container_extension: string
+}
+
+export interface SeriesItem {
+  num: number
+  name: string
+  series_id: number
+  cover: string
+  plot: string
+  cast: string
+  director: string
+  genre: string
+  releaseDate: string
+  rating: string
+  category_id: string
+}
+
+export interface SeriesEpisode {
+  id: string
+  episode_num: number
+  title: string
+  container_extension: string
+  season: number
+}
+
+export interface SeriesInfo {
+  seasons: Array<{ season_number: number; name: string; cover: string }>
+  episodes: Record<string, SeriesEpisode[]>
+}
+
+export interface ShortEpgProgram {
+  id: string
+  epg_id: string
+  title: string
+  lang: string
+  start: string
+  end: string
+  description: string
+  channel_id: string
+  start_timestamp: string
+  stop_timestamp: string
+}
+
+export type MediaKind = 'live' | 'movie' | 'series'
+
+// A user-named way to organize favorites (e.g. "Sports", "Kids") — deliberately just an id/name
+// pair, not a container of entries itself: each FavoriteEntry below points at its own group by
+// id instead, the same "child references parent" shape favoriteKey's own lookup already uses.
+export interface FavoriteGroup {
+  id: string
+  name: string
+}
+
+// Favorites keep the original rich object per kind, since clicking a favorited item
+// should behave exactly like clicking it from its normal list (open the live preview,
+// play the movie, or open the series modal) — not just replay a flat stream URL.
+//
+// groupId is optional (not required on every variant) so every existing call site that
+// constructs a fresh FavoriteEntry literal on first-favoriting an item didn't need to change —
+// undefined and null both mean "ungrouped," and toggleFavorite only ever needs to compare
+// favoriteKey() to find/remove an existing entry, never groupId itself.
+export type FavoriteEntry =
+  | { kind: 'live'; stream: LiveStream; groupId?: string | null }
+  | { kind: 'movie'; stream: VodStream; groupId?: string | null }
+  | { kind: 'series'; item: SeriesItem; groupId?: string | null }
+
+export function favoriteKey(entry: FavoriteEntry): string {
+  const id = entry.kind === 'series' ? entry.item.series_id : entry.stream.stream_id
+  return `${entry.kind}:${id}`
+}
+
+// Recently-watched tracks whatever was actually handed to play() — a flat, directly
+// replayable reference (for series this is the episode that was played, not the series).
+export interface RecentlyWatchedEntry {
+  kind: MediaKind
+  streamId: number
+  name: string
+  icon: string
+  extension: string
+  // Only meaningful for kind === 'live' — see NowPlaying.tvArchive for why this is carried
+  // through rather than looked up again later.
+  tvArchive: number
+  watchedAt: number
+}
+
+export interface EpisodeProgress {
+  positionSeconds: number
+  durationSeconds: number
+  updatedAt: number
+}
+
+export type BufferProfile = 'smooth' | 'lowLatency'
+export type ClockFormat = '12h' | '24h'
+export type EpgRowDensity = 'comfortable' | 'compact'
+// Maps directly onto the <video> element's own object-fit values — 'contain' (the default,
+// letterboxed, no cropping), 'cover' (fills the screen, crops overflow), 'fill' (stretches
+// exactly to the player's bounds, may distort aspect ratio).
+export type VideoScaleMode = 'contain' | 'cover' | 'fill'
+// How many simultaneous Live TV tiles Multi-View shows at once. Kept as a closed union (not a
+// bare number) to match this codebase's existing convention for every other persisted UI-mode
+// setting above, and because the layout CSS grid itself only has fixed rules for these two.
+export type MultiViewLayout = 2 | 4
+
+// A saved OpenVPN configuration — a user can save more than one (different providers, or
+// different servers from the same provider), but only one can ever be the *active* tunnel at a
+// time (see AppSettings.activeVpnProfileId), since this app only ever spawns a single openvpn
+// process. username/password are optional since not every .ovpn file needs them (some rely on
+// cert-only auth) — encrypted the same way as the parental PIN, see lib/storage.ts.
+export interface VpnProfile {
+  id: string
+  name: string
+  configPath: string
+  configName: string
+  username: string | null
+  password: string | null
+}
+
+export interface AppSettings {
+  bufferProfile: BufferProfile
+  clockFormat: ClockFormat
+  parentalPin: string | null
+  lockedCategoryIds: string[]
+  sidebarWidth: number
+  detailPanelWidth: number
+  epgRowDensity: EpgRowDensity
+  // Width of the EPG grid's channel-name column (both the main docked guide and the fullscreen
+  // channel-swap overlay share this — same EpgGrid component, same setting) — drag-resizable so
+  // a long channel name isn't clipped by ellipsis at the default width.
+  epgChannelColumnWidth: number
+  playerVolume: number
+  playerMuted: boolean
+  vpnProfiles: VpnProfile[]
+  activeVpnProfileId: string | null
+  // Unlike activeVpnProfileId (cleared to null the moment the tunnel is deliberately
+  // deactivated), this is set whenever a profile is activated and never cleared by
+  // deactivation — it's what "reconnect to the last VPN configuration" (the VPN dot's own
+  // click-to-toggle) reads once activeVpnProfileId is already null. Only cleared if that exact
+  // profile is later deleted, so it doesn't dangle pointing at a config that no longer exists.
+  lastVpnProfileId: string | null
+  videoScaleMode: VideoScaleMode
+  multiViewLayout: MultiViewLayout
+}
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  bufferProfile: 'smooth',
+  clockFormat: '12h',
+  parentalPin: null,
+  lockedCategoryIds: [],
+  sidebarWidth: 220,
+  detailPanelWidth: 560,
+  epgRowDensity: 'comfortable',
+  epgChannelColumnWidth: 128,
+  playerVolume: 1,
+  playerMuted: false,
+  vpnProfiles: [],
+  activeVpnProfileId: null,
+  lastVpnProfileId: null,
+  videoScaleMode: 'contain',
+  multiViewLayout: 2
+}
+
+export type VpnStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+
+export interface VpnState {
+  status: VpnStatus
+  errorMessage: string | null
+}
