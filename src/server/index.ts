@@ -18,6 +18,10 @@ import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 // CJS require instead of an ESM import.
 const require = createRequire(import.meta.url)
 const ffmpegStaticPath = require('ffmpeg-static') as string | null
+// Single source of truth for the version reported at /api/health — this used to be a separate
+// hardcoded literal here that quietly drifted out of sync with package.json's own version the
+// very first time that was bumped without anyone remembering to update this too.
+const pkg = require('../../package.json') as { version: string }
 
 const execFileAsync = promisify(execFile)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -102,7 +106,7 @@ app.post('/api/login', (req, res) => {
 })
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, name: 'Allison Web IPTV', version: '0.1.0' })
+  res.json({ ok: true, name: 'Allison Web IPTV', version: pkg.version })
 })
 
 // Points the proxy at a (possibly different) Xtream server — the web equivalent of the

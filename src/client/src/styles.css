@@ -72,6 +72,22 @@ body {
   margin-bottom: 12px;
 }
 
+.forget-login-link {
+  width: auto;
+  background: none;
+  margin-top: 10px;
+  padding: 0;
+  color: #9aa1ad;
+  font-size: 12px;
+  font-weight: 400;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.forget-login-link:hover {
+  color: #e7e9ee;
+}
+
 .app-shell {
   display: flex;
   flex-direction: column;
@@ -148,6 +164,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 .player-wrap {
@@ -193,4 +210,183 @@ body {
 .channel-row.active {
   background: #1b2030;
   color: #4f7cff;
+}
+
+/* EPG grid — ported from the desktop app's own Gantt-chart guide styling */
+
+.epg-grid {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-top: 8px;
+}
+
+.epg-time-header {
+  display: flex;
+  flex-shrink: 0;
+  margin-bottom: 4px;
+  padding: 0 16px;
+}
+
+.epg-grid-nav {
+  width: var(--epg-channel-col-width, 160px);
+  flex-shrink: 0;
+  display: flex;
+  gap: 4px;
+}
+
+.epg-grid-nav button {
+  flex: 1;
+  background: #12151c;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #9aa1ad;
+  font-size: 11px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.epg-grid-nav button:hover {
+  color: #e7e9ee;
+  border-color: #4f7cff;
+}
+
+.epg-time-header-controls {
+  flex-shrink: 0;
+  margin-left: 8px;
+  font-size: 11px;
+  color: #9aa1ad;
+  align-self: center;
+}
+
+.epg-time-header-track {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+}
+
+.epg-time-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: #9aa1ad;
+  white-space: nowrap;
+}
+
+.epg-grid-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 16px;
+}
+
+.epg-row {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  border-bottom: 1px solid #171a22;
+}
+
+.epg-row.active {
+  background: rgba(79, 124, 255, 0.16);
+  box-shadow: inset 3px 0 0 0 #4f7cff;
+}
+
+.epg-row.active .epg-row-channel-name {
+  color: #4f7cff;
+  font-weight: 600;
+}
+
+.epg-row-channel {
+  width: var(--epg-channel-col-width, 160px);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  border-right: 1px solid #232733;
+  color: #e7e9ee;
+  padding: 0 6px;
+  text-align: left;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.epg-row-channel img,
+.epg-row-channel-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  border-radius: 3px;
+  background: #0b0d12;
+  flex-shrink: 0;
+}
+
+.epg-row-channel-icon.placeholder {
+  background: #1b2030;
+}
+
+.epg-row-channel-name {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epg-row-timeline {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.epg-row-loading {
+  position: absolute;
+  inset: 4px 8px;
+  background: #1b2030;
+  border-radius: 4px;
+  opacity: 0.5;
+}
+
+.epg-block {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  background: #1b2030;
+  border: 1px solid #2a2f3d;
+  border-radius: 4px;
+  color: #e7e9ee;
+  font-size: 11px;
+  text-align: left;
+  padding: 0 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.epg-block:hover {
+  border-color: #4f7cff;
+}
+
+.epg-block--past {
+  opacity: 0.55;
+}
+
+.epg-block-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epg-now-indicator {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ff6b6b;
+  z-index: 1;
 }

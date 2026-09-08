@@ -6,7 +6,7 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.2.0 — Live TV, Movies, and Series all live-verified)
+## Current state (v0.3.0 — auto-login and a real Gantt-chart EPG grid)
 
 The two most technically risky pieces of the desktop app were already Electron-free and
 dependency-injected, so they're ported here essentially unchanged:
@@ -56,12 +56,52 @@ categories (one series category alone had 9,067 titles, which just takes a bit t
 bug); watched a real movie hit the EC-3 issue, fall back, and finish playing through the fixed
 hls.js path; and watched a real series episode play through to genuine audio decoding.
 
+**Auto-login, at explicit request.** `LoginScreen.tsx` now saves the full login (access
+password + Xtream server/username/password, not just server/username) to `localStorage` after
+a successful connect, and auto-attempts it on every subsequent load — falling back to the
+plain form (pre-filled) if that fails, e.g. a changed password or an unreachable provider,
+rather than getting stuck silently retrying. A "Forget saved login" link clears it. Worth
+knowing: this means the Xtream password sits in the browser's local storage in plaintext —
+a reasonable tradeoff for this project's personal/self-hosted scope (see
+`EFFORT-ASSESSMENT.md`), not something to carry forward if this ever became a real multi-user
+service.
+
+**A real Gantt-chart EPG grid, ported from the desktop app's own `EpgGrid.tsx`** — channels
+down the vertical axis (virtualized via `react-window`, so it stays workable against a
+catalog with thousands of channels), programme blocks positioned by actual start/end time
+across a scrollable 3-hour window, a live "now" indicator line, and Now/◀/▶ navigation.
+Deliberately left out of this pass (see the desktop app's own fuller version for comparison):
+drag-to-pan the timeline, a resizable channel column, keyboard navigation, and catch-up/
+timeshift playback for past programmes.
+
+Getting real programme data working took two real fixes, both found live against the actual
+account, not by review:
+  - `get_short_epg` (the per-channel action the desktop app's own `xtream.ts` uses) turned out
+    to return an empty `epg_listings` array for *every* channel tried on this provider,
+    including ones with a real `epg_channel_id` mapping — while the *full* `xmltv.php` guide,
+    fetched once (confirmed live: ~98MB of real XML), had genuine data throughout. `lib/epg.ts`
+    ports the desktop app's own XMLTV parser as the primary source, with the per-channel queue
+    kept as a fallback for a channel the full guide has nothing for (or if the full guide
+    itself fails to load — some providers block *that* instead, per the desktop app's own
+    history) — so this now tolerates either kind of provider limitation.
+  - The real API also wraps `get_short_epg`'s response as `{ epg_listings: [...] }`, not a bare
+    array, and encodes titles/descriptions in base64 — neither was handled in this client's own
+    `xtreamClient.ts` (the desktop app's `xtream.ts` already does both), which crashed the
+    entire React tree the first time real EPG data was involved at all
+    (`(d ?? []).filter is not a function`) with nothing but a blank page to show for it. Fixed,
+    and a top-level `ErrorBoundary` was added afterward so the *next* uncaught bug shows a real
+    error instead of a silent blank page.
+
+**Live-verified in a real Chrome browser (not Electron)**: manual login → saved credentials →
+full page reload → automatic reconnect with zero interaction; the EPG grid rendering real
+channel icons, real programme titles ("Countdown", "Billions", "Will & Grace", ...), and a
+correctly-positioned "now" line, within ~10 seconds of opening Live TV.
+
 **Not yet built** (see `EFFORT-ASSESSMENT.md`'s "Real work"/"New work" sections): per-session
-(rather than single-global) connection state, real encryption at rest for stored credentials,
-and a real login system beyond the single shared `ACCESS_PASSWORD` placeholder in `/api/login`.
-The client is also still intentionally minimal (plain lists, not the desktop app's full
-Gantt-chart EPG grid; no track-switching UI for the transcode fallback's own audio/subtitle
-options).
+(rather than single-global) connection state, real encryption at rest for stored credentials
+beyond the browser-local auto-login above, and a real multi-user login system beyond the
+single shared `ACCESS_PASSWORD` placeholder in `/api/login`. No track-switching UI yet for the
+transcode fallback's own audio/subtitle options.
 
 **Deliberately cut, not ported** — see the effort assessment for why: the VPN split-tunnel
 feature (doesn't fit a shared-server model at all) and the auto-updater (meaningless for a web

@@ -1,6 +1,7 @@
 import { useEffect, useState, type JSX } from 'react'
 import type { Session } from './LoginScreen'
 import { LivePlayer } from './LivePlayer'
+import { EpgGrid } from './EpgGrid'
 import type { Category, LiveStream } from '../lib/types'
 
 export function LiveTv({ session }: { session: Session }): JSX.Element {
@@ -50,17 +51,7 @@ export function LiveTv({ session }: { session: Session }): JSX.Element {
             {loadError}
           </div>
         )}
-        <div className="channel-list">
-          {channels.map((channel) => (
-            <button
-              key={channel.stream_id}
-              className={nowPlaying?.stream_id === channel.stream_id ? 'channel-row active' : 'channel-row'}
-              onClick={() => setNowPlaying(channel)}
-            >
-              {channel.name}
-            </button>
-          ))}
-        </div>
+        <EpgGrid session={session} channels={channels} activeStreamId={nowPlaying?.stream_id} onSelectChannel={setNowPlaying} />
       </div>
     </div>
   )

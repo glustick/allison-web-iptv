@@ -9,6 +9,20 @@ import type {
   MediaKind
 } from './types'
 
+// Ported from the desktop app's xtream.ts — the real Xtream API returns programme
+// title/description base64-encoded (confirmed live against the real account this project's
+// own testing uses: without this, the EPG grid shows garbled base64 text instead of real
+// titles).
+function decodeBase64Maybe(value: string | undefined | null): string {
+  if (!value) return ''
+  try {
+    const bytes = Uint8Array.from(atob(value), (c) => c.charCodeAt(0))
+    return new TextDecoder('utf-8').decode(bytes)
+  } catch {
+    return value
+  }
+}
+
 /**
  * Browser-side Xtream client — a deliberately different shape from the desktop app's own
  * xtream.ts, for one real reason: getStreamUrl()/getTimeshiftUrl() there return the RAW
@@ -80,8 +94,30 @@ export class XtreamClient {
     return this.getJson(this.playerApiUrl({ action: 'get_series_info', series_id: String(seriesId) }))
   }
 
-  getShortEpg(streamId: number, limit = 10): Promise<ShortEpgProgram[]> {
-    return this.getJson(this.playerApiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: String(limit) }))
+  // Real Xtream providers wrap this response as { epg_listings: [...] }, not a bare array —
+  // found live (a real, uncaught TypeError crashed the whole app the first time this was
+  // tested against a genuine account, since a plain object has no .filter()).
+  async getShortEpg(streamId: number, limit = 10): Promise<ShortEpgProgram[]> {
+    const result = await this.getJson<{ epg_listings: ShortEpgProgram[] }>(
+      this.playerApiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: String(limit) })
+    )
+    const listings = result?.epg_listings ?? []
+    return listings.map((item) => ({
+      ...item,
+      title: decodeBase64Maybe(item.title),
+      description: decodeBase64Maybe(item.description)
+    }))
+  }
+
+  /** Full XMLTV guide covering every channel on the account — see lib/epg.ts's own doc comment
+   * for why this is needed alongside (and, for this provider, instead of) getShortEpg. */
+  async getFullEpgXml(): Promise<string> {
+    const url = new URL('/xmltv.php', window.location.origin)
+    url.searchParams.set('username', this.username)
+    url.searchParams.set('password', this.password)
+    const res = await fetch(url.toString())
+    if (!res.ok) throw new Error(`EPG request failed: ${res.status} ${res.statusText}`)
+    return res.text()
   }
 
   // Relative, same-origin — see this class's own doc comment for why that's load-bearing here,
