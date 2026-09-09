@@ -9,25 +9,22 @@ the original scoping writeup this project started from.
 
 - **Playback intermittently freezes with an on-screen error during Live TV, web-only —
   confirmed not to happen in the desktop (Electron) app on the same account/provider.**
-  Reported live; the exact error text wasn't captured, so first step is reproducing it with
-  hls.js's `Hls.Events.ERROR` logged in full (`data.type`/`data.details`/`data.fatal`) rather
-  than guessing. Refreshing the browser and reopening the app clears it and playback resumes
-  — but it recurs, so the browser refresh is standing in for some recovery step the app itself
-  should be doing on its own instead of requiring a manual reload every time.
-  - Since this doesn't reproduce in the Electron app against the same stream, the cause likely
-    lives in something the web port changed rather than in the upstream provider/stream itself
-    — prime suspects: the `getStreamUrl()` same-origin relative-path proxying
-    (`src/client/src/lib/xtreamClient.ts`) versus the desktop app's direct upstream URL, the
-    proxy's own connection handling under `src/server/lib/proxyServer.ts` (idle/keepalive
-    timeouts, since this is now a real network hop that didn't exist in the same form for
-    Electron's `net.request`), or an hls.js fatal error (network or media) that the desktop
-    app's `Player.tsx` recovers from automatically (e.g. via `hls.startLoad()`/
-    `hls.recoverMediaError()` on a fatal-but-recoverable error) but this port doesn't yet retry
-    the same way, instead surfacing the error and stalling until a full page reload rebuilds
-    the player from scratch.
-  - Fix should make the player self-heal on a recoverable fatal error (matching whatever the
-    desktop app's `Player.tsx` already does, per its own history in the desktop ROADMAP) so a
-    manual browser refresh is never the only way to recover.
+  Root cause confirmed by direct comparison against the desktop app's `Player.tsx`:
+  `src/client/src/components/LivePlayer.tsx`'s hls.js `ERROR` handler previously just set an
+  error message and stopped on any fatal event, with no retry — unlike the desktop app, which
+  self-heals fatal `NETWORK_ERROR`/`MEDIA_ERROR` events via `hls.startLoad()`/
+  `hls.recoverMediaError()`/`hls.swapAudioCodec()`. That gap is why only a full browser refresh
+  (which rebuilds the player from scratch) ever recovered playback here.
+  - **Fixed**: ported the desktop app's retry/recovery logic into `LivePlayer.tsx` — up to 4
+    network retries (2s apart) via `hls.startLoad()`, up to 3 media-error recoveries via
+    `hls.recoverMediaError()` (swapping the audio codec on the 2nd attempt, matching the
+    desktop app's own tuning), and a 15s post-recovery window of uninterrupted playback before
+    resetting both counts, so an unrelated later blip gets its own full set of retries. Only a
+    genuinely exhausted or unrecognized fatal error still shows the on-screen error and gives
+    up. Typecheck/lint/test suite all pass; not yet confirmed live against the real
+    account/provider that originally reported the freeze — that's still the real bar per this
+    project's own "verify live, don't just reason about it" history, so treat this as fixed-in-
+    code, pending live confirmation the actual freeze is gone.
 
 ## Security & multi-user
 
