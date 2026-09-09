@@ -29,4 +29,10 @@ COPY package.json ./
 
 EXPOSE 8085
 
+# Hits the server's own /api/health (public app, no auth) via Node's built-in fetch rather than
+# installing curl/wget into the image just for this — bookworm-slim doesn't ship either. Reads
+# PORT the same way src/server/index.ts itself does, so this still works if it's overridden.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8085)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
 CMD ["node", "dist/server/index.js"]
