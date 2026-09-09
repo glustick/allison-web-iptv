@@ -6,7 +6,21 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.4.1 — Live TV stability fix and container healthcheck)
+## Current state (v0.4.2 — fix for a silent, unrecoverable playback stall)
+
+**v0.4.2** fixes a second, distinct freeze reported live after v0.4.1 shipped: Live TV playing
+briefly, then a permanent buffering spinner, a stuck/bogus playback time, and — critically — no
+error in the console at all, meaning the v0.4.1 hls.js-error-recovery fix could never have
+engaged in the first place. Root cause: once `proxyServer.ts` receives upstream response
+headers, it clears its own timeout and never watches the connection again — a live-playlist/
+segment fetch whose connection goes completely silent mid-body (never closes, just stops
+sending bytes) hung the piped response to the browser forever, with nothing to ever error or
+close it. Confirmed via a byte-identical diff against the desktop app's own copy of
+`proxyServer.ts` that the gap is specific to `src/server/lib/nodeUpstreamRequest.ts` (the
+deliberate Node-vs-Electron swap point), not the shared proxy logic — Electron's net module
+apparently already guards against this. Fixed there with a 20s inactivity watchdog on the
+upstream response body that force-ends the client-facing response once a connection stalls,
+giving hls.js a real failure to react to instead of hanging indefinitely with no signal.
 
 **v0.4.1** ports the desktop app's own hls.js fatal-error recovery into the web Live TV player
 (`src/client/src/components/LivePlayer.tsx`), fixing a reported web-only playback freeze that
