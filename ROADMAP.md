@@ -76,6 +76,20 @@ left out:
   of it — flagged in `EFFORT-ASSESSMENT.md` as a real posture question, not just an engineering
   one, since the server now relays the provider's stream and holds the Xtream credentials
   itself.
+- **Check for a new release and surface it in the UI.** `EFFORT-ASSESSMENT.md` cut the desktop
+  app's `electron-updater` entirely as "meaningless for a web app; redeploy instead" — that
+  still holds for *actually* replacing the running container from inside itself, which isn't
+  really feasible (a container can't cleanly swap out its own image while it's the thing
+  running). What is feasible and worth adding: a periodic check against the GitHub Releases API
+  for `glustick/allison-web-iptv`, compared to the running build's own version, surfaced as a
+  simple "update available" banner — same idea as Sonarr/Radarr-style self-hosted apps, just
+  notification-only, no auto-restart. For the actual update step, point people at existing
+  Docker-layer tooling instead of reinventing it in-app: either a **Watchtower** sidecar
+  (auto-pulls a new GHCR image and restarts the container) or Synology Container Manager's own
+  built-in "auto-update on new image" toggle, since Synology is already a documented deployment
+  target here. Giving the app itself Docker-socket access to redeploy itself would work too, but
+  is a real security tradeoff (broad host access from a personal media app) for what a sidecar
+  container already solves cleanly.
 
 ## Quality
 
