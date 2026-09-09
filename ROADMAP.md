@@ -51,27 +51,6 @@ the original scoping writeup this project started from.
 - **Track-switching UI for the transcode fallback.** The EC-3/E-AC-3 audio transcode fallback
   works end-to-end, but there's no UI yet to pick between available audio/subtitle tracks once
   it kicks in — it just picks one and plays.
-- **Persistent "Allison Web IPTV" banner shown during Picture-in-Picture, reported live.**
-  Confirmed by a code search that this app has no custom PiP implementation at all —
-  `LivePlayer.tsx`/`NativeVideoPlayer.tsx` are plain `<video controls>` with no
-  `requestPictureInPicture()` call or overlay component anywhere in the client. That means the
-  banner is very likely the **browser's own native PiP window chrome** (the title/site-identity
-  bar Chrome/Safari draw around a floating PiP window from the page's own `<title>`), not
-  anything this app draws — and browsers deliberately keep that part persistent and outside
-  page-script control, specifically so a page can't disguise a floating video window's real
-  source. First step: confirm that diagnosis (does the banner move/behave independently of any
-  DOM the app controls?) before assuming it's fixable the way an in-app overlay would be.
-  - If it is native chrome: removing it outright, or giving it a custom timeout, isn't feasible
-    via page script — that's a deliberate browser security behavior, not a bug in this app.
-    What *is* feasible: the text it shows is generally just `document.title`, so setting that to
-    something shorter/more useful (e.g. the live channel name) while playing, and feeding richer
-    metadata via the Media Session API, is a real partial improvement even if the bar itself
-    can't disappear.
-  - A genuinely custom, auto-hiding PiP overlay would require rebuilding PiP on the newer
-    Document Picture-in-Picture API (puts real page HTML in the floating window) instead of
-    plain `<video>` PiP — at that point the desktop app's existing auto-hide pattern
-    (`useHoverAutoHide.ts` / `CHANNEL_BAR_AUTO_HIDE_MS`, ~6s, used for its fullscreen
-    channel-swap bar) is the template to copy for a 5-second timeout.
 
 ## EPG grid
 
