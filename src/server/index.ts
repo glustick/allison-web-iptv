@@ -223,7 +223,7 @@ app.get('*', (_req, res) => {
 })
 
 createHttpServer(app).listen(PUBLIC_PORT, () => {
-  console.log(`[server] Allison Web IPTV listening on http://localhost:${PUBLIC_PORT}`)
+  console.log(`[server] Allison Web IPTV v${pkg.version} listening on http://localhost:${PUBLIC_PORT}`)
 })
 
 // Same reasoning as the desktop app's own 'before-quit' handler: an active transcode session
