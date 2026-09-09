@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { gzipSync } from 'zlib'
+import { PassThrough } from 'stream'
 import type { AddressInfo } from 'net'
 import { createNodeUpstreamRequest } from './nodeUpstreamRequest.js'
 
@@ -132,6 +133,81 @@ describe('createNodeUpstreamRequest', () => {
     })
 
     expect(received.range).toBe('bytes=0-100')
+  })
+
+  it('force-ends the piped destination if the upstream response stalls mid-body with no more data', async () => {
+    // Reproduces the real reported symptom directly: a connection that delivers some bytes,
+    // then goes completely silent without ever closing — headers/first chunk already arrived,
+    // then nothing. Deliberately never calls res.end() server-side.
+    const base = await listen((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.write('first chunk, then silence')
+    })
+
+    const destination = new PassThrough()
+    await new Promise<void>((resolve) => {
+      const req = createNodeUpstreamRequest({
+        method: 'GET',
+        url: base,
+        stallTimeoutMs: 100,
+        stallCheckIntervalMs: 20
+      })
+      req.on('response', (res) => {
+        res.pipe(destination as unknown as ServerResponse)
+      })
+      // Destroying the stalled response also surfaces as a request-level 'error' here (the
+      // underlying socket genuinely errors out) — exactly the signal proxyServer.ts's own
+      // upstreamReq.on('error', ...) needs to see, not a test failure, so this just needs a
+      // listener present (an EventEmitter with none throws) rather than rejecting on it.
+      req.on('error', () => {})
+      endRequest(req)
+      destination.on('close', () => resolve())
+      // Safety net in case destroy() doesn't emit 'close' fast enough for the test itself.
+      setTimeout(resolve, 1000)
+    })
+
+    expect(destination.destroyed).toBe(true)
+  })
+
+  it('does not touch a destination that keeps receiving data well within the stall window', async () => {
+    // Same stallTimeoutMs as above, but the server keeps writing well inside every window —
+    // confirms the watchdog doesn't misfire against a genuinely slow-but-live connection.
+    const base = await listen((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      let count = 0
+      const interval = setInterval(() => {
+        count += 1
+        res.write(`chunk-${count} `)
+        if (count >= 5) {
+          clearInterval(interval)
+          res.end()
+        }
+      }, 30)
+    })
+
+    const destination = new PassThrough()
+    const body = await new Promise<string>((resolve, reject) => {
+      const req = createNodeUpstreamRequest({
+        method: 'GET',
+        url: base,
+        stallTimeoutMs: 100,
+        stallCheckIntervalMs: 20
+      })
+      req.on('response', (res) => {
+        res.pipe(destination as unknown as ServerResponse)
+      })
+      req.on('error', reject)
+      endRequest(req)
+      collect(destination).then(resolve, reject)
+    })
+
+    // Deliberately not asserting destination.destroyed here — a stream that finishes normally
+    // also ends up with .destroyed === true in modern Node, so that alone can't distinguish a
+    // graceful finish from the watchdog forcing one early. The real proof the watchdog never
+    // fired is that collect() resolved via a genuine 'end' event with every chunk intact — had
+    // the watchdog force-destroyed the source mid-stream instead, collect() would have hung
+    // (destination.destroy() with no error argument emits neither 'end' nor 'error').
+    expect(body).toBe('chunk-1 chunk-2 chunk-3 chunk-4 chunk-5 ')
   })
 
   it('abort() closes the connection without throwing, even before a response arrives', async () => {

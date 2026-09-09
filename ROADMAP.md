@@ -25,6 +25,30 @@ the original scoping writeup this project started from.
     account/provider that originally reported the freeze — that's still the real bar per this
     project's own "verify live, don't just reason about it" history, so treat this as fixed-in-
     code, pending live confirmation the actual freeze is gone.
+- **Second, distinct freeze reported live after the above fix shipped: Live TV plays briefly,
+  then a permanent buffering spinner, playback time stuck on a bogus value, no error in the
+  console at all, and no recovery.** "No console error" ruled out the fatal-hls.js-error path
+  above entirely — that fix only ever engages once hls.js actually emits an `ERROR` event, and
+  this wasn't emitting one. Root-caused by direct code reading against
+  `src/server/lib/nodeUpstreamRequest.ts` and `proxyServer.ts`: once upstream response *headers*
+  arrive, `proxyServer.ts` clears its own timeout and never watches the connection again — a
+  live-playlist/segment fetch whose connection goes completely silent mid-body (never closes,
+  just stops sending bytes) hangs the piped response to the browser forever, with nothing to
+  ever error or close it. Confirmed via a byte-identical diff against the desktop app's own copy
+  of `proxyServer.ts` that this file itself is unmodified — the gap is specific to
+  `nodeUpstreamRequest.ts`, the deliberate Node-vs-Electron swap point, meaning Electron's net
+  module (Chromium's own network stack) evidently already guards against this in a way plain
+  Node http/https does not.
+  - **Fixed**: `nodeUpstreamRequest.ts`'s response-piping now watches for 20s of inactivity on
+    the upstream body specifically (not just the initial wait for headers) and force-destroys
+    the connection if it stalls, which in turn force-ends the client-facing response so the
+    browser's fetch/XHR actually completes (with a failure) instead of hanging indefinitely with
+    no signal — giving hls.js something concrete to react to, and `proxyServer.ts`'s own
+    upstream-request error handling a real event to see. Fixed entirely inside
+    `nodeUpstreamRequest.ts` rather than touching `proxyServer.ts`, to keep that file's parity
+    with the desktop app intact. Covered by two new tests exercising a real local HTTP server
+    (one that stalls mid-body, one that keeps streaming normally) — both pass consistently.
+    Same caveat as above: fixed-in-code, not yet confirmed live against the real freeze.
 
 ## Security & multi-user
 

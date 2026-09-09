@@ -1,8 +1,24 @@
 import { EventEmitter } from 'events'
 import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'http'
 import { request as httpsRequest } from 'https'
+import type { Readable } from 'stream'
 import { createBrotliDecompress, createGunzip, createInflate } from 'zlib'
 import type { UpstreamClientRequest, UpstreamResponse } from './proxyServer.js'
+
+// A live HLS segment/playlist fetch whose connection goes completely silent mid-body — headers
+// already arrived, then nothing, socket never actually closes — is otherwise permanent here:
+// proxyServer.ts's own upstream timeout only guards the wait for a *first* response (it's
+// cleared the moment headers arrive), and plain Node http/https has no equivalent to whatever
+// Electron's net module (Chromium's network stack) does about a stalled-but-open connection —
+// confirmed via a byte-identical diff against the desktop app's own copy of proxyServer.ts,
+// which has never reported this symptom, so the gap is specific to this Node-backed
+// replacement, not the shared proxy logic. Left unhandled, this hangs the piped response to the
+// browser forever: no error, no close, nothing for hls.js to react to — matching a reported
+// live symptom exactly (Live TV plays briefly, then a permanent buffering spinner with no
+// console error and no recovery). Handled entirely inside this module's own pipe() below,
+// rather than touching proxyServer.ts, to keep that file's parity with the desktop app intact.
+const UPSTREAM_STALL_TIMEOUT_MS = 20_000
+const UPSTREAM_STALL_CHECK_INTERVAL_MS = 5_000
 
 /**
  * Node https/http-backed replacement for Electron's net.request (see proxyServer.ts's own
@@ -36,7 +52,18 @@ import type { UpstreamClientRequest, UpstreamResponse } from './proxyServer.js'
  * been chosen specifically to avoid. If this server ever needs to run behind such a network,
  * point NODE_EXTRA_CA_CERTS at that corporate root CA rather than disabling TLS verification.
  */
-export function createNodeUpstreamRequest(opts: { method: string | undefined; url: string }): UpstreamClientRequest {
+export function createNodeUpstreamRequest(opts: {
+  method: string | undefined
+  url: string
+  // Test-only overrides for UPSTREAM_STALL_TIMEOUT_MS/_CHECK_INTERVAL_MS above — production
+  // code never passes these, so real callers always get the real thresholds. Lets
+  // nodeUpstreamRequest.test.ts exercise the actual stall-detection path against a real HTTP
+  // server without a test needing to wait through the real 20s window.
+  stallTimeoutMs?: number
+  stallCheckIntervalMs?: number
+}): UpstreamClientRequest {
+  const stallTimeoutMs = opts.stallTimeoutMs ?? UPSTREAM_STALL_TIMEOUT_MS
+  const stallCheckIntervalMs = opts.stallCheckIntervalMs ?? UPSTREAM_STALL_CHECK_INTERVAL_MS
   const emitter = new EventEmitter()
   const pendingHeaders: Record<string, string> = {}
   let currentReq: ClientRequest | null = null
@@ -44,7 +71,7 @@ export function createNodeUpstreamRequest(opts: { method: string | undefined; ur
 
   function wrapResponse(res: IncomingMessage): UpstreamResponse {
     const encoding = (res.headers['content-encoding'] ?? '').toString().toLowerCase()
-    let stream: NodeJS.ReadableStream = res
+    let stream: Readable = res
     if (encoding === 'gzip' || encoding === 'x-gzip') stream = res.pipe(createGunzip())
     else if (encoding === 'deflate') stream = res.pipe(createInflate())
     else if (encoding === 'br') stream = res.pipe(createBrotliDecompress())
@@ -56,6 +83,33 @@ export function createNodeUpstreamRequest(opts: { method: string | undefined; ur
       statusCode: res.statusCode ?? 0,
       headers: res.headers,
       pipe: (destination) => {
+        // See UPSTREAM_STALL_TIMEOUT_MS above. Reset on every chunk actually received; if
+        // nothing arrives for the full window, treat the connection as dead — destroying
+        // `stream` surfaces as its own 'error' below, which force-ends `destination` (the
+        // real client-facing ServerResponse) so the browser's fetch/XHR actually completes
+        // (with a failure) instead of hanging indefinitely with no signal at all.
+        let lastActivity = Date.now()
+        const stallTimer = setInterval(() => {
+          if (Date.now() - lastActivity > stallTimeoutMs) {
+            stopWatchdog()
+            stream.destroy(new Error(`Upstream response stalled for over ${stallTimeoutMs}ms mid-body`))
+          }
+        }, stallCheckIntervalMs)
+        function stopWatchdog(): void {
+          clearInterval(stallTimer)
+        }
+        stream.on('data', () => {
+          lastActivity = Date.now()
+        })
+        stream.on('end', stopWatchdog)
+        stream.on('close', stopWatchdog)
+        // .pipe() only ever forwards 'data'/'end' from source to destination, never 'error' —
+        // without this, a stalled or otherwise broken upstream response leaves `destination`
+        // open forever with no more data and no termination.
+        stream.on('error', () => {
+          stopWatchdog()
+          if (!destination.destroyed) destination.destroy()
+        })
         stream.pipe(destination)
       },
       on: (event, listener) => {
