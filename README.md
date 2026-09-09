@@ -6,7 +6,17 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.4.0 — Docker packaging, published to GHCR)
+## Current state (v0.4.1 — Live TV stability fix and container healthcheck)
+
+**v0.4.1** ports the desktop app's own hls.js fatal-error recovery into the web Live TV player
+(`src/client/src/components/LivePlayer.tsx`), fixing a reported web-only playback freeze that
+required a full browser refresh to clear — the player previously stalled on any fatal hls.js
+error instead of retrying. Also adds a real Docker `HEALTHCHECK` against the existing
+`/api/health` endpoint (declared in both the `Dockerfile` and `docker-compose.yml`, for stack
+UIs that read one or the other) and logs the running version on server startup so a deployed
+container's release can be confirmed straight from its logs.
+
+**v0.4.0** added Docker packaging, published to GHCR.
 
 The two most technically risky pieces of the desktop app were already Electron-free and
 dependency-injected, so they're ported here essentially unchanged:
