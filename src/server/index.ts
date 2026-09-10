@@ -12,6 +12,7 @@ import { createNodeUpstreamRequest } from './lib/nodeUpstreamRequest.js'
 import { createTranscodeService } from './lib/transcodeService.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
+import { decryptSessionCredentials, decryptSessionProfileState, encryptSessionCredentials, encryptSessionProfileState, type SessionCredentials } from './lib/sessionStore.js'
 
 // ffmpeg-static is a plain CommonJS package with no "exports" map — TypeScript's NodeNext
 // module resolution (the correct choice for a real standalone Node server, unlike the
@@ -43,6 +44,8 @@ const PROXY_INTERNAL_PORT = Number(process.env.PROXY_INTERNAL_PORT ?? 4001)
 // and for single-user setups, but the actual active target can live on the session cookie.
 let defaultProxyTargetBase: string | null = null
 const sessionProxyTargets = new Map<string, string>()
+const sessionCredentialStore = new Map<string, string>()
+const sessionProfileStore = new Map<string, string>()
 
 function getSessionIdFromRequest(req: { headers?: Record<string, string | string[] | undefined> }): string | null {
   const cookieHeader = typeof req.headers?.cookie === 'string' ? req.headers.cookie : undefined
@@ -133,8 +136,116 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/session', (req, res) => {
   const sessionId = getSessionIdFromRequest(req)
-  const server = getProxyTargetBase(req)
-  res.json({ ok: true, sessionId, server })
+  if (!sessionId) {
+    res.json({ ok: true, sessionId: null, server: null, username: null, password: null, accessPassword: null })
+    return
+  }
+
+  const stored = sessionCredentialStore.get(sessionId)
+  if (!stored) {
+    res.json({ ok: true, sessionId, server: null, username: null, password: null, accessPassword: null })
+    return
+  }
+
+  try {
+    const credentials = decryptSessionCredentials(stored)
+    res.json({ ok: true, sessionId, ...credentials })
+  } catch {
+    sessionCredentialStore.delete(sessionId)
+    res.json({ ok: true, sessionId, server: null, username: null, password: null, accessPassword: null })
+  }
+})
+
+app.get('/api/session/profiles', (req, res) => {
+  const sessionId = getSessionIdFromRequest(req)
+  if (!sessionId) {
+    res.json({ ok: true, sessionId: null, activeProfileId: null, profiles: [] })
+    return
+  }
+
+  const stored = sessionProfileStore.get(sessionId)
+  if (!stored) {
+    res.json({ ok: true, sessionId, activeProfileId: null, profiles: [] })
+    return
+  }
+
+  try {
+    const state = decryptSessionProfileState(stored)
+    res.json({ ok: true, sessionId, ...state })
+  } catch {
+    sessionProfileStore.delete(sessionId)
+    res.json({ ok: true, sessionId, activeProfileId: null, profiles: [] })
+  }
+})
+
+app.post('/api/session/save', (req, res) => {
+  const sessionId = ensureSessionId(req, res)
+  const { accessPassword, server, username, password, profileId, profileName } = req.body ?? {}
+  const legacyCredentials = { accessPassword, server, username, password }
+  if (typeof accessPassword === 'string' && typeof server === 'string' && typeof username === 'string' && typeof password === 'string') {
+    const payload: SessionCredentials = { accessPassword, server, username, password }
+    sessionCredentialStore.set(sessionId, encryptSessionCredentials(payload))
+
+    const previousProfiles = (() => {
+      const saved = sessionProfileStore.get(sessionId)
+      if (!saved) return { activeProfileId: null, profiles: [] }
+      try {
+        return decryptSessionProfileState(saved)
+      } catch {
+        sessionProfileStore.delete(sessionId)
+        return { activeProfileId: null, profiles: [] }
+      }
+    })()
+
+    const nextProfileId = typeof profileId === 'string' && profileId.trim().length > 0 ? profileId : `profile-${Date.now()}`
+    const nextName = typeof profileName === 'string' && profileName.trim().length > 0 ? profileName : username
+    const nextProfiles = previousProfiles.profiles.filter((profile) => profile.id !== nextProfileId)
+    nextProfiles.push({ id: nextProfileId, name: nextName, credentials: payload })
+    const nextState = {
+      activeProfileId: previousProfiles.activeProfileId ?? nextProfileId,
+      profiles: nextProfiles
+    }
+    sessionProfileStore.set(sessionId, encryptSessionProfileState(nextState))
+    res.json({ ok: true, sessionId, profileId: nextProfileId, profiles: nextState.profiles, activeProfileId: nextState.activeProfileId })
+    return
+  }
+
+  res.status(400).json({ error: 'Missing session credentials' })
+})
+
+app.post('/api/session/profiles', (req, res) => {
+  const sessionId = ensureSessionId(req, res)
+  const { activeProfileId, profiles } = req.body ?? {}
+  if (!Array.isArray(profiles)) {
+    res.status(400).json({ error: 'Missing profiles list' })
+    return
+  }
+
+  const nextState = {
+    activeProfileId: typeof activeProfileId === 'string' ? activeProfileId : null,
+    profiles: profiles.map((profile) => ({
+      id: String(profile?.id ?? `profile-${Date.now()}-${Math.random().toString(16).slice(2)}`),
+      name: typeof profile?.name === 'string' ? profile.name : 'Saved profile',
+      credentials: {
+        accessPassword: String(profile?.credentials?.accessPassword ?? ''),
+        server: String(profile?.credentials?.server ?? ''),
+        username: String(profile?.credentials?.username ?? ''),
+        password: String(profile?.credentials?.password ?? '')
+      }
+    }))
+  }
+
+  sessionProfileStore.set(sessionId, encryptSessionProfileState(nextState))
+  res.json({ ok: true, sessionId, ...nextState })
+})
+
+app.post('/api/session/clear', (req, res) => {
+  const sessionId = getSessionIdFromRequest(req)
+  if (sessionId) {
+    sessionCredentialStore.delete(sessionId)
+  }
+  res.clearCookie('allison_web_iptv_session')
+  res.json({ ok: true })
 })
 
 // Points the proxy at a (possibly different) Xtream server — the web equivalent of the

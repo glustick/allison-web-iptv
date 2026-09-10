@@ -15,17 +15,30 @@ interface SavedLogin {
   password: string
 }
 
-const SAVED_LOGIN_KEY = 'allison-web-iptv:saved-login'
+interface SavedProfile {
+  id: string
+  name: string
+  credentials: SavedLogin
+}
 
-// Deliberately saves the Xtream password (not just server/username) so the app can connect
-// automatically on load, per explicit request — this does mean it sits in the browser's
-// localStorage in plaintext, same tradeoff as the ACCESS_PASSWORD gate itself. Reasonable for
-// this project's own personal/self-hosted scope (see EFFORT-ASSESSMENT.md), not something to
-// carry forward if this ever became a real multi-user service.
-function loadSavedLogin(): SavedLogin | null {
+async function loadSavedLogin(): Promise<SavedLogin | null> {
   try {
-    const raw = localStorage.getItem(SAVED_LOGIN_KEY)
-    return raw ? (JSON.parse(raw) as SavedLogin) : null
+    const res = await fetch('/api/session')
+    if (!res.ok) return null
+    const data = (await res.json()) as {
+      accessPassword?: string
+      server?: string
+      username?: string
+      password?: string
+      sessionId?: string | null
+    }
+    if (!data.server || !data.username || !data.password || !data.accessPassword) return null
+    return {
+      accessPassword: data.accessPassword,
+      server: data.server,
+      username: data.username,
+      password: data.password
+    }
   } catch {
     return null
   }
@@ -57,15 +70,62 @@ async function connect(login: SavedLogin): Promise<Session> {
 }
 
 export function LoginScreen({ onConnected }: { onConnected: (session: Session) => void }): JSX.Element {
-  const saved = loadSavedLogin()
-  const [accessPassword, setAccessPassword] = useState(saved?.accessPassword ?? '')
-  const [server, setServer] = useState(saved?.server ?? '')
-  const [username, setUsername] = useState(saved?.username ?? '')
-  const [password, setPassword] = useState(saved?.password ?? '')
+  const [saved, setSaved] = useState<SavedLogin | null>(null)
+  const [savedProfiles, setSavedProfiles] = useState<SavedProfile[]>([])
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null)
+  const [profileName, setProfileName] = useState('')
+  const [accessPassword, setAccessPassword] = useState('')
+  const [server, setServer] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [connecting, setConnecting] = useState(false)
-  const [autoConnecting, setAutoConnecting] = useState(Boolean(saved))
+  const [autoConnecting, setAutoConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
+
+  async function loadSavedProfiles(): Promise<void> {
+    try {
+      const res = await fetch('/api/session/profiles')
+      if (!res.ok) return
+      const data = (await res.json()) as {
+        activeProfileId?: string | null
+        profiles?: Array<{ id: string; name: string; credentials?: SavedLogin }>
+      }
+      const nextProfiles = (data.profiles ?? []).filter((profile): profile is SavedProfile => {
+        if (!profile?.id || !profile.name || !profile.credentials) return false
+        const { accessPassword, server, username, password } = profile.credentials
+        return !!accessPassword && !!server && !!username && !!password
+      })
+      setSavedProfiles(nextProfiles)
+      setActiveProfileId(data.activeProfileId ?? nextProfiles[0]?.id ?? null)
+      const selected = nextProfiles.find((profile) => profile.id === (data.activeProfileId ?? nextProfiles[0]?.id))
+      if (selected) {
+        setProfileName(selected.name)
+        setAccessPassword(selected.credentials.accessPassword)
+        setServer(selected.credentials.server)
+        setUsername(selected.credentials.username)
+        setPassword(selected.credentials.password)
+      }
+    } catch {
+      // Ignore profile-load failures and just fall back to the editable form.
+    }
+  }
+
+  useEffect(() => {
+    let active = true
+    Promise.all([loadSavedLogin(), loadSavedProfiles()]).then(([login]) => {
+      if (!active || !login) return
+      setSaved(login)
+      setAccessPassword(login.accessPassword)
+      setServer(login.server)
+      setUsername(login.username)
+      setPassword(login.password)
+      setAutoConnecting(true)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
   const startedAtRef = useRef<number | null>(null)
 
   useEffect(() => {
@@ -98,9 +158,17 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
         setError(err instanceof Error ? `Auto-connect failed: ${err.message}` : 'Auto-connect failed')
         setAutoConnecting(false)
       })
-    // Deliberately runs once on mount only — saved is read once via useState's own lazy
-    // initializer above and never changes identity in a way that should re-trigger this.
-  }, [])
+  }, [saved, onConnected])
+
+  function applySavedProfile(profile: SavedProfile): void {
+    setActiveProfileId(profile.id)
+    setProfileName(profile.name)
+    setAccessPassword(profile.credentials.accessPassword)
+    setServer(profile.credentials.server)
+    setUsername(profile.credentials.username)
+    setPassword(profile.credentials.password)
+    setError(null)
+  }
 
   async function handleSubmit(e: React.FormEvent): Promise<void> {
     e.preventDefault()
@@ -111,7 +179,18 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
     const login: SavedLogin = { accessPassword, server, username, password }
     try {
       const session = await connect(login)
-      localStorage.setItem(SAVED_LOGIN_KEY, JSON.stringify(login))
+      const resolvedProfileId = activeProfileId ?? savedProfiles.find((profile) => profile.credentials.server === server && profile.credentials.username === username)?.id
+      const body = {
+        ...login,
+        profileId: resolvedProfileId ?? undefined,
+        profileName: (profileName || username || 'Saved profile').trim()
+      }
+      await fetch('/api/session/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      await loadSavedProfiles()
       onConnected(session)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Connection failed')
@@ -120,8 +199,13 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
     }
   }
 
-  function forgetSavedLogin(): void {
-    localStorage.removeItem(SAVED_LOGIN_KEY)
+  async function forgetSavedLogin(): Promise<void> {
+    try {
+      await fetch('/api/session/clear', { method: 'POST' })
+    } catch {
+      // Ignore cleanup failures; the UI should still clear the form and continue.
+    }
+    setSaved(null)
     setAccessPassword('')
     setServer('')
     setUsername('')
@@ -161,6 +245,25 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
           Password
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
         </label>
+        <label>
+          Profile name
+          <input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="Family main" />
+        </label>
+        {savedProfiles.length > 0 && (
+          <div className="saved-profile-list">
+            <p>Saved profiles</p>
+            {savedProfiles.map((profile) => (
+              <button
+                key={profile.id}
+                type="button"
+                className={profile.id === activeProfileId ? 'selected-profile' : ''}
+                onClick={() => applySavedProfile(profile)}
+              >
+                {profile.name}
+              </button>
+            ))}
+          </div>
+        )}
         <button type="submit" disabled={connecting}>
           {connecting ? `Connecting… ${formatElapsedTime(elapsedMs)}` : 'Connect'}
         </button>

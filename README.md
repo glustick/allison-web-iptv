@@ -151,6 +151,7 @@ Environment variables:
 - `PORT` (default `8085`) — the public port.
 - `PROXY_INTERNAL_PORT` (default `4001`) — internal-only, do not expose this one.
 - `ACCESS_PASSWORD` — required for `/api/login` to accept anything.
+- `SESSION_SECRET` — required for encrypted browser-session storage; use a 16+ character random secret, ideally from a secret manager or `.env` file.
 - `NODE_EXTRA_CA_CERTS` — only needed on a network with a TLS-inspecting corporate proxy, but
   confirmed live to matter in exactly two separate places on one such network during this
   project's own setup: `npm install` failed fetching `ffmpeg-static`'s binary, and — separately

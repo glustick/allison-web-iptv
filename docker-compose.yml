@@ -7,6 +7,7 @@ services:
     environment:
       - PORT=8085
       - ACCESS_PASSWORD=changeme
+      - SESSION_SECRET=change-this-to-a-long-random-secret
       # Only needed if your own network does TLS inspection (a corporate proxy, some
       # security appliances) — see the README's own account of hitting this directly.
       # Mount a PEM bundle into the container and point this at it if so:

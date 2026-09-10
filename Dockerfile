@@ -15,6 +15,7 @@ RUN npm run build && npm run build:client
 FROM node:20-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
+ENV SESSION_SECRET=
 # Reuses the build stage's own node_modules wholesale (including devDependencies) rather than a
 # second `npm ci --omit=dev` here — deliberately: a second install would re-trigger
 # ffmpeg-static's own binary download a second time, which on a network that needs

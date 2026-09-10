@@ -65,6 +65,11 @@ the original scoping writeup this project started from.
     a session cookie plus a request-level override, and the logic is extracted into a dedicated
     helper with regression tests. This is still a stepping stone toward real multi-user auth,
     not a complete account system yet.
+  - **Implemented in part:** per-browser session profile state is now encrypted and kept as a
+    small list of named saved Xtream profiles with an active selection, so we can move from
+    a single shared login toward a household profile model without storing credentials in the
+    browser. The stored state is covered by regression tests and the server exposes it via the
+    session endpoints.
 
 ### Suggested follow-up enhancements
 
@@ -77,6 +82,10 @@ the original scoping writeup this project started from.
   personal/self-hosted use, but worth replacing with actual server-side encryption (one key
   from an env var/secret file, per `EFFORT-ASSESSMENT.md`) before this is reachable outside a
   trusted LAN.
+  - **Implemented:** the server now encrypts the browser-session credentials payload before
+    saving it in the session map, and the app uses a server-backed session route instead of
+    persisting the plaintext login in `localStorage`. The secret is read from `SESSION_SECRET`
+    so the credential payload is no longer sitting in plain browser storage.
 
 ### Suggested follow-up enhancements
 
