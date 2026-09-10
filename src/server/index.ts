@@ -13,6 +13,7 @@ import { createTranscodeService } from './lib/transcodeService.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
 import { decryptSessionCredentials, decryptSessionProfileState, encryptSessionCredentials, encryptSessionProfileState, type SessionCredentials } from './lib/sessionStore.js'
+import { compareVersions } from './lib/versionCheck.js'
 
 // ffmpeg-static is a plain CommonJS package with no "exports" map — TypeScript's NodeNext
 // module resolution (the correct choice for a real standalone Node server, unlike the
@@ -132,6 +133,31 @@ app.post('/api/login', (req, res) => {
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, name: 'Allison Web IPTV', version: pkg.version })
+})
+
+app.get('/api/version-check', (_req, res) => {
+  void (async (): Promise<void> => {
+    try {
+      const releaseRes = await fetch('https://api.github.com/repos/glustick/allison-web-iptv/releases/latest', {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'allison-web-iptv'
+        }
+      })
+
+      if (!releaseRes.ok) {
+        res.json({ ok: true, currentVersion: pkg.version, latestVersion: pkg.version, updateAvailable: false })
+        return
+      }
+
+      const body = (await releaseRes.json()) as { tag_name?: string }
+      const latestVersion = body.tag_name ?? pkg.version
+      const updateAvailable = compareVersions(pkg.version, latestVersion) < 0
+      res.json({ ok: true, currentVersion: pkg.version, latestVersion, updateAvailable })
+    } catch {
+      res.json({ ok: true, currentVersion: pkg.version, latestVersion: pkg.version, updateAvailable: false })
+    }
+  })()
 })
 
 app.get('/api/session', (req, res) => {

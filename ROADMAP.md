@@ -101,6 +101,9 @@ the original scoping writeup this project started from.
 - **Track-switching UI for the transcode fallback.** The EC-3/E-AC-3 audio transcode fallback
   works end-to-end, but there's no UI yet to pick between available audio/subtitle tracks once
   it kicks in — it just picks one and plays.
+  - **Implemented:** Live TV and VOD/series HLS playback now expose available audio and subtitle
+    tracks through compact selectors. Audio changes use hls.js's active track, while subtitles
+    include an explicit Off option; controls stay hidden when the provider exposes no choices.
 
 ## EPG grid
 
@@ -140,6 +143,9 @@ left out:
   target here. Giving the app itself Docker-socket access to redeploy itself would work too, but
   is a real security tradeoff (broad host access from a personal media app) for what a sidecar
   container already solves cleanly.
+  - **Implemented:** the app now checks the GitHub Releases API via `/api/version-check` and
+    displays a simple update banner when a newer release is available, without trying to self-
+    update from inside the running web container.
 
 ## Quality
 

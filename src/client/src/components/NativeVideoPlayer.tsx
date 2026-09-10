@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
+import { TrackControls, type PlayerTrack } from './TrackControls'
 
 const SILENT_AUDIO_CHECK_INTERVAL_MS = 1000
 const SILENT_AUDIO_MAX_CHECK_ATTEMPTS = 90
@@ -26,8 +27,13 @@ interface ChromiumVideoElement extends HTMLVideoElement {
 // hls.js's own ERROR event covers it instead, and there's nothing left needing the poll.
 export function NativeVideoPlayer({ url, titleKey }: { url: string; titleKey: string }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [audioTracks, setAudioTracks] = useState<PlayerTrack[]>([])
+  const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
+  const [audioTrack, setAudioTrack] = useState(-1)
+  const [subtitleTrack, setSubtitleTrack] = useState(-1)
   const { getSourceUrl, tryFallbackForSilentAudio, reset, beginRun } = useTranscodeFallback()
 
   useEffect(() => {
@@ -44,8 +50,17 @@ export function NativeVideoPlayer({ url, titleKey }: { url: string; titleKey: st
 
     if (isM3u8 && Hls.isSupported()) {
       const hls = new Hls()
+      hlsRef.current = hls
       hls.loadSource(sourceUrl)
       hls.attachMedia(video)
+      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_event, data) => {
+        setAudioTracks(data.audioTracks.map((track, index) => ({ index, name: track.name, lang: track.lang, default: track.default })))
+        setAudioTrack(hls.audioTrack)
+      })
+      hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_event, data) => {
+        setSubtitleTracks(data.subtitleTracks.map((track, index) => ({ index, name: track.name, lang: track.lang, default: track.default })))
+        setSubtitleTrack(hls.subtitleTrack)
+      })
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
           console.error('[player] fatal hls error on fallback output', data.type, data.details)
@@ -55,6 +70,11 @@ export function NativeVideoPlayer({ url, titleKey }: { url: string; titleKey: st
       video.play().catch(() => {})
       return () => {
         hls.destroy()
+        hlsRef.current = null
+        setAudioTracks([])
+        setSubtitleTracks([])
+        setAudioTrack(-1)
+        setSubtitleTrack(-1)
         video.removeAttribute('src')
         video.load()
       }
@@ -111,6 +131,20 @@ export function NativeVideoPlayer({ url, titleKey }: { url: string; titleKey: st
   return (
     <div className="player-wrap">
       <video ref={videoRef} controls />
+      <TrackControls
+        audioTracks={audioTracks}
+        audioTrack={audioTrack}
+        onAudioChange={(index) => {
+          setAudioTrack(index)
+          if (hlsRef.current) hlsRef.current.audioTrack = index
+        }}
+        subtitleTracks={subtitleTracks}
+        subtitleTrack={subtitleTrack}
+        onSubtitleChange={(index) => {
+          setSubtitleTrack(index)
+          if (hlsRef.current) hlsRef.current.subtitleTrack = index
+        }}
+      />
       {error && <div className="login-error" style={{ padding: '6px 16px' }}>{error}</div>}
     </div>
   )

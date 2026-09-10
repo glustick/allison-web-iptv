@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
+import { TrackControls, type PlayerTrack } from './TrackControls'
 
 // Matches the desktop app's own Player.tsx recovery tuning (see its ROADMAP): a fatal
 // NETWORK_ERROR or MEDIA_ERROR from hls.js is often transient (a brief network blip, a
@@ -20,8 +21,13 @@ const ERROR_RESET_AFTER_MS = 15000
 // counts there), so they're kept as separate components rather than one that branches.
 export function LivePlayer({ url, channelKey }: { url: string; channelKey: string }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [audioTracks, setAudioTracks] = useState<PlayerTrack[]>([])
+  const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
+  const [audioTrack, setAudioTrack] = useState(-1)
+  const [subtitleTrack, setSubtitleTrack] = useState(-1)
   const { getSourceUrl, tryFallback, reset, beginRun } = useTranscodeFallback()
 
   // A genuinely different channel resets the fallback (and stops any in-flight ffmpeg
@@ -79,8 +85,27 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
         ignorePlaylistParsingErrors: true
       })
       const instance = hls
+      hlsRef.current = instance
       instance.loadSource(sourceUrl)
       instance.attachMedia(video)
+      instance.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_event, data) => {
+        setAudioTracks(data.audioTracks.map((track, index) => ({
+          index,
+          name: track.name,
+          lang: track.lang,
+          default: track.default
+        })))
+        setAudioTrack(instance.audioTrack)
+      })
+      instance.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_event, data) => {
+        setSubtitleTracks(data.subtitleTracks.map((track, index) => ({
+          index,
+          name: track.name,
+          lang: track.lang,
+          default: track.default
+        })))
+        setSubtitleTrack(instance.subtitleTrack)
+      })
       instance.on(Hls.Events.ERROR, (_event, data) => {
         if (
           tryFallback(
@@ -135,6 +160,11 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
       if (errorResetTimer) clearTimeout(errorResetTimer)
       if (networkRetryTimer) clearTimeout(networkRetryTimer)
       hls?.destroy()
+      hlsRef.current = null
+      setAudioTracks([])
+      setSubtitleTracks([])
+      setAudioTrack(-1)
+      setSubtitleTrack(-1)
       video.removeAttribute('src')
       video.load()
     }
@@ -143,6 +173,20 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   return (
     <div className="player-wrap">
       <video ref={videoRef} controls />
+      <TrackControls
+        audioTracks={audioTracks}
+        audioTrack={audioTrack}
+        onAudioChange={(index) => {
+          setAudioTrack(index)
+          if (hlsRef.current) hlsRef.current.audioTrack = index
+        }}
+        subtitleTracks={subtitleTracks}
+        subtitleTrack={subtitleTrack}
+        onSubtitleChange={(index) => {
+          setSubtitleTrack(index)
+          if (hlsRef.current) hlsRef.current.subtitleTrack = index
+        }}
+      />
       {error && <div className="login-error" style={{ padding: '6px 16px' }}>{error}</div>}
     </div>
   )

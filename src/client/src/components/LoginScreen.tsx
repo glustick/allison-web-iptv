@@ -113,15 +113,17 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
 
   useEffect(() => {
     let active = true
-    Promise.all([loadSavedLogin(), loadSavedProfiles()]).then(([login]) => {
-      if (!active || !login) return
-      setSaved(login)
-      setAccessPassword(login.accessPassword)
-      setServer(login.server)
-      setUsername(login.username)
-      setPassword(login.password)
-      setAutoConnecting(true)
-    })
+    void Promise.all([loadSavedLogin(), loadSavedProfiles()])
+      .then(([login]) => {
+        if (!active || !login) return
+        setSaved(login)
+        setAccessPassword(login.accessPassword)
+        setServer(login.server)
+        setUsername(login.username)
+        setPassword(login.password)
+        setAutoConnecting(true)
+      })
+      .catch(() => {})
     return () => {
       active = false
     }
