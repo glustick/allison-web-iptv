@@ -1,4 +1,5 @@
-import { useEffect, useState, type JSX } from 'react'
+import { useEffect, useRef, useState, type JSX } from 'react'
+import { formatElapsedTime } from '../lib/connectionTiming'
 import { XtreamClient } from '../lib/xtreamClient'
 
 export interface Session {
@@ -64,6 +65,27 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
   const [connecting, setConnecting] = useState(false)
   const [autoConnecting, setAutoConnecting] = useState(Boolean(saved))
   const [error, setError] = useState<string | null>(null)
+  const [elapsedMs, setElapsedMs] = useState(0)
+  const startedAtRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!connecting && !autoConnecting) {
+      setElapsedMs(0)
+      startedAtRef.current = null
+      return
+    }
+
+    if (startedAtRef.current === null) {
+      startedAtRef.current = Date.now()
+    }
+
+    const interval = window.setInterval(() => {
+      if (startedAtRef.current === null) return
+      setElapsedMs(Date.now() - startedAtRef.current)
+    }, 250)
+
+    return () => window.clearInterval(interval)
+  }, [connecting, autoConnecting])
 
   // Auto-connect once, on mount, only if every field was actually saved from a previous
   // successful login. Falls back to the plain (pre-filled) form on any failure — a changed
@@ -83,7 +105,9 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
   async function handleSubmit(e: React.FormEvent): Promise<void> {
     e.preventDefault()
     setConnecting(true)
+    setAutoConnecting(false)
     setError(null)
+    setElapsedMs(0)
     const login: SavedLogin = { accessPassword, server, username, password }
     try {
       const session = await connect(login)
@@ -110,7 +134,7 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
       <div className="login-screen">
         <div className="login-card">
           <h1>Allison Web IPTV</h1>
-          <p className="now-playing-bar">Connecting…</p>
+          <p className="now-playing-bar">Connecting… {formatElapsedTime(elapsedMs)}</p>
         </div>
       </div>
     )
@@ -138,7 +162,7 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
         </label>
         <button type="submit" disabled={connecting}>
-          {connecting ? 'Connecting…' : 'Connect'}
+          {connecting ? `Connecting… ${formatElapsedTime(elapsedMs)}` : 'Connect'}
         </button>
         {saved && (
           <button type="button" className="forget-login-link" onClick={forgetSavedLogin}>
