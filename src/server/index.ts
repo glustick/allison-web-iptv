@@ -11,6 +11,7 @@ import { createProxyServer, type ProxyServerDeps } from './lib/proxyServer.js'
 import { createNodeUpstreamRequest } from './lib/nodeUpstreamRequest.js'
 import { createTranscodeService } from './lib/transcodeService.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
+import { getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
 
 // ffmpeg-static is a plain CommonJS package with no "exports" map — TypeScript's NodeNext
 // module resolution (the correct choice for a real standalone Node server, unlike the
@@ -43,35 +44,15 @@ const PROXY_INTERNAL_PORT = Number(process.env.PROXY_INTERNAL_PORT ?? 4001)
 let defaultProxyTargetBase: string | null = null
 const sessionProxyTargets = new Map<string, string>()
 
-function normalizeProxyTargetBase(url: string): string {
-  return url.trim().replace(/\/+$/, '')
-}
-
-function parseCookieValue(header: string | undefined, name: string): string | null {
-  if (!header) return null
-  const match = header
-    .split(';')
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${name}=`))
-  if (!match) return null
-  return decodeURIComponent(match.slice(name.length + 1))
-}
-
 function getSessionIdFromRequest(req: { headers?: Record<string, string | string[] | undefined> }): string | null {
   const cookieHeader = typeof req.headers?.cookie === 'string' ? req.headers.cookie : undefined
   return parseCookieValue(cookieHeader, 'allison_web_iptv_session')
 }
 
 function getProxyTargetBase(req?: IncomingMessage): string | null {
-  const requestOverride = typeof req?.headers?.['x-proxy-target-base'] === 'string'
-    ? req.headers['x-proxy-target-base'].trim()
-    : ''
-  if (requestOverride) return normalizeProxyTargetBase(requestOverride)
-
-  const sessionId = req ? getSessionIdFromRequest(req) : null
-  if (sessionId && sessionProxyTargets.has(sessionId)) return sessionProxyTargets.get(sessionId) ?? null
-
-  return defaultProxyTargetBase
+  if (!req) return defaultProxyTargetBase ? normalizeProxyTargetBase(defaultProxyTargetBase) : null
+  const target = getTargetForRequest(req.headers, defaultProxyTargetBase, sessionProxyTargets)
+  return target ? normalizeProxyTargetBase(target) : null
 }
 
 function ensureSessionId(req: IncomingMessage, res: ServerResponse): string {
@@ -150,6 +131,12 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, name: 'Allison Web IPTV', version: pkg.version })
 })
 
+app.get('/api/session', (req, res) => {
+  const sessionId = getSessionIdFromRequest(req)
+  const server = getProxyTargetBase(req)
+  res.json({ ok: true, sessionId, server })
+})
+
 // Points the proxy at a (possibly different) Xtream server — the web equivalent of the
 // desktop app's own proxy.setTarget IPC call (useAppStore.ts's connect()).
 app.post('/api/connect', (req, res) => {
@@ -163,7 +150,7 @@ app.post('/api/connect', (req, res) => {
   const sessionId = ensureSessionId(req, res)
   sessionProxyTargets.set(sessionId, normalizedServer)
   defaultProxyTargetBase = normalizedServer
-  res.json({ ok: true })
+  res.json({ ok: true, sessionId })
 })
 
 // Resolves a client-relative stream path (e.g. /live/user/pass/123.m3u8, exactly what

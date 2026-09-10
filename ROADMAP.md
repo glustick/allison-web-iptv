@@ -62,9 +62,16 @@ the original scoping writeup this project started from.
   app from different devices at once should get independent sessions, not a shared/overwritten
   connection.
   - **Implemented in part:** the server now resolves per-request / per-session proxy targets via
-    a session cookie plus a request-level override, so a single app instance no longer
-    requires one shared global Xtream target for every browser session. This is still a
-    stepping stone toward real multi-user auth, not a complete account system yet.
+    a session cookie plus a request-level override, and the logic is extracted into a dedicated
+    helper with regression tests. This is still a stepping stone toward real multi-user auth,
+    not a complete account system yet.
+
+### Suggested follow-up enhancements
+
+- Add a distinct session-scoped credential store so multiple browser tabs can share one session
+  without reauthenticating on every tab load.
+- Expose session status in a `/api/session` endpoint so the UI can explicitly show which server
+  and user profile are active.
 - **Real encryption at rest for stored credentials.** `LoginScreen.tsx`'s auto-login currently
   saves the Xtream password to `localStorage` in plaintext — a reasonable placeholder for
   personal/self-hosted use, but worth replacing with actual server-side encryption (one key
