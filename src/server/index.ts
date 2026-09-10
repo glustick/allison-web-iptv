@@ -2,6 +2,7 @@ import { existsSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'http'
+import { randomUUID } from 'crypto'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import express from 'express'
@@ -35,12 +36,52 @@ const PUBLIC_PORT = Number(process.env.PORT ?? 8085)
 const PROXY_INTERNAL_PORT = Number(process.env.PROXY_INTERNAL_PORT ?? 4001)
 
 // --- Xtream/M3U target state --------------------------------------------------------------
-// A single global for now, matching the original desktop app's own "one active profile at a
-// time" model — this scaffold is proving the ported proxy/transcode logic runs standalone on
-// a real Node server first. Making this per-logged-in-session (so more than one household
-// member can be connected to a different provider at once) is real, tracked follow-up work —
-// see this project's own effort-assessment plan, "de-globalize per-connection state".
-let proxyTargetBase: string | null = null
+// This is intentionally request-aware and session-aware, not a single process-global target: the
+// web app can now serve multiple browser sessions without everyone's requests silently sharing
+// the same upstream Xtream base. The app still keeps a default fallback target for older clients
+// and for single-user setups, but the actual active target can live on the session cookie.
+let defaultProxyTargetBase: string | null = null
+const sessionProxyTargets = new Map<string, string>()
+
+function normalizeProxyTargetBase(url: string): string {
+  return url.trim().replace(/\/+$/, '')
+}
+
+function parseCookieValue(header: string | undefined, name: string): string | null {
+  if (!header) return null
+  const match = header
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${name}=`))
+  if (!match) return null
+  return decodeURIComponent(match.slice(name.length + 1))
+}
+
+function getSessionIdFromRequest(req: { headers?: Record<string, string | string[] | undefined> }): string | null {
+  const cookieHeader = typeof req.headers?.cookie === 'string' ? req.headers.cookie : undefined
+  return parseCookieValue(cookieHeader, 'allison_web_iptv_session')
+}
+
+function getProxyTargetBase(req?: IncomingMessage): string | null {
+  const requestOverride = typeof req?.headers?.['x-proxy-target-base'] === 'string'
+    ? req.headers['x-proxy-target-base'].trim()
+    : ''
+  if (requestOverride) return normalizeProxyTargetBase(requestOverride)
+
+  const sessionId = req ? getSessionIdFromRequest(req) : null
+  if (sessionId && sessionProxyTargets.has(sessionId)) return sessionProxyTargets.get(sessionId) ?? null
+
+  return defaultProxyTargetBase
+}
+
+function ensureSessionId(req: IncomingMessage, res: ServerResponse): string {
+  const sessionId = getSessionIdFromRequest(req)
+  if (sessionId) return sessionId
+
+  const nextSessionId = randomUUID()
+  res.setHeader('Set-Cookie', `allison_web_iptv_session=${encodeURIComponent(nextSessionId)}; Path=/; HttpOnly; SameSite=Lax`)
+  return nextSessionId
+}
 
 // --- ffmpeg / transcode service ------------------------------------------------------------
 // No "prefer a system ffmpeg" reason to skip here the way the desktop app has one (that existed
@@ -56,7 +97,7 @@ const transcodeService = createTranscodeService({ resolveFfmpegPath })
 
 // --- Ported proxy server, running on its own internal-only port ---------------------------
 const proxyDeps: ProxyServerDeps = {
-  getProxyTargetBase: () => proxyTargetBase,
+  getProxyTargetBase: (req?: IncomingMessage) => getProxyTargetBase(req),
   createUpstreamRequest: createNodeUpstreamRequest,
   // Node has no persistent, clearable DNS cache the way Chromium does (a plain http/https
   // request re-resolves via the OS resolver each time) — nothing to clear.
@@ -117,7 +158,11 @@ app.post('/api/connect', (req, res) => {
     res.status(400).json({ error: 'Missing "server" in request body' })
     return
   }
-  proxyTargetBase = server.trim().replace(/\/+$/, '')
+
+  const normalizedServer = normalizeProxyTargetBase(server)
+  const sessionId = ensureSessionId(req, res)
+  sessionProxyTargets.set(sessionId, normalizedServer)
+  defaultProxyTargetBase = normalizedServer
   res.json({ ok: true })
 })
 
@@ -127,9 +172,10 @@ app.post('/api/connect', (req, res) => {
 // network itself, not through this app's own proxy, so it needs a real reachable URL rather
 // than a same-origin relative one. Mirrors the desktop app's own Player.tsx, which passes
 // nowPlaying.url (already the raw upstream URL there) straight to transcode:start.
-function resolveUpstreamUrl(relativeOrAbsolute: string): string {
-  if (!proxyTargetBase) throw new Error('Not connected to an Xtream server')
-  return new URL(relativeOrAbsolute, proxyTargetBase).href
+function resolveUpstreamUrl(relativeOrAbsolute: string, req?: IncomingMessage): string {
+  const targetBase = getProxyTargetBase(req)
+  if (!targetBase) throw new Error('Not connected to an Xtream server')
+  return new URL(relativeOrAbsolute, targetBase).href
 }
 
 app.post('/api/transcode/start', (req, res) => {
@@ -139,7 +185,7 @@ app.post('/api/transcode/start', (req, res) => {
     return
   }
   transcodeService
-    .startTranscode(resolveUpstreamUrl(sourceUrl), Boolean(isVod), sessionId, subtitleStreamIndex, audioStreamIndex)
+    .startTranscode(resolveUpstreamUrl(sourceUrl, req), Boolean(isVod), sessionId, subtitleStreamIndex, audioStreamIndex)
     .then(({ playlistPath, subtitleTracks }) => {
       // Same reasoning as the desktop app's own transcode:start handler: the filename varies
       // (playlist.m3u8 normally, master.m3u8 when a subtitle rendition got included), so
@@ -176,7 +222,7 @@ app.post('/api/transcode/probeTracks', (req, res) => {
     return
   }
   transcodeService
-    .probeTracks(resolveUpstreamUrl(sourceUrl))
+    .probeTracks(resolveUpstreamUrl(sourceUrl, req))
     .then((tracks) => res.json(tracks))
     .catch((err) => {
       console.error('[transcode] probe failed:', err)

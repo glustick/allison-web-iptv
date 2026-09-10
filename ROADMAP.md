@@ -61,11 +61,24 @@ the original scoping writeup this project started from.
   active at a time; this port still carries that assumption in places. Two people opening the
   app from different devices at once should get independent sessions, not a shared/overwritten
   connection.
+  - **Implemented in part:** the server now resolves per-request / per-session proxy targets via
+    a session cookie plus a request-level override, so a single app instance no longer
+    requires one shared global Xtream target for every browser session. This is still a
+    stepping stone toward real multi-user auth, not a complete account system yet.
 - **Real encryption at rest for stored credentials.** `LoginScreen.tsx`'s auto-login currently
   saves the Xtream password to `localStorage` in plaintext — a reasonable placeholder for
   personal/self-hosted use, but worth replacing with actual server-side encryption (one key
   from an env var/secret file, per `EFFORT-ASSESSMENT.md`) before this is reachable outside a
   trusted LAN.
+
+### Suggested follow-up enhancements
+
+- Add a small session store keyed by a random session ID with encrypted server credentials per
+  browser session, rather than a single global server target.
+- Move the saved-login form behind the same server-side session flow so browser storage is no
+  longer the only place where personal Xtream credentials live.
+- Add a real user model (or at least named household profiles) that anchors favorites, EPG state,
+  and provider target selection to the authenticated user rather than the browser cookie alone.
 
 ## Player & transcode fallback
 

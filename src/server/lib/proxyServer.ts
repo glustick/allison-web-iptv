@@ -88,8 +88,10 @@ export function rewriteM3u8ForProxy(body: string, sourceUrl: URL): string {
 
 export interface ProxyServerDeps {
   // Swapped whenever the user connects to a (possibly different) profile — null before any
-  // profile has connected yet.
-  getProxyTargetBase: () => string | null
+  // profile has connected yet. A request-specific override is also supported so a single server
+  // can serve multiple browser sessions without a single global target being shared across all
+  // users.
+  getProxyTargetBase: (req?: IncomingMessage) => string | null
   // Electron's net.request in production (Chromium's network stack — see the comment on
   // createUpstreamRequest's call site in index.ts for why, not Node's http/https). Anything
   // satisfying UpstreamClientRequest works, which is what makes this testable without Electron.
@@ -170,8 +172,9 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
         return
       }
     } else {
-      const proxyTargetBase = deps.getProxyTargetBase()
-      if (!proxyTargetBase) {
+      const requestTarget = typeof req.headers['x-proxy-target-base'] === 'string' ? req.headers['x-proxy-target-base'].trim() : ''
+      const defaultTarget = requestTarget || deps.getProxyTargetBase(req)
+      if (!defaultTarget) {
         res.writeHead(502)
         res.end('No upstream Xtream server configured')
         return
@@ -181,10 +184,10 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
       // without "http://", such as "myprovider.com:8080") — left uncaught, that exception
       // would propagate out of this request handler and crash the whole main process.
       try {
-        target = new URL(req.url ?? '/', proxyTargetBase)
+        target = new URL(req.url ?? '/', defaultTarget)
       } catch {
         res.writeHead(502)
-        res.end(`Invalid Xtream server address: ${proxyTargetBase}`)
+        res.end(`Invalid Xtream server address: ${defaultTarget}`)
         return
       }
     }

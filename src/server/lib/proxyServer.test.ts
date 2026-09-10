@@ -215,6 +215,27 @@ describe('createProxyServer', () => {
     expect(originHandler).not.toHaveBeenCalled()
   })
 
+  it('prefers a request-scoped proxy target header over the default configured origin', async () => {
+    const defaultOrigin = await startMockOrigin((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"ok":false,"source":"default"}')
+    })
+    openServers.push(defaultOrigin.server)
+    const sessionOrigin = await startMockOrigin((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"ok":true,"source":"session"}')
+    })
+    openServers.push(sessionOrigin.server)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => defaultOrigin.url }))
+
+    const res = await fetchViaProxy(proxy, '/player_api.php?action=get_live_categories', {
+      headers: { 'x-proxy-target-base': sessionOrigin.url }
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toBe('{"ok":true,"source":"session"}')
+  })
+
   it('returns 502 when no upstream server is configured yet', async () => {
     const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => null }))
 
