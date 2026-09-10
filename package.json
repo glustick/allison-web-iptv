@@ -1,7 +1,7 @@
 {
   "name": "allison-web-iptv",
   "productName": "Allison Web IPTV",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-based sibling of the AllisonIPTV desktop app.",
   "private": true,
   "type": "module",
