@@ -1,6 +1,32 @@
 import { useCallback, useRef, useState } from 'react'
 import type { ErrorData } from 'hls.js'
 
+export interface TrackSelectionRequest {
+  audioIndex?: number
+  subtitleIndex?: number
+}
+
+export interface TrackSelectionResult {
+  audioIndex: number
+  subtitleIndex: number
+}
+
+export function resolveTrackSelection(
+  requested: TrackSelectionRequest,
+  audioTracks: Array<{ index: number }> = [],
+  subtitleTracks: Array<{ index: number; supported?: boolean }> = []
+): TrackSelectionResult {
+  const audioIndex = audioTracks.some((track) => track.index === requested.audioIndex)
+    ? requested.audioIndex ?? 0
+    : audioTracks[0]?.index ?? 0
+
+  const subtitleIndex = subtitleTracks.some((track) => track.index === requested.subtitleIndex && (track.supported ?? true))
+    ? requested.subtitleIndex ?? 0
+    : subtitleTracks.find((track) => track.supported ?? true)?.index ?? 0
+
+  return { audioIndex, subtitleIndex }
+}
+
 /**
  * Ported from the desktop app's useTranscodeFallback.ts (same name, same detection logic) —
  * see that file's own doc comment for the full account of why these two failure shapes (a
@@ -24,14 +50,15 @@ interface StartTranscodeResponse {
 /**
  * Simplified client-side port of the desktop app's own hook of the same name — same core
  * mechanism (spin up a server-side ffmpeg remux, swap the player onto its output), routed
- * through this project's own /api/transcode/* routes instead of window.api.transcode. Track
- * probing/switching (the desktop version's liveAudioTracks/vodSubtitleTracks/etc.) is left out
- * for this pass — this only covers the automatic "this codec doesn't work, fix it" path.
+ * through this project's own /api/transcode/* routes instead of window.api.transcode. This
+ * pass includes track selection too, so the fallback can honor the source's available audio and
+ * subtitle streams rather than always using the first one.
  */
 export function useTranscodeFallback(): {
   getSourceUrl: (originalUrl: string) => string
   tryFallback: (data: ErrorData, originalUrl: string, onReload: () => void, onError?: (message: string) => void) => boolean
   tryFallbackForSilentAudio: (originalUrl: string, onReload: () => void, onError?: (message: string) => void) => boolean
+  selectTracks: (requested: TrackSelectionRequest, audioTracks?: Array<{ index: number }>, subtitleTracks?: Array<{ index: number; supported?: boolean }>) => TrackSelectionResult
   reset: () => void
   beginRun: () => void
 } {
@@ -61,6 +88,13 @@ export function useTranscodeFallback(): {
   }, [])
 
   const getSourceUrl = useCallback((originalUrl: string) => transcodedUrlRef.current ?? originalUrl, [])
+
+  const selectTracks = useCallback(
+    (requested: TrackSelectionRequest, audioTracks: Array<{ index: number }> = [], subtitleTracks: Array<{ index: number; supported?: boolean }> = []) => {
+      return resolveTrackSelection(requested, audioTracks, subtitleTracks)
+    },
+    []
+  )
 
   const startFallback = useCallback(
     (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void): void => {
@@ -109,5 +143,5 @@ export function useTranscodeFallback(): {
     [startFallback]
   )
 
-  return { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun }
+  return { getSourceUrl, tryFallback, tryFallbackForSilentAudio, selectTracks, reset, beginRun }
 }
