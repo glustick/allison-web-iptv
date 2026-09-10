@@ -5,6 +5,15 @@ section. Grouped by theme rather than a strict backlog — pick based on what ma
 whoever picks this up next. See `README.md` for current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
+## Current release
+
+- **v0.4.4 published:** track selection controls, GitHub release checking, encrypted
+  server-backed session profiles, and the related regression coverage are on `main` and tagged
+  as `v0.4.4`.
+- **Validation complete:** 97 tests pass, both TypeScript projects type-check, the client bundle
+  builds, ESLint passes, and the Docker workflow has been triggered for both the `main` push and
+  release tag.
+
 ## Stability
 
 - **Playback intermittently freezes with an on-screen error during Live TV, web-only —
@@ -71,30 +80,19 @@ the original scoping writeup this project started from.
     browser. The stored state is covered by regression tests and the server exposes it via the
     session endpoints.
 
-### Suggested follow-up enhancements
+### Future enhancements
 
 - Add a distinct session-scoped credential store so multiple browser tabs can share one session
   without reauthenticating on every tab load.
 - Expose session status in a `/api/session` endpoint so the UI can explicitly show which server
   and user profile are active.
-- **Real encryption at rest for stored credentials.** `LoginScreen.tsx`'s auto-login currently
-  saves the Xtream password to `localStorage` in plaintext — a reasonable placeholder for
-  personal/self-hosted use, but worth replacing with actual server-side encryption (one key
-  from an env var/secret file, per `EFFORT-ASSESSMENT.md`) before this is reachable outside a
-  trusted LAN.
-  - **Implemented:** the server now encrypts the browser-session credentials payload before
-    saving it in the session map, and the app uses a server-backed session route instead of
-    persisting the plaintext login in `localStorage`. The secret is read from `SESSION_SECRET`
-    so the credential payload is no longer sitting in plain browser storage.
-
-### Suggested follow-up enhancements
-
-- Add a small session store keyed by a random session ID with encrypted server credentials per
-  browser session, rather than a single global server target.
-- Move the saved-login form behind the same server-side session flow so browser storage is no
-  longer the only place where personal Xtream credentials live.
-- Add a real user model (or at least named household profiles) that anchors favorites, EPG state,
-  and provider target selection to the authenticated user rather than the browser cookie alone.
+- **Credential encryption at rest:** implemented. The server encrypts the browser-session
+  credentials payload using `SESSION_SECRET`, and the app no longer stores the login in browser
+  `localStorage`.
+- Expand the current browser session store into a durable session service with expiry and
+  revocation, so multiple tabs and restarts have predictable behavior.
+- Move from named household profiles to a real user model that anchors favorites, EPG state, and
+  provider target selection to an authenticated user.
 
 ## Player & transcode fallback
 
@@ -104,6 +102,12 @@ the original scoping writeup this project started from.
   - **Implemented:** Live TV and VOD/series HLS playback now expose available audio and subtitle
     tracks through compact selectors. Audio changes use hls.js's active track, while subtitles
     include an explicit Off option; controls stay hidden when the provider exposes no choices.
+
+### Future enhancements
+
+- Persist the selected audio and subtitle tracks per saved profile.
+- Add a compact player settings surface for playback quality, subtitle styling, and fallback
+  status once the track controls have been exercised against more providers.
 
 ## EPG grid
 
