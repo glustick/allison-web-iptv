@@ -5,6 +5,9 @@ export interface SessionCredentials {
   server: string
   username: string
   password: string
+  // Optional extra XMLTV guide sources (see epgService.ts) — carried with the session so
+  // /api/epg can aggregate them alongside the provider's own guide.
+  epgUrls?: string[]
 }
 
 export interface EncryptedSessionPayload {
@@ -16,6 +19,7 @@ export interface SessionProfileEntry {
   id: string
   name: string
   credentials: SessionCredentials
+  epgUrls?: string[]
 }
 
 export interface SessionProfileState {
@@ -76,6 +80,9 @@ export function decryptSessionCredentials(encoded: string): SessionCredentials {
     if (!credentials || typeof credentials.server !== 'string' || typeof credentials.username !== 'string' || typeof credentials.password !== 'string' || typeof credentials.accessPassword !== 'string') {
       throw new Error('Session credential payload is malformed')
     }
+    if (credentials.epgUrls !== undefined && (!Array.isArray(credentials.epgUrls) || credentials.epgUrls.some((url) => typeof url !== 'string'))) {
+      throw new Error('Session credential payload is malformed')
+    }
     return credentials
   } catch {
     throw new Error('Session credential payload is corrupted or signed with a different secret')
@@ -131,6 +138,9 @@ export function decryptSessionProfileState(encoded: string): SessionProfileState
 
   const profiles = value.profiles.map((profile) => {
     if (!profile || typeof profile.id !== 'string' || typeof profile.name !== 'string' || !profile.credentials || typeof profile.credentials.accessPassword !== 'string' || typeof profile.credentials.server !== 'string' || typeof profile.credentials.username !== 'string' || typeof profile.credentials.password !== 'string') {
+      throw new Error('Session profile payload is malformed')
+    }
+    if (profile.epgUrls !== undefined && !Array.isArray(profile.epgUrls)) {
       throw new Error('Session profile payload is malformed')
     }
     return profile as SessionProfileEntry

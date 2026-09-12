@@ -13,6 +13,7 @@ import { createTranscodeService } from './lib/transcodeService.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
 import { decryptSessionCredentials, decryptSessionProfileState, encryptSessionCredentials, encryptSessionProfileState, type SessionCredentials } from './lib/sessionStore.js'
+import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
 import { compareVersions } from './lib/versionCheck.js'
 
 // ffmpeg-static is a plain CommonJS package with no "exports" map — TypeScript's NodeNext
@@ -79,6 +80,25 @@ const resolveFfmpegPath = createFfmpegResolver(ffmpegStaticPath, {
   execFile: (execPath, args) => execFileAsync(execPath, args)
 })
 const transcodeService = createTranscodeService({ resolveFfmpegPath })
+
+// --- EPG aggregation service ----------------------------------------------------------------
+// Fetches/caches/merges the provider guide with any extra XMLTV sources configured on the
+// session (see LoginScreen's "Additional EPG guide URLs") — the server-side replacement for the
+// client's old download-98MB-of-XML-per-tab approach, and the home of the wider channel→guide
+// matching layer (epgMatching.ts) that recovers channels the exact-id join missed.
+const epgService = createEpgService()
+
+const MAX_EPG_URLS = 8
+
+function sanitizeEpgUrls(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const urls = value
+    .filter((url): url is string => typeof url === 'string' && /^https?:\/\//i.test(url.trim()))
+    .map((url) => url.trim())
+    .filter((url, index, all) => all.indexOf(url) === index)
+    .slice(0, MAX_EPG_URLS)
+  return urls.length > 0 ? urls : undefined
+}
 
 // --- Ported proxy server, running on its own internal-only port ---------------------------
 const proxyDeps: ProxyServerDeps = {
@@ -160,6 +180,68 @@ app.get('/api/version-check', (_req, res) => {
   })()
 })
 
+// Resolves the per-session credentials /api/epg needs (the provider guide is fetched
+// server-side with them — the same encrypted session store /api/session reads). A session that
+// never completed a login has no credentials and gets a plain 401 rather than an empty guide.
+function resolveEpgCredentials(req: IncomingMessage): (EpgServiceCredentials & { epgUrls: string[] }) | null {
+  const sessionId = getSessionIdFromRequest(req)
+  if (!sessionId) return null
+  const stored = sessionCredentialStore.get(sessionId)
+  if (!stored) return null
+  try {
+    const credentials = decryptSessionCredentials(stored)
+    return { server: credentials.server, username: credentials.username, password: credentials.password, epgUrls: credentials.epgUrls ?? [] }
+  } catch {
+    return null
+  }
+}
+
+// Windowed, aggregated programme listings for the EPG grid — provider guide first, extra
+// user-configured XMLTV sources filling channels the provider has nothing for (epgService.ts).
+// Clients refetch per time-window navigation; guides themselves are cached server-side per TTL.
+app.get('/api/epg', (req, res) => {
+  void (async (): Promise<void> => {
+    const credentials = resolveEpgCredentials(req)
+    if (!credentials) {
+      res.status(401).json({ error: 'No session credentials — log in first' })
+      return
+    }
+    const startMs = Number(req.query.start)
+    const endMs = Number(req.query.end)
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      res.status(400).json({ error: 'Missing or invalid start/end (epoch milliseconds)' })
+      return
+    }
+    try {
+      const window = await epgService.aggregate({ credentials, epgUrls: credentials.epgUrls, startMs, endMs })
+      res.json({ ok: true, ...window })
+    } catch (err) {
+      console.error('[epg] aggregate failed:', err)
+      res.status(502).json({ error: err instanceof Error ? err.message : 'EPG aggregation failed' })
+    }
+  })()
+})
+
+// Per-source health of the aggregated guide — a verification/ops surface for "is the provider
+// guide actually loading, and did my extra URLs work", deliberately separate from /api/epg so a
+// status poll never pays for windowed listings.
+app.get('/api/epg/status', (req, res) => {
+  void (async (): Promise<void> => {
+    const credentials = resolveEpgCredentials(req)
+    if (!credentials) {
+      res.status(401).json({ error: 'No session credentials — log in first' })
+      return
+    }
+    try {
+      const sources = await epgService.getStatus({ credentials, epgUrls: credentials.epgUrls })
+      res.json({ ok: true, sources })
+    } catch (err) {
+      console.error('[epg] status failed:', err)
+      res.status(502).json({ error: err instanceof Error ? err.message : 'EPG status failed' })
+    }
+  })()
+})
+
 app.get('/api/session', (req, res) => {
   const sessionId = getSessionIdFromRequest(req)
   if (!sessionId) {
@@ -206,10 +288,10 @@ app.get('/api/session/profiles', (req, res) => {
 
 app.post('/api/session/save', (req, res) => {
   const sessionId = ensureSessionId(req, res)
-  const { accessPassword, server, username, password, profileId, profileName } = req.body ?? {}
+  const { accessPassword, server, username, password, profileId, profileName, epgUrls } = req.body ?? {}
   const legacyCredentials = { accessPassword, server, username, password }
   if (typeof accessPassword === 'string' && typeof server === 'string' && typeof username === 'string' && typeof password === 'string') {
-    const payload: SessionCredentials = { accessPassword, server, username, password }
+    const payload: SessionCredentials = { accessPassword, server, username, password, epgUrls: sanitizeEpgUrls(epgUrls) }
     sessionCredentialStore.set(sessionId, encryptSessionCredentials(payload))
 
     const previousProfiles = (() => {
@@ -226,7 +308,7 @@ app.post('/api/session/save', (req, res) => {
     const nextProfileId = typeof profileId === 'string' && profileId.trim().length > 0 ? profileId : `profile-${Date.now()}`
     const nextName = typeof profileName === 'string' && profileName.trim().length > 0 ? profileName : username
     const nextProfiles = previousProfiles.profiles.filter((profile) => profile.id !== nextProfileId)
-    nextProfiles.push({ id: nextProfileId, name: nextName, credentials: payload })
+    nextProfiles.push({ id: nextProfileId, name: nextName, credentials: payload, epgUrls: payload.epgUrls })
     const nextState = {
       activeProfileId: previousProfiles.activeProfileId ?? nextProfileId,
       profiles: nextProfiles
@@ -257,7 +339,8 @@ app.post('/api/session/profiles', (req, res) => {
         server: String(profile?.credentials?.server ?? ''),
         username: String(profile?.credentials?.username ?? ''),
         password: String(profile?.credentials?.password ?? '')
-      }
+      },
+      epgUrls: sanitizeEpgUrls(profile?.epgUrls) ?? sanitizeEpgUrls(profile?.credentials?.epgUrls)
     }))
   }
 

@@ -13,12 +13,14 @@ interface SavedLogin {
   server: string
   username: string
   password: string
+  epgUrls?: string[]
 }
 
 interface SavedProfile {
   id: string
   name: string
   credentials: SavedLogin
+  epgUrls?: string[]
 }
 
 async function loadSavedLogin(): Promise<SavedLogin | null> {
@@ -30,6 +32,7 @@ async function loadSavedLogin(): Promise<SavedLogin | null> {
       server?: string
       username?: string
       password?: string
+      epgUrls?: string[]
       sessionId?: string | null
     }
     if (!data.server || !data.username || !data.password || !data.accessPassword) return null
@@ -37,7 +40,8 @@ async function loadSavedLogin(): Promise<SavedLogin | null> {
       accessPassword: data.accessPassword,
       server: data.server,
       username: data.username,
-      password: data.password
+      password: data.password,
+      epgUrls: data.epgUrls
     }
   } catch {
     return null
@@ -78,6 +82,7 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
   const [server, setServer] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [epgUrlsText, setEpgUrlsText] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [autoConnecting, setAutoConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -89,7 +94,7 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
       if (!res.ok) return
       const data = (await res.json()) as {
         activeProfileId?: string | null
-        profiles?: Array<{ id: string; name: string; credentials?: SavedLogin }>
+        profiles?: Array<{ id: string; name: string; credentials?: SavedLogin; epgUrls?: string[] }>
       }
       const nextProfiles = (data.profiles ?? []).filter((profile): profile is SavedProfile => {
         if (!profile?.id || !profile.name || !profile.credentials) return false
@@ -105,6 +110,7 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
         setServer(selected.credentials.server)
         setUsername(selected.credentials.username)
         setPassword(selected.credentials.password)
+        setEpgUrlsText((selected.epgUrls ?? []).join('\n'))
       }
     } catch {
       // Ignore profile-load failures and just fall back to the editable form.
@@ -169,6 +175,7 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
     setServer(profile.credentials.server)
     setUsername(profile.credentials.username)
     setPassword(profile.credentials.password)
+    setEpgUrlsText((profile.epgUrls ?? []).join('\n'))
     setError(null)
   }
 
@@ -182,8 +189,10 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
     try {
       const session = await connect(login)
       const resolvedProfileId = activeProfileId ?? savedProfiles.find((profile) => profile.credentials.server === server && profile.credentials.username === username)?.id
+      const epgUrls = epgUrlsText.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
       const body = {
         ...login,
+        epgUrls,
         profileId: resolvedProfileId ?? undefined,
         profileName: (profileName || username || 'Saved profile').trim()
       }
@@ -250,6 +259,15 @@ export function LoginScreen({ onConnected }: { onConnected: (session: Session) =
         <label>
           Profile name
           <input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="Family main" />
+        </label>
+        <label>
+          Additional EPG guide URLs
+          <textarea
+            value={epgUrlsText}
+            onChange={(e) => setEpgUrlsText(e.target.value)}
+            placeholder="https://example.com/epg.xml — one URL per line, optional"
+            rows={2}
+          />
         </label>
         {savedProfiles.length > 0 && (
           <div className="saved-profile-list">

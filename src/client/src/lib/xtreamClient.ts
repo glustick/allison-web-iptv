@@ -109,17 +109,6 @@ export class XtreamClient {
     }))
   }
 
-  /** Full XMLTV guide covering every channel on the account — see lib/epg.ts's own doc comment
-   * for why this is needed alongside (and, for this provider, instead of) getShortEpg. */
-  async getFullEpgXml(): Promise<string> {
-    const url = new URL('/xmltv.php', window.location.origin)
-    url.searchParams.set('username', this.username)
-    url.searchParams.set('password', this.password)
-    const res = await fetch(url.toString())
-    if (!res.ok) throw new Error(`EPG request failed: ${res.status} ${res.statusText}`)
-    return res.text()
-  }
-
   // Relative, same-origin — see this class's own doc comment for why that's load-bearing here,
   // not just a style choice.
   getStreamUrl(kind: MediaKind, streamId: number, extension: string): string {

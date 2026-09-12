@@ -3,8 +3,7 @@ import { List, useListRef } from 'react-window'
 import { pct } from '../lib/epgTime'
 import type { Session } from './LoginScreen'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
-import { useFullEpgGuide } from '../lib/useFullEpgGuide'
-import type { EpgData } from '../lib/epg'
+import { useAggregatedEpg, type AggregatedEpgData } from '../lib/useAggregatedEpg'
 import type { LiveStream, ShortEpgProgram } from '../lib/types'
 
 const HOUR_MS = 3_600_000
@@ -27,30 +26,30 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
-// The full XMLTV guide (see lib/epg.ts) is the primary source — one bulk fetch, confirmed live
-// to have real data on the real account this project tests against. get_short_epg (per-channel,
-// queued behind a concurrency cap — see useShortEpgCache.ts) is only actually used as a
-// fallback, for a channel the full guide has nothing for once it's finished loading, or if the
-// full guide failed to load at all (some providers 403 on it — see epg.ts's own comment).
+// The aggregated server-side guide (see useAggregatedEpg.ts) is the primary source — the
+// provider's own xmltv.php merged with any extra user-configured XMLTV sources, matched to
+// streams by the server's wider id/name matching. get_short_epg (per-channel, queued behind a
+// concurrency cap — see useShortEpgCache.ts) remains the fallback, for a channel the aggregate
+// has nothing for once it's finished loading, or if the aggregate failed to load at all.
 function useChannelListings(
   channel: LiveStream,
-  fullEpg: { data: EpgData | null; status: 'loading' | 'ready' | 'error' },
+  aggregated: { data: AggregatedEpgData | null; status: 'loading' | 'ready' | 'error' },
   shortEpgByStream: Record<number, ShortEpgProgram[]>,
   requestShortEpg: (streamId: number) => void
 ): Block[] | undefined {
-  const fromGuide = channel.epg_channel_id ? fullEpg.data?.programmesByChannel.get(channel.epg_channel_id) : undefined
-  const guideHasNothing = fullEpg.status === 'ready' && (fromGuide === undefined || fromGuide.length === 0)
-  const shouldUseFallback = fullEpg.status === 'error' || guideHasNothing
+  const fromAggregate = aggregated.data?.listings[String(channel.stream_id)]
+  const aggregateHasNothing = aggregated.status === 'ready' && (!fromAggregate || fromAggregate.length === 0)
+  const shouldUseFallback = aggregated.status === 'error' || aggregateHasNothing
 
   useEffect(() => {
     if (shouldUseFallback) requestShortEpg(channel.stream_id)
   }, [shouldUseFallback, channel.stream_id, requestShortEpg])
 
-  if (fromGuide && fromGuide.length > 0) {
-    return fromGuide.map((p) => ({
-      key: `${p.channelId}-${p.start.getTime()}`,
-      startMs: p.start.getTime(),
-      stopMs: p.stop.getTime(),
+  if (fromAggregate && fromAggregate.length > 0) {
+    return fromAggregate.map((p) => ({
+      key: `${channel.stream_id}-${p.startMs}`,
+      startMs: p.startMs,
+      stopMs: p.stopMs,
       title: p.title,
       description: p.description
     }))
@@ -66,7 +65,7 @@ function useChannelListings(
       description: p.description
     }))
   }
-  // Full guide is still loading and this channel has no fallback in flight yet — render as
+  // Aggregate is still loading and this channel has no fallback in flight yet — render as
   // "loading", same as the fallback's own undefined-listings case, rather than "confirmed empty".
   return undefined
 }
@@ -77,7 +76,7 @@ interface RowProps {
   windowEnd: number
   now: number
   activeStreamId?: number
-  fullEpg: { data: EpgData | null; status: 'loading' | 'ready' | 'error' }
+  aggregated: { data: AggregatedEpgData | null; status: 'loading' | 'ready' | 'error' }
   shortEpgByStream: Record<number, ShortEpgProgram[]>
   requestShortEpg: (streamId: number) => void
   onSelectChannel: (channel: LiveStream) => void
@@ -91,13 +90,13 @@ function EpgRow({
   windowEnd,
   now,
   activeStreamId,
-  fullEpg,
+  aggregated,
   shortEpgByStream,
   requestShortEpg,
   onSelectChannel
 }: { index: number; style: CSSProperties } & RowProps): JSX.Element {
   const channel = channels[index]
-  const listings = useChannelListings(channel, fullEpg, shortEpgByStream, requestShortEpg)
+  const listings = useChannelListings(channel, aggregated, shortEpgByStream, requestShortEpg)
   const visible = (listings ?? []).filter((p) => p.stopMs > windowStart && p.startMs < windowEnd)
   const isActive = activeStreamId === channel.stream_id
   const nowPct = pct(now, windowStart, windowEnd)
@@ -111,6 +110,9 @@ function EpgRow({
       </button>
       <div className="epg-row-timeline">
         {listings === undefined && <div className="epg-row-loading" />}
+        {listings !== undefined && listings.length === 0 && (
+          <span className="epg-row-empty">No guide data</span>
+        )}
         {visible.map((p) => {
           const left = pct(p.startMs, windowStart, windowEnd)
           const width = Math.max(pct(p.stopMs, windowStart, windowEnd) - left, 2)
@@ -156,17 +158,18 @@ export function EpgGrid({
   const [now, setNow] = useState(() => Date.now())
   const [windowOffsetMs, setWindowOffsetMs] = useState(0)
   const listRef = useListRef(null)
-  const fullEpg = useFullEpgGuide(session)
+
+  const baseHour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS
+  const windowStart = baseHour + windowOffsetMs
+  const windowEnd = windowStart + WINDOW_HOURS * HOUR_MS
+
+  const aggregated = useAggregatedEpg(session, windowStart, windowEnd)
   const { shortEpgByStream, request } = useShortEpgCache(session)
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 30_000)
     return () => clearInterval(interval)
   }, [])
-
-  const baseHour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS
-  const windowStart = baseHour + windowOffsetMs
-  const windowEnd = windowStart + WINDOW_HOURS * HOUR_MS
 
   const firstTick = Math.ceil(windowStart / HOUR_MS) * HOUR_MS
   const hourTicks: number[] = []
@@ -193,7 +196,9 @@ export function EpgGrid({
             </span>
           ))}
         </div>
-        {fullEpg.status === 'loading' && <div className="epg-time-header-controls">Loading guide…</div>}
+        {aggregated.status === 'loading' && aggregated.data === null && (
+          <div className="epg-time-header-controls">Loading guide…</div>
+        )}
       </div>
       <div className="epg-grid-body">
         {channels.length === 0 ? (
@@ -209,7 +214,7 @@ export function EpgGrid({
               windowEnd,
               now,
               activeStreamId,
-              fullEpg,
+              aggregated,
               shortEpgByStream,
               requestShortEpg: request,
               onSelectChannel

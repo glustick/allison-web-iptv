@@ -36,7 +36,8 @@ body {
   margin-bottom: 12px;
 }
 
-.login-card input {
+.login-card input,
+.login-card textarea {
   display: block;
   width: 100%;
   margin-top: 4px;
@@ -46,6 +47,12 @@ body {
   border-radius: 6px;
   color: #e7e9ee;
   font-size: 14px;
+}
+
+.login-card textarea {
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
 }
 
 .login-card button {
@@ -392,6 +399,19 @@ body {
   background: #1b2030;
   border-radius: 4px;
   opacity: 0.5;
+}
+
+/* Distinct from the loading shimmer above: this marks a channel every source has been
+   confirmed to have nothing for, so an empty row reads as "known empty" rather than "broken". */
+.epg-row-empty {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: #5a6172;
+  font-style: italic;
+  pointer-events: none;
 }
 
 .epg-block {

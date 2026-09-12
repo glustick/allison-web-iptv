@@ -11,6 +11,9 @@ export interface XtreamProfile {
   server?: string
   username?: string
   password?: string
+  // Extra XMLTV guide URLs aggregated server-side alongside the provider's own guide (see the
+  // server's epgService.ts) — optional, one per line in the login form. Usable on any profile.
+  epgUrls?: string[]
   // M3U fields — set when kind is 'm3u', absent for 'xtream'. epgUrl can stay unset even then:
   // a playlist's own #EXTM3U url-tvg/x-tvg-url attribute can supply it instead (see parseM3u),
   // and a playlist with neither just has no per-channel guide data.
