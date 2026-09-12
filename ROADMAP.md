@@ -7,16 +7,19 @@ the original scoping writeup this project started from.
 
 ## Current release
 
-- **v0.5.0 published:** server-side EPG aggregation with additional user-configured XMLTV
+- **v0.5.1 published:** drag-resizable panels — the EPG channel column, the category sidebar
+  on all three tabs, and the Live TV player/guide seam — via one shared pointer-event hook
+  with clamped, persisted sizes (see the EPG grid section below).
+- **v0.5.0:** server-side EPG aggregation with additional user-configurable XMLTV
   sources (see the EPG grid section below for the full account), the wider channel→guide
   matching layer, `/api/epg` + `/api/epg/status`, and the Live TV backgrounding-recovery
-  watchdog are on `main` and tagged as `v0.5.0`.
-- **Validation:** 128 tests pass, both TypeScript projects type-check, ESLint passes, the
-  server and client builds succeed, and the EPG aggregation path was live-verified against the
-  real provider plus a real external XMLTV source. The backgrounding recovery is unit-tested
+  watchdog — on `main` and tagged as `v0.5.0`.
+- **Validation:** 138 tests pass, both TypeScript projects type-check, ESLint passes, the
+  server and client builds succeed, and both the EPG aggregation path and the panel-resizing
+  drags were live-verified in a real browser. The backgrounding recovery is unit-tested
   (pure decision logic in `liveStreamRecovery.ts`) but its live end-to-end confirmation is
-  still pending — the provider went unreachable before the smoke test could run; the wedge
-  itself was reproduced live on 2026-09-12 as described in the Stability section.
+  still pending the user's own test — the wedge itself was reproduced live on 2026-09-12 as
+  described in the Stability section.
 
 ## Stability
 
@@ -164,8 +167,18 @@ left out:
   - Built-in public-guide presets (the login form takes raw URLs today — the user finds and
     pastes their own XMLTV sources).
 
+- **Drag-resizable panels — implemented (2026-09-12), live-verified in-browser.** Three
+  dividers now share one mechanism (`lib/useResizableDimension.ts`, a pointer-event port of
+  the desktop app's own v0.7.9 `useResizableWidth` hook, clamped and persisted to
+  `localStorage` per panel — the client's first localStorage use, mirroring the desktop
+  app's own fallback path): the EPG grid's channel column (90–320px, one full-height handle;
+  rows never read the width in JS so react-window re-renders nothing mid-drag), the category
+  sidebar on all three tabs (160–360px), and a row-resize seam between the Live TV player and
+  the guide that adjusts the video's height cap (120px–80vh, default = the old fixed 45vh).
+  Verified live: drags apply in real time, clamp at both bounds, persist, and survive a full
+  reload + auto-reconnect.
+
 - Drag-to-pan the timeline (currently only the ◀/▶/Now buttons move the window).
-- A resizable channel column.
 - Keyboard navigation through the grid.
 - Catch-up/timeshift playback for past programmes (the grid shows history, but there's no way
   to actually play it back yet; note the server's ingest prune window is 24h back / 72h

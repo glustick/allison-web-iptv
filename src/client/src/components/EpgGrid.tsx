@@ -4,11 +4,20 @@ import { pct } from '../lib/epgTime'
 import type { Session } from './LoginScreen'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
 import { useAggregatedEpg, type AggregatedEpgData } from '../lib/useAggregatedEpg'
+import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
 import type { LiveStream, ShortEpgProgram } from '../lib/types'
 
 const HOUR_MS = 3_600_000
 const WINDOW_HOURS = 3
-const CHANNEL_COLUMN_WIDTH = 160
+
+// The channel column is drag-resizable (see useResizableDimension.ts) with the desktop app's
+// own v0.7.9 clamps; the width feeds --epg-channel-col-width below, which is the only thing
+// .epg-grid-nav and .epg-row-channel consume — rows never read it in JS, so react-window
+// re-renders nothing while dragging.
+const EPG_CHANNEL_COL_KEY = 'epg-channel-col-width'
+const EPG_CHANNEL_COL_MIN = 90
+const EPG_CHANNEL_COL_MAX = 320
+const EPG_CHANNEL_COL_DEFAULT = 160
 
 interface Block {
   key: string
@@ -142,8 +151,8 @@ function EpgRow({
 // axis (virtualized via react-window, so it stays workable against a catalog with thousands of
 // channels), time left-to-right, each programme a positioned block sized by its duration.
 // Deliberately left out of this pass (see the desktop app's EpgGrid.tsx for the fuller
-// version): drag-to-pan the timeline, a resizable channel column, keyboard navigation, and
-// catch-up/timeshift playback for past programmes.
+// version): drag-to-pan the timeline, keyboard navigation, and catch-up/timeshift playback for
+// past programmes.
 export function EpgGrid({
   session,
   channels,
@@ -158,6 +167,15 @@ export function EpgGrid({
   const [now, setNow] = useState(() => Date.now())
   const [windowOffsetMs, setWindowOffsetMs] = useState(0)
   const listRef = useListRef(null)
+  const { dimension: channelColumnWidth, startDrag: startChannelColumnDrag } = useResizableDimension(
+    loadSavedDimension(EPG_CHANNEL_COL_KEY, EPG_CHANNEL_COL_DEFAULT, EPG_CHANNEL_COL_MIN, EPG_CHANNEL_COL_MAX),
+    'x',
+    {
+      min: EPG_CHANNEL_COL_MIN,
+      max: EPG_CHANNEL_COL_MAX,
+      onCommit: (w) => saveDimension(EPG_CHANNEL_COL_KEY, w)
+    }
+  )
 
   const baseHour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS
   const windowStart = baseHour + windowOffsetMs
@@ -176,7 +194,16 @@ export function EpgGrid({
   for (let t = firstTick; t <= windowEnd; t += HOUR_MS) hourTicks.push(t)
 
   return (
-    <div className="epg-grid" style={{ '--epg-channel-col-width': `${CHANNEL_COLUMN_WIDTH}px` } as CSSProperties}>
+    <div className="epg-grid" style={{ '--epg-channel-col-width': `${channelColumnWidth}px` } as CSSProperties}>
+      {/* One handle spanning the grid's full height — the header's nav block and every row's
+          channel cell share the same width variable, so a single divider moves them together
+          (the desktop app's own v0.7.9 arrangement). */}
+      <div
+        className="resize-handle resize-handle--col"
+        style={{ left: channelColumnWidth - 4 }}
+        onPointerDown={startChannelColumnDrag}
+        title="Drag to resize the channel column"
+      />
       <div className="epg-time-header">
         <div className="epg-grid-nav">
           <button onClick={() => setWindowOffsetMs((o) => o - HOUR_MS)} title="Earlier">

@@ -160,6 +160,8 @@ body {
 }
 
 .sidebar {
+  position: relative;
+  flex-shrink: 0;
   width: 220px;
   overflow-y: auto;
   border-right: 1px solid #232733;
@@ -190,6 +192,11 @@ body {
   min-height: 0;
 }
 
+.player-section {
+  flex-shrink: 0;
+  position: relative;
+}
+
 .player-wrap {
   background: black;
   flex-shrink: 0;
@@ -197,8 +204,48 @@ body {
 
 .player-wrap video {
   width: 100%;
-  max-height: 45vh;
+  max-height: var(--player-max-height, 45vh);
   display: block;
+}
+
+/* Drag-to-resize handles (see lib/useResizableDimension.ts) — ported from the desktop app's
+   own global.css: an 8px hit area, a directional cursor, and a subtle highlight on hover and
+   for the whole drag (the pointer inevitably outruns the handle). The body-level classes keep
+   the cursor and suppress text selection everywhere mid-drag. */
+.resize-handle {
+  position: absolute;
+  z-index: 5;
+  touch-action: none;
+}
+
+.resize-handle--col {
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+}
+
+.resize-handle--row {
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: row-resize;
+}
+
+.resize-handle:hover,
+body.resizing-col .resize-handle--col,
+body.resizing-row .resize-handle--row {
+  background: rgba(79, 124, 255, 0.25);
+}
+
+body.resizing-col {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.resizing-row {
+  cursor: row-resize;
+  user-select: none;
 }
 
 .track-controls {

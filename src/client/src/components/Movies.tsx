@@ -1,6 +1,7 @@
 import { useEffect, useState, type JSX } from 'react'
 import type { Session } from './LoginScreen'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
+import { useSidebarWidth } from '../lib/useSidebarWidth'
 import type { Category, VodStream } from '../lib/types'
 
 export function Movies({ session }: { session: Session }): JSX.Element {
@@ -9,6 +10,7 @@ export function Movies({ session }: { session: Session }): JSX.Element {
   const [movies, setMovies] = useState<VodStream[]>([])
   const [nowPlaying, setNowPlaying] = useState<VodStream | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const { sidebarWidth, startSidebarDrag } = useSidebarWidth()
 
   useEffect(() => {
     session.client
@@ -28,7 +30,7 @@ export function Movies({ session }: { session: Session }): JSX.Element {
 
   return (
     <div className="app-body">
-      <nav className="sidebar">
+      <nav className="sidebar" style={{ width: sidebarWidth }}>
         <button className={selectedCategoryId === null ? 'category-btn active' : 'category-btn'} onClick={() => setSelectedCategoryId(null)}>
           All
         </button>
@@ -41,6 +43,11 @@ export function Movies({ session }: { session: Session }): JSX.Element {
             {cat.category_name}
           </button>
         ))}
+        <div
+          className="resize-handle resize-handle--col resize-handle--sidebar"
+          onPointerDown={startSidebarDrag}
+          title="Drag to resize the sidebar"
+        />
       </nav>
       <div className="content">
         {streamUrl && nowPlaying && <NativeVideoPlayer url={streamUrl} titleKey={`movie:${nowPlaying.stream_id}`} />}
