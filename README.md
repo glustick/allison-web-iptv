@@ -6,7 +6,17 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.5.0 — server-side EPG aggregation with additional sources, and live-playback backgrounding recovery)
+## Current state (v0.5.1 — drag-resizable panels)
+
+**v0.5.1** adds select-and-drag panel resizing, sharing one mechanism across three dividers
+(`lib/useResizableDimension.ts`, a pointer-event port of the desktop app's own v0.7.9 hook, so
+touch works too): the EPG grid's channel column (90–320px, one full-height handle — rows never
+read the width in JS, so react-window re-renders nothing mid-drag), the category sidebar on
+all three tabs (160–360px), and a row-resize seam between the Live TV player and the guide
+(120px–80vh, default = the old fixed 45vh). Sizes clamp at their bounds and persist to
+`localStorage` (the client's first use of it, mirroring the desktop app's own fallback path),
+restored on reload. Verified live with synthetic drags: real-time application, clamping at
+both bounds, persistence, and restore across a reload + auto-reconnect.
 
 **v0.5.0** moves EPG assembly out of the browser entirely: the server fetches, caches (6h TTL,
 stale-while-revalidate, pruned to a rolling 24h-back/72h-forward window), and merges the
