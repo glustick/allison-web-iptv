@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
+import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
 // Matches the desktop app's own Player.tsx recovery tuning (see its ROADMAP): a fatal
@@ -13,6 +14,11 @@ const MAX_NETWORK_RETRIES = 4
 const NETWORK_RETRY_DELAY_MS = 2000
 const MAX_MEDIA_ERROR_RECOVERIES = 3
 const ERROR_RESET_AFTER_MS = 15000
+
+// How often the backgrounding-recovery watchdog below re-checks the stream. Interval clamping
+// while the page is suspended is fine — the point is to catch the wedge shortly *after* the
+// page becomes active again, not during suspension (see lib/liveStreamRecovery.ts).
+const RECOVERY_CHECK_INTERVAL_MS = 15_000
 
 // Live TV only: this is the hls.js-attached player, matching the desktop app's own split
 // between Player.tsx's live path (always .m3u8, always hls.js) and its VOD/series path (a
@@ -71,6 +77,48 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     video.addEventListener('waiting', handleWaiting)
     video.addEventListener('playing', handlePlaying)
 
+    // Backgrounding recovery (see lib/liveStreamRecovery.ts): a suspended page stops hls.js's
+    // live-refresh timer chain, and nothing restarts it on its own once the page is active
+    // again — found live as a permanent, silent freeze. This watchdog notices a stream that
+    // stopped receiving fragments while starved at its buffer end and restarts it: resume the
+    // element if the browser auto-paused it, kick hls.startLoad(), and after two fruitless
+    // kicks rebuild the source entirely via the same reload path the transcode fallback uses.
+    let lastFragmentAt: number | null = null
+    let kicksSinceLastFragment = 0
+    let gaveUp = false
+    // The effect closure would otherwise keep the `error` state from this render forever — the
+    // watchdog needs to see fatal give-ups that happen later in this same effect's lifetime.
+    let fatalErrorShown = false
+    const recoveryTimer = setInterval(() => {
+      if (!hls || gaveUp || fatalErrorShown) return
+      const actions = liveRecoveryActions({
+        now: Date.now(),
+        lastFragmentAt,
+        playheadAtBufferEnd: isPlayheadAtBufferEnd(video),
+        hasFatalError: fatalErrorShown,
+        ended: video.ended,
+        kicksSinceLastFragment
+      })
+      if (actions.reloadSource) {
+        console.warn('[player] live stream wedged after backgrounding; reloading source')
+        gaveUp = true
+        setReloadTick((t) => t + 1)
+        return
+      }
+      if (actions.kickLoader) {
+        console.warn('[player] live loading stalled after backgrounding; restarting hls loader')
+        kicksSinceLastFragment += 1
+        hls.startLoad()
+      }
+      if (actions.resumePlayback && video.paused) {
+        video.play().catch(() => {})
+      }
+    }, RECOVERY_CHECK_INTERVAL_MS)
+    const noteFragmentActivity = (): void => {
+      lastFragmentAt = Date.now()
+      kicksSinceLastFragment = 0
+    }
+
     if (Hls.isSupported()) {
       hls = new Hls({
         // Fixes a real, previously-confirmed bug (see the sibling AllisonIPTV desktop app's own
@@ -88,6 +136,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
       hlsRef.current = instance
       instance.loadSource(sourceUrl)
       instance.attachMedia(video)
+      instance.on(Hls.Events.FRAG_BUFFERED, noteFragmentActivity)
       instance.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_event, data) => {
         setAudioTracks(data.audioTracks.map((track, index) => ({
           index,
@@ -112,7 +161,10 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
             data,
             url,
             () => setReloadTick((t) => t + 1),
-            (message) => setError(`Audio codec not supported by this player, and automatic transcoding failed: ${message}`)
+            (message) => {
+              fatalErrorShown = true
+              setError(`Audio codec not supported by this player, and automatic transcoding failed: ${message}`)
+            }
           )
         ) {
           return
@@ -126,6 +178,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
               if (networkRetryTimer) clearTimeout(networkRetryTimer)
               networkRetryTimer = setTimeout(() => instance.startLoad(), NETWORK_RETRY_DELAY_MS)
             } else {
+              fatalErrorShown = true
               setError(`Playback error: ${data.details} (gave up after ${MAX_NETWORK_RETRIES} retries)`)
               instance.destroy()
             }
@@ -136,6 +189,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
             // escalate instead of looping forever, matching hls.js's own recommended pattern.
             mediaErrorRecoveryCount += 1
             if (mediaErrorRecoveryCount > MAX_MEDIA_ERROR_RECOVERIES) {
+              fatalErrorShown = true
               setError(`Playback error: ${data.details} (gave up after ${MAX_MEDIA_ERROR_RECOVERIES} recovery attempts)`)
               instance.destroy()
             } else if (mediaErrorRecoveryCount === 2) {
@@ -146,6 +200,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
             }
             break
           default:
+            fatalErrorShown = true
             setError(`Playback error: ${data.details}`)
             instance.destroy()
         }
@@ -155,6 +210,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     }
     video.play().catch(() => {})
     return () => {
+      clearInterval(recoveryTimer)
       video.removeEventListener('waiting', handleWaiting)
       video.removeEventListener('playing', handlePlaying)
       if (errorResetTimer) clearTimeout(errorResetTimer)
