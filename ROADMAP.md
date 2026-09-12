@@ -7,12 +7,16 @@ the original scoping writeup this project started from.
 
 ## Current release
 
-- **v0.4.4 published:** track selection controls, GitHub release checking, encrypted
-  server-backed session profiles, and the related regression coverage are on `main` and tagged
-  as `v0.4.4`.
-- **Validation complete:** 97 tests pass, both TypeScript projects type-check, the client bundle
-  builds, ESLint passes, and the Docker workflow has been triggered for both the `main` push and
-  release tag.
+- **v0.5.0 published:** server-side EPG aggregation with additional user-configured XMLTV
+  sources (see the EPG grid section below for the full account), the wider channel→guide
+  matching layer, `/api/epg` + `/api/epg/status`, and the Live TV backgrounding-recovery
+  watchdog are on `main` and tagged as `v0.5.0`.
+- **Validation:** 128 tests pass, both TypeScript projects type-check, ESLint passes, the
+  server and client builds succeed, and the EPG aggregation path was live-verified against the
+  real provider plus a real external XMLTV source. The backgrounding recovery is unit-tested
+  (pure decision logic in `liveStreamRecovery.ts`) but its live end-to-end confirmation is
+  still pending — the provider went unreachable before the smoke test could run; the wedge
+  itself was reproduced live on 2026-09-12 as described in the Stability section.
 
 ## Stability
 
@@ -30,10 +34,18 @@ the original scoping writeup this project started from.
     desktop app's own tuning), and a 15s post-recovery window of uninterrupted playback before
     resetting both counts, so an unrelated later blip gets its own full set of retries. Only a
     genuinely exhausted or unrecognized fatal error still shows the on-screen error and gives
-    up. Typecheck/lint/test suite all pass; not yet confirmed live against the real
-    account/provider that originally reported the freeze — that's still the real bar per this
-    project's own "verify live, don't just reason about it" history, so treat this as fixed-in-
-    code, pending live confirmation the actual freeze is gone.
+  up. Typecheck/lint/test suite all pass; not yet confirmed live against the real
+  account/provider that originally reported the freeze — that's still the real bar per this
+  project's own "verify live, don't just reason about it" history, so treat this as fixed-in-
+  code, pending live confirmation the actual freeze is gone.
+  - **Live check (2026-09-12):** healthy foreground playback confirmed against the real
+    account — two different live channels each played minutes of 1080p at exactly 1:1
+    wall-clock progress with continuous segment fetches, zero console errors, no on-screen
+    error, and instant recovery on channel switch. The recovery paths themselves never had to
+    fire during healthy playback, so they remain fixed-in-code rather than proven-live; what
+    *was* proven is that v0.4.4 doesn't regress normal viewing. See the new backgrounding
+    finding below — the one freeze-shaped behavior observed live traced to the test
+    environment's suspended webview, not to either fix failing.
 - **Second, distinct freeze reported live after the above fix shipped: Live TV plays briefly,
   then a permanent buffering spinner, playback time stuck on a bogus value, no error in the
   console at all, and no recovery.** "No console error" ruled out the fatal-hls.js-error path
@@ -58,6 +70,24 @@ the original scoping writeup this project started from.
     with the desktop app intact. Covered by two new tests exercising a real local HTTP server
     (one that stalls mid-body, one that keeps streaming normally) — both pass consistently.
     Same caveat as above: fixed-in-code, not yet confirmed live against the real freeze.
+- **New, found live during the 2026-09-12 verification pass: backgrounding the app
+  permanently wedges Live TV with no self-recovery.** When the page's rendering/timers get
+  suspended (browser tab backgrounded, or an embedded-webview host window losing OS focus),
+  playback freezes as expected — but on returning to the foreground, hls.js never resumes:
+  zero new playlist/segment requests after the page is visible again, buffer exhausted at its
+  live edge, `readyState` misleadingly 4, no error anywhere, and the only recovery is a
+  channel switch or full reload. Verified directly in-page (rAF resumed, request log empty for
+  minutes after). This is *not* the v0.4.2 watchdog's domain — nothing is in-flight to stall;
+  the suspension wedges hls.js's own live-refresh timer chain.
+  - **Fixed in v0.5.0:** `LivePlayer.tsx` now runs a backgrounding-recovery watchdog (pure
+    decision logic extracted to `lib/liveStreamRecovery.ts`, covered by unit tests): a stream
+    that has received no fragments for 60s while its playhead sits starved at the buffer end
+    gets resumed if the browser auto-paused it, kicked via `hls.startLoad()`, and — after two
+    fruitless kicks — fully reloaded via the player's own reload path. Deliberately tolerant
+    of slow-but-alive providers (the 60s threshold and buffer-ahead check keep healthy streams
+    and user-paused streams out of its way). Fixed-in-code plus unit tests; the live
+    end-to-end confirmation is pending (provider outage interrupted the smoke test — see
+    Current release).
 
 ## Security & multi-user
 
@@ -115,11 +145,31 @@ The Gantt-chart EPG grid (channels × time, live "now" line, Now/◀/▶ nav) is
 live-verified, but the desktop app's own fuller version has a few things this pass deliberately
 left out:
 
+- **Additional EPG sources + server-side aggregation — implemented and live-verified
+  (2026-09-12).** EPG assembly moved out of the browser entirely: the server now fetches,
+  caches (6h TTL, stale-while-revalidate, pruned to a rolling 24h-back/72h-forward window),
+  and merges the provider's `xmltv.php` guide with any extra XMLTV URLs configured on the
+  login form ("Additional EPG guide URLs", stored with the encrypted session profile), then
+  serves windowed listings via `/api/epg` keyed by stream_id — so the old ~98MB-per-tab XML
+  download became a ~4MB JSON per visible window. A matching layer (`epgMatching.ts`: exact
+  `epg_channel_id` → normalized id → normalized display-name, unambiguous-only) recovers
+  channels the old exact-string join silently missed, `/api/epg/status` reports per-source
+  health, and channels every source has nothing for show a "No guide data" label instead of an
+  ambiguous blank row. Confirmed live: 5,963 provider channels / 314,895 programmes parsed,
+  4,458 streams populated in the current window, 22 previously-empty streams gained data from
+  a real external XMLTV source with zero regressions. Still open within this theme:
+  - The matching layer is deliberately conservative (no fuzzy/substring joins); a channel
+    whose name genuinely differs from every guide entry (e.g. "BBC One HD London" vs
+    "BBC One HD") still needs either a provider id or a closer external source name to join.
+  - Built-in public-guide presets (the login form takes raw URLs today — the user finds and
+    pastes their own XMLTV sources).
+
 - Drag-to-pan the timeline (currently only the ◀/▶/Now buttons move the window).
 - A resizable channel column.
 - Keyboard navigation through the grid.
 - Catch-up/timeshift playback for past programmes (the grid shows history, but there's no way
-  to actually play it back yet).
+  to actually play it back yet; note the server's ingest prune window is 24h back / 72h
+  forward, which bounds how far back any future catch-up UI could look without widening it).
 
 ## Deployment & ops
 

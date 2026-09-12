@@ -6,7 +6,23 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.4.2 — fix for a silent, unrecoverable playback stall)
+## Current state (v0.5.0 — server-side EPG aggregation with additional sources, and live-playback backgrounding recovery)
+
+**v0.5.0** moves EPG assembly out of the browser entirely: the server fetches, caches (6h TTL,
+stale-while-revalidate, pruned to a rolling 24h-back/72h-forward window), and merges the
+provider's `xmltv.php` guide with any extra XMLTV URLs configured on the login form's
+"Additional EPG guide URLs" field, joins channels through a wider exact-id → normalized-id →
+normalized-name matching layer (`epgMatching.ts`), and serves windowed listings via `/api/epg`
+(~4MB JSON per visible 3-hour window instead of ~98MB of XML per browser tab — confirmed live
+against the real provider: 5,963 channels / 314,895 programmes parsed, 4,458 streams populated,
+22 previously-empty streams gained data from a real external XMLTV source with zero
+regressions). `/api/epg/status` reports per-source health, and channels every source has
+nothing for show a "No guide data" label instead of an ambiguous blank row. Also in this
+release: `LivePlayer.tsx` gained a backgrounding-recovery watchdog (`lib/liveStreamRecovery.ts`)
+— a page suspended by backgrounding permanently wedged hls.js's live-refresh chain with no
+error and no self-recovery (found live on 2026-09-12); the watchdog now notices a stream that
+stopped receiving fragments while starved at its buffer end and restarts it, escalating from
+`hls.startLoad()` to a full source reload if needed.
 
 **v0.4.2** fixes a second, distinct freeze reported live after v0.4.1 shipped: Live TV playing
 briefly, then a permanent buffering spinner, a stuck/bogus playback time, and — critically — no
@@ -115,6 +131,24 @@ account, not by review:
     (`(d ?? []).filter is not a function`) with nothing but a blank page to show for it. Fixed,
     and a top-level `ErrorBoundary` was added afterward so the *next* uncaught bug shows a real
     error instead of a silent blank page.
+
+**EPG aggregation now happens server-side, with additional sources.** The original design —
+every browser tab downloading the provider's ~98MB `xmltv.php` and joining it to channels by
+exact `epg_channel_id` string — left real gaps: channels whose id was null or formatted
+differently never matched, the guide covered only part of the catalog, and one download per
+tab mount was wasteful. The server now assembles the guide instead (`src/server/lib/epgService.ts`
+behind `/api/epg`): it fetches and caches the provider guide (6h TTL, stale-while-revalidate,
+pruned to a rolling 24h-back/72h-forward window to keep memory sane on a NAS), merges in any
+extra XMLTV sources configured on the login form's "Additional EPG guide URLs" field (stored
+with the encrypted session profile, max 8), and joins channels to guide entries through a
+wider matching layer (`epgMatching.ts`: exact id → normalized id → normalized display-name,
+unambiguous matches only). The grid fetches only the programmes overlapping its current 3-hour
+window (confirmed live: ~4MB JSON instead of 98MB of XML) and refetches as the window moves;
+`/api/epg/status` reports per-source health. Confirmed live against the real provider plus a
+real external XMLTV source: 5,963 provider channels / 314,895 programmes parsed, 4,458 streams
+populated in the current window, and 22 previously-empty streams gained data from the external
+source with zero regressions. Channels every source has nothing for now show a faint "No guide
+data" label instead of an ambiguous blank row.
 
 **Live-verified in a real Chrome browser (not Electron)**: manual login → saved credentials →
 full page reload → automatic reconnect with zero interaction; the EPG grid rendering real
