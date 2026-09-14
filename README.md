@@ -6,8 +6,12 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.6.3 — every storage failure names itself)
+## Current state (v0.6.4 — transcoding fixed in Docker)
 
+**v0.6.4** fixes transcoding in the Docker image: the bundled ffmpeg-static Linux
+binary is a static-glibc build that cannot resolve *any* hostname, so the transcode fallback
+(used for E-AC-3/AC-3 audio and HEVC video a browser can't play directly) silently never worked
+— playback would start, hit the fallback, and hang. The image now installs Debian's ffmpeg.
 **v0.6.3** finishes the hardening started in v0.6.1: `/api/session/save`, `/api/session/clear`,
 `/api/session` (load), `/api/connect` and the transcode routes now return readable JSON errors
 (they were the last paths that could answer with an opaque HTML 500 — badly timed, since
@@ -280,6 +284,13 @@ ARM-based, not Intel/AMD. The `Dockerfile` deliberately uses a Debian ("bookworm
 Alpine, base image: `ffmpeg-static`'s prebuilt binaries are linked against glibc, and running
 them on Alpine's musl libc is a common, easy-to-hit way for the bundled ffmpeg to silently fail
 to execute at all.
+
+The image also installs Debian's own `ffmpeg` (~400MB): the bundled `ffmpeg-static` Linux binary
+is a *static glibc* build, and static glibc binaries cannot use NSS — so it fails to resolve
+**any** hostname at runtime (`Failed to resolve hostname … System error`) and transcoding (the
+automatic fallback for E-AC-3/AC-3 audio or HEVC video) never worked without it. The server's
+`ffmpegResolver` already prefers a working system ffmpeg, and logs which one it picked at boot
+(`[transcode] using system ffmpeg: /usr/bin/ffmpeg`).
 
 ```bash
 docker pull ghcr.io/glustick/allison-web-iptv:latest

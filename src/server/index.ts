@@ -170,10 +170,11 @@ function getProxyTargetBase(req?: IncomingMessage): string | null {
 }
 
 // --- ffmpeg / transcode service ------------------------------------------------------------
-// No "prefer a system ffmpeg" reason to skip here the way the desktop app has one (that existed
-// purely to avoid shipping a redundant second copy in an installer) — a server just needs one
-// ffmpeg, so the bundled one is enough. Still routed through ffmpegResolver so a real, already-
-// tested resolution path is being reused rather than re-invented.
+// Routed through ffmpegResolver (a real, already-tested resolution path reused rather than
+// re-invented). The preferred system ffmpeg is not optional decoration here: the bundled
+// ffmpeg-static Linux binary is a static-glibc build that cannot resolve ANY hostname, so
+// transcoding network sources only works when a real, dynamically-linked ffmpeg is installed
+// (the Dockerfile does exactly that).
 const resolveFfmpegPath = createFfmpegResolver(ffmpegStaticPath, {
   platform: process.platform,
   fileExists: existsSync,
