@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Session } from '../components/LoginScreen'
+import type { Session } from './appAuth'
 
 // The aggregated, server-assembled programme guide — replaces the old useFullEpgGuide, which
 // downloaded the provider's ~98MB xmltv.php into every browser tab and joined it to channels by

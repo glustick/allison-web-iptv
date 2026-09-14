@@ -1,3 +1,5 @@
+export const AUTH_COOKIE_NAME = 'allison_web_iptv_auth'
+
 export function normalizeProxyTargetBase(url: string): string {
   return url.trim().replace(/\/+$/, '')
 }
@@ -21,7 +23,9 @@ export function getTargetForRequest(
   if (headerValue) return normalizeProxyTargetBase(headerValue)
 
   const cookieHeader = typeof headers.cookie === 'string' ? headers.cookie : ''
-  const sessionId = parseCookieValue(cookieHeader, 'allison_web_iptv_session')
+  // The auth cookie (set by the app's own username/password login) doubles as the key for
+  // per-login proxy targets — one less cookie, and a logged-out browser resolves no target.
+  const sessionId = parseCookieValue(cookieHeader, AUTH_COOKIE_NAME)
   if (sessionId && sessionTargets.has(sessionId)) return normalizeProxyTargetBase(sessionTargets.get(sessionId) ?? '')
 
   return defaultTarget ? normalizeProxyTargetBase(defaultTarget) : null

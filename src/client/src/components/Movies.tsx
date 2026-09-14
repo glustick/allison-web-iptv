@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX } from 'react'
-import type { Session } from './LoginScreen'
+import type { Session } from '../lib/appAuth'
+import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import type { Category, VodStream } from '../lib/types'
@@ -25,6 +26,11 @@ export function Movies({ session }: { session: Session }): JSX.Element {
       .then(setMovies)
       .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load movies'))
   }, [session, selectedCategoryId])
+
+  useEffect(() => {
+    reportNowPlaying(nowPlaying?.name ?? null, 'movie')
+  }, [nowPlaying])
+  useEffect(() => () => reportNowPlaying(null), [])
 
   const streamUrl = nowPlaying ? session.client.getStreamUrl('movie', nowPlaying.stream_id, nowPlaying.container_extension) : null
 

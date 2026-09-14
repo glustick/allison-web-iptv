@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX } from 'react'
-import type { Session } from './LoginScreen'
+import type { Session } from '../lib/appAuth'
+import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import type { Category, SeriesItem, SeriesInfo, SeriesEpisode } from '../lib/types'
@@ -78,6 +79,11 @@ export function Series({ session }: { session: Session }): JSX.Element {
       .then(setSeriesList)
       .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load series'))
   }, [session, selectedCategoryId])
+
+  useEffect(() => {
+    reportNowPlaying(nowPlaying?.episode?.title ?? null, 'series')
+  }, [nowPlaying])
+  useEffect(() => () => reportNowPlaying(null), [])
 
   const streamUrl = nowPlaying
     ? session.client.getStreamUrl('series', Number(nowPlaying.episode.id), nowPlaying.episode.container_extension)

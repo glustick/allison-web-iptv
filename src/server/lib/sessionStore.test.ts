@@ -1,18 +1,11 @@
 process.env.SESSION_SECRET = process.env.SESSION_SECRET ?? 'test-session-secret-1234'
 
 import { describe, expect, it } from 'vitest'
-import {
-  decryptSessionCredentials,
-  decryptSessionProfileState,
-  encryptSessionCredentials,
-  encryptSessionProfileState,
-  type SessionCredentials
-} from './sessionStore.js'
+import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './sessionStore.js'
 
 describe('encryptSessionCredentials', () => {
   it('round-trips a session credential payload without leaking the raw plaintext', () => {
     const creds: SessionCredentials = {
-      accessPassword: 'shared-secret',
       server: 'https://example.com:8080',
       username: 'demo-user',
       password: 'demo-pass'
@@ -24,40 +17,22 @@ describe('encryptSessionCredentials', () => {
     expect(decryptSessionCredentials(encoded)).toEqual(creds)
   })
 
-  it('round-trips a set of saved profiles while preserving the active selection', () => {
-    const profiles = {
-      activeProfileId: 'family-main',
-      profiles: [
-        {
-          id: 'family-main',
-          name: 'Family main',
-          credentials: {
-            accessPassword: 'shared-secret',
-            server: 'https://example.com:8080',
-            username: 'demo-user',
-            password: 'demo-pass'
-          }
-        },
-        {
-          id: 'guest',
-          name: 'Guest',
-          credentials: {
-            accessPassword: 'guest-secret',
-            server: 'https://other.example.com:8080',
-            username: 'guest-user',
-            password: 'guest-pass'
-          }
-        }
-      ]
+  it('preserves the extra EPG guide URLs', () => {
+    const creds: SessionCredentials = {
+      server: 'https://example.com:8080',
+      username: 'demo-user',
+      password: 'demo-pass',
+      epgUrls: ['https://guide.example.com/epg.xml', 'https://other.example.com/epg.xml']
     }
 
-    const encoded = encryptSessionProfileState(profiles)
-    expect(encoded).toContain('payload')
-    expect(encoded).not.toContain('guest-pass')
-    expect(decryptSessionProfileState(encoded)).toEqual(profiles)
+    expect(decryptSessionCredentials(encryptSessionCredentials(creds))).toEqual(creds)
   })
 
   it('refuses an invalid payload instead of returning junk', () => {
     expect(() => decryptSessionCredentials('not-valid-json')).toThrow()
+  })
+
+  it('refuses a payload missing required fields', () => {
+    expect(() => decryptSessionCredentials(JSON.stringify({ version: 1, payload: 'AAAA' }))).toThrow()
   })
 })

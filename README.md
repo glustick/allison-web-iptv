@@ -6,7 +6,23 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.5.1 — drag-resizable panels)
+## Current state (v0.6.0 — real accounts, roles, and an admin console)
+
+**v0.6.0** replaces the old single shared `ACCESS_PASSWORD` gate with a real account system.
+The login screen now asks only for an app username and password; the IPTV provider details
+moved to their own step *after* that security check, stored encrypted per account (so each
+user keeps their own provider line and extra EPG sources). Two roles — `admin` and `user` —
+and a first-run setup screen that creates the initial admin the first time the server starts
+with zero accounts. Admins get an in-app console with two panels: **active sessions** (who is
+logged in, what they're streaming, login time, session duration, last activity, with a
+one-click force sign-out) and **user management** (add/remove users, assign roles). Accounts
+persist to a single `users.json` under the data directory — `./data/` for a bare `npm start`,
+`/appdata/` in Docker (passwords scrypt-hashed, provider credentials AES-256-GCM encrypted
+under `SESSION_SECRET`); sessions expire after 24h of inactivity, kept alive by the player's
+activity heartbeat. The old browser-side "saved profiles" system is gone — accounts
+replaced it.
+
+**v0.5.1** adds select-and-drag panel resizing, sharing one mechanism across three dividers
 
 **v0.5.1** adds select-and-drag panel resizing, sharing one mechanism across three dividers
 (`lib/useResizableDimension.ts`, a pointer-event port of the desktop app's own v0.7.9 hook, so
@@ -165,15 +181,42 @@ full page reload → automatic reconnect with zero interaction; the EPG grid ren
 channel icons, real programme titles ("Countdown", "Billions", "Will & Grace", ...), and a
 correctly-positioned "now" line, within ~10 seconds of opening Live TV.
 
-**Not yet built** (see `EFFORT-ASSESSMENT.md`'s "Real work"/"New work" sections): per-session
-(rather than single-global) connection state, real encryption at rest for stored credentials
-beyond the browser-local auto-login above, and a real multi-user login system beyond the
-single shared `ACCESS_PASSWORD` placeholder in `/api/login`. No track-switching UI yet for the
-transcode fallback's own audio/subtitle options.
+**Not yet built** (see `EFFORT-ASSESSMENT.md`'s "Real work"/"New work" sections): no
+track-switching UI yet for the transcode fallback's own audio/subtitle options. (The per-session
+connection state, encrypted credentials at rest, and the multi-user login system listed here in
+earlier versions have all shipped — v0.5.0's encrypted per-session store and v0.6.0's account
+system cover them.)
 
 **Deliberately cut, not ported** — see the effort assessment for why: the VPN split-tunnel
 feature (doesn't fit a shared-server model at all) and the auto-updater (meaningless for a web
 app; redeploy instead).
+
+## User accounts & admin console
+
+Authentication now happens in two stages:
+
+1. **App login** — a username and password checked against the server's own accounts. First
+   launch (zero accounts on file) shows a setup screen that creates the initial **admin**;
+   every account after that is created from the admin panel.
+2. **IPTV config** — right after login, the app checks the account's saved provider config
+   (server URL, IPTV username/password, extra EPG URLs) and auto-connects; accounts without
+   one get a short form instead. Provider credentials are stored AES-256-GCM encrypted per
+   account, never in plaintext. All of this variable state (accounts, passwords, IPTV data)
+   lives in one file — `users.json` under `DATA_DIR` — which the Docker image expects at
+   `/appdata` and the provided compose file maps to `./appdata` on the host, read-write, so
+   container/image updates keep it.
+
+Roles are `admin` and `user`. Admins get an extra **Admin** tab with:
+
+- **Active sessions** — every logged-in user, their role, login time, live session duration,
+  what they're currently streaming (title + live/movie/series tag), and last activity — with a
+  per-session force sign-out. Data comes from the client's activity heartbeat (~15s while
+  something is playing).
+- **User management** — add users (username, password, role) and remove them. The last
+  remaining admin can't be deleted, and you can't delete the account you're logged in with.
+
+Logins expire after 24 hours without any request (`AUTH_IDLE_TTL_HOURS`); actively watching
+keeps the session alive automatically. Removing a user immediately terminates their sessions.
 
 ## Running it
 
@@ -194,8 +237,11 @@ Environment variables:
 
 - `PORT` (default `8085`) — the public port.
 - `PROXY_INTERNAL_PORT` (default `4001`) — internal-only, do not expose this one.
-- `ACCESS_PASSWORD` — required for `/api/login` to accept anything.
-- `SESSION_SECRET` — required for encrypted browser-session storage; use a 16+ character random secret, ideally from a secret manager or `.env` file.
+- `SESSION_SECRET` — required; encrypts the per-account IPTV credentials at rest. Use a 16+ character random secret, ideally from a secret manager or `.env` file.
+- `DATA_DIR` (default `./data`; `/appdata` in the Docker image) — where `users.json` (accounts,
+  hashed passwords, encrypted per-user IPTV credentials) lives. In Docker this must sit on the
+  persistent `./appdata:/appdata:rw` volume so image updates don't wipe accounts.
+- `AUTH_IDLE_TTL_HOURS` (default `24`) — how long a login survives with no requests; active streaming keeps it alive via the client's activity heartbeat.
 - `NODE_EXTRA_CA_CERTS` — only needed on a network with a TLS-inspecting corporate proxy, but
   confirmed live to matter in exactly two separate places on one such network during this
   project's own setup: `npm install` failed fetching `ffmpeg-static`'s binary, and — separately
@@ -219,11 +265,13 @@ to execute at all.
 docker pull ghcr.io/glustick/allison-web-iptv:latest
 docker run -d --name allison-web-iptv \
   -p 8085:8085 \
-  -e ACCESS_PASSWORD=changeme \
+  -e SESSION_SECRET=<16+ character random secret> \
+  -v ./appdata:/appdata:rw \
   ghcr.io/glustick/allison-web-iptv:latest
 ```
 
-Or with the provided `docker-compose.yml` (edit `ACCESS_PASSWORD` first):
+Or with the provided `docker-compose.yml` (set a real `SESSION_SECRET` first — it already maps
+`./appdata:/appdata:rw`, which is what keeps accounts and IPTV config across image updates):
 
 ```bash
 docker compose up -d
@@ -255,7 +303,9 @@ package — the same steps apply there under the name "Docker" instead).
 3. Give it a name, pick a shared folder for it (any empty one is fine — this app doesn't need
    persistent storage), and choose **Create docker-compose.yml**.
 4. Paste in this repo's `docker-compose.yml` content, replacing `image: ghcr.io/glustick/...`
-   with your own fork's path if you're building from a fork, and set a real `ACCESS_PASSWORD`.
+   with your own fork's path if you're building from a fork, and set a real `SESSION_SECRET`. Keep the
+   `./appdata:/appdata:rw` volume mapping — accounts and IPTV config live there, so a Container
+   Manager update/rebuild won't wipe them.
 5. Build and run the project. Container Manager will pull the correct architecture's image
    automatically — that's the whole point of the multi-arch build above.
 6. Visit `http://<your-nas-ip>:8085` once it's up.

@@ -500,3 +500,240 @@ body.resizing-row {
   background: #ff6b6b;
   z-index: 1;
 }
+
+/* --- Account setup / IPTV config screens ------------------------------------------------ */
+
+.setup-hint {
+  font-size: 13px;
+  color: #9aa1ad;
+  margin: 0 0 14px;
+  line-height: 1.45;
+}
+
+/* --- Top bar user chip / logout ---------------------------------------------------------- */
+
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #c8cdd6;
+}
+
+.logout-btn {
+  padding: 6px 12px;
+  background: #1a1e28;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #c8cdd6;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.logout-btn:hover {
+  color: #ffffff;
+  border-color: #3a4154;
+}
+
+/* --- Role badges ------------------------------------------------------------------------- */
+
+.role-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.role-badge.role-admin {
+  background: rgba(255, 176, 32, 0.15);
+  color: #ffd27d;
+}
+
+.role-badge.role-user {
+  background: rgba(79, 124, 255, 0.15);
+  color: #cfe0ff;
+}
+
+.you-tag {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #1a1e28;
+  border: 1px solid #2a2f3d;
+  color: #9aa1ad;
+  font-size: 11px;
+}
+
+/* --- Admin console ------------------------------------------------------------------------ */
+
+.admin-console {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.admin-error {
+  padding: 10px 14px;
+  background: rgba(255, 107, 107, 0.08);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 8px;
+  margin-bottom: 0;
+}
+
+.admin-section h2 {
+  font-size: 15px;
+  margin: 0 0 10px;
+  color: #e7e9ee;
+}
+
+.admin-section h3 {
+  font-size: 13px;
+  margin: 0 0 10px;
+  color: #9aa1ad;
+}
+
+.admin-table-wrap {
+  background: #12151c;
+  border: 1px solid #232733;
+  border-radius: 10px;
+  overflow-x: auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-table th {
+  text-align: left;
+  padding: 10px 14px;
+  color: #9aa1ad;
+  font-weight: 600;
+  border-bottom: 1px solid #232733;
+  white-space: nowrap;
+}
+
+.admin-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #1a1e28;
+  color: #c8cdd6;
+  vertical-align: middle;
+}
+
+.admin-table tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-empty {
+  text-align: center;
+  color: #9aa1ad;
+  padding: 22px 14px !important;
+}
+
+.admin-muted {
+  color: #5b6270;
+}
+
+.now-playing-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kind-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: #1a1e28;
+  color: #9aa1ad;
+}
+
+.kind-tag.kind-live {
+  color: #7de08d;
+}
+
+.kind-tag.kind-movie {
+  color: #cfe0ff;
+}
+
+.kind-tag.kind-series {
+  color: #ffd27d;
+}
+
+.admin-small-btn {
+  padding: 5px 10px;
+  background: #1a1e28;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #c8cdd6;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.admin-small-btn:hover {
+  border-color: #3a4154;
+  color: #ffffff;
+}
+
+.admin-small-btn.danger:hover {
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+}
+
+.add-user-form {
+  margin-top: 16px;
+  background: #12151c;
+  border: 1px solid #232733;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.add-user-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.add-user-row label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: #9aa1ad;
+  gap: 4px;
+}
+
+.add-user-row input,
+.add-user-row select {
+  padding: 8px 10px;
+  background: #0b0d12;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #e7e9ee;
+  font-size: 13px;
+  width: 200px;
+}
+
+.add-user-row button {
+  padding: 9px 16px;
+  background: #4f7cff;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.add-user-row button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

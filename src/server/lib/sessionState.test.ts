@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './sessionState.js'
+import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './sessionState.js'
 
 describe('normalizeProxyTargetBase', () => {
   it('trims trailing slashes from the Xtream server URL', () => {
@@ -9,11 +9,11 @@ describe('normalizeProxyTargetBase', () => {
 
 describe('parseCookieValue', () => {
   it('reads a named cookie out of a standard Cookie header', () => {
-    expect(parseCookieValue('allison_web_iptv_session=abc123; theme=dark', 'allison_web_iptv_session')).toBe('abc123')
+    expect(parseCookieValue(`${AUTH_COOKIE_NAME}=abc123; theme=dark`, AUTH_COOKIE_NAME)).toBe('abc123')
   })
 
   it('returns null when the requested cookie is not in the header', () => {
-    expect(parseCookieValue('theme=dark', 'allison_web_iptv_session')).toBeNull()
+    expect(parseCookieValue('theme=dark', AUTH_COOKIE_NAME)).toBeNull()
   })
 })
 
@@ -23,7 +23,7 @@ describe('getTargetForRequest', () => {
 
     expect(
       getTargetForRequest(
-        { cookie: 'allison_web_iptv_session=session-1', 'x-proxy-target-base': 'https://override.example:8080/' },
+        { cookie: `${AUTH_COOKIE_NAME}=session-1`, 'x-proxy-target-base': 'https://override.example:8080/' },
         'https://default.example:8080',
         targets
       )
@@ -33,7 +33,7 @@ describe('getTargetForRequest', () => {
   it('falls back to the session target before the process default', () => {
     const targets = new Map([['session-1', 'https://session.example:8080']])
 
-    expect(getTargetForRequest({ cookie: 'allison_web_iptv_session=session-1' }, 'https://default.example:8080', targets)).toBe(
+    expect(getTargetForRequest({ cookie: `${AUTH_COOKIE_NAME}=session-1` }, 'https://default.example:8080', targets)).toBe(
       'https://session.example:8080'
     )
   })

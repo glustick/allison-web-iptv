@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties, type JSX } from 'react'
-import type { Session } from './LoginScreen'
+import type { Session } from '../lib/appAuth'
+import { reportNowPlaying } from '../lib/activityReporter'
 import { LivePlayer } from './LivePlayer'
 import { EpgGrid } from './EpgGrid'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
@@ -44,6 +45,13 @@ export function LiveTv({ session }: { session: Session }): JSX.Element {
       .then(setChannels)
       .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load channels'))
   }, [session, selectedCategoryId])
+
+  // The admin console reads what each login is streaming from these reports (activityReporter).
+  useEffect(() => {
+    reportNowPlaying(nowPlaying?.name ?? null, 'live')
+  }, [nowPlaying])
+  // Leaving the tab (or the whole app view) stops playback — clear the report on unmount.
+  useEffect(() => () => reportNowPlaying(null), [])
 
   const streamUrl = nowPlaying ? session.client.getStreamUrl('live', nowPlaying.stream_id, 'm3u8') : null
 

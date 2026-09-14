@@ -5,14 +5,15 @@ import { createServer as createHttpServer, request as httpRequest, type Incoming
 import { randomUUID } from 'crypto'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import express from 'express'
+import express, { type Request, type Response, type NextFunction } from 'express'
 import { createRequire } from 'module'
 import { createProxyServer, type ProxyServerDeps } from './lib/proxyServer.js'
 import { createNodeUpstreamRequest } from './lib/nodeUpstreamRequest.js'
 import { createTranscodeService } from './lib/transcodeService.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
-import { getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
-import { decryptSessionCredentials, decryptSessionProfileState, encryptSessionCredentials, encryptSessionProfileState, type SessionCredentials } from './lib/sessionStore.js'
+import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
+import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './lib/sessionStore.js'
+import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UserRole } from './lib/usersStore.js'
 import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
 import { compareVersions } from './lib/versionCheck.js'
 
@@ -39,34 +40,122 @@ const PUBLIC_PORT = Number(process.env.PORT ?? 8085)
 // app it was ported from.
 const PROXY_INTERNAL_PORT = Number(process.env.PROXY_INTERNAL_PORT ?? 4001)
 
-// --- Xtream/M3U target state --------------------------------------------------------------
-// This is intentionally request-aware and session-aware, not a single process-global target: the
-// web app can now serve multiple browser sessions without everyone's requests silently sharing
-// the same upstream Xtream base. The app still keeps a default fallback target for older clients
-// and for single-user setups, but the actual active target can live on the session cookie.
-let defaultProxyTargetBase: string | null = null
-const sessionProxyTargets = new Map<string, string>()
-const sessionCredentialStore = new Map<string, string>()
-const sessionProfileStore = new Map<string, string>()
+// --- Accounts & auth sessions ---------------------------------------------------------------
+// The app's own login system: individual accounts (admin/user roles) persisted in a JSON file,
+// replacing the old single shared ACCESS_PASSWORD. First launch with zero users puts the
+// client into the setup screen that creates the initial admin. Provider (Xtream) credentials
+// are NOT asked at login anymore — each account carries its own encrypted IPTV config which is
+// checked/applied right after the security check (see the /api/session routes).
+const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '..', '..', 'data')
+const usersStore = createUsersStore({ filePath: path.join(DATA_DIR, 'users.json') })
 
-function getSessionIdFromRequest(req: { headers?: Record<string, string | string[] | undefined> }): string | null {
-  const cookieHeader = typeof req.headers?.cookie === 'string' ? req.headers.cookie : undefined
-  return parseCookieValue(cookieHeader, 'allison_web_iptv_session')
+export interface NowPlayingInfo {
+  title: string
+  kind: 'live' | 'movie' | 'series'
 }
 
+export interface AuthSession {
+  token: string
+  username: string
+  role: UserRole
+  loginAt: number
+  lastSeenAt: number
+  nowPlaying: NowPlayingInfo | null
+}
+
+// Idle timeout: a login survives up to this long without any authenticated request. The
+// client's activity heartbeat (every ~15s while playing) keeps streaming sessions alive.
+const AUTH_IDLE_TTL_MS = Number(process.env.AUTH_IDLE_TTL_HOURS ?? 24) * 60 * 60 * 1000
+
+const authSessions = new Map<string, AuthSession>()
+
+// Proxy targets keyed by auth-session token (the auth cookie value) — the direct replacement
+// for the old anonymous browser-session map. One login = one upstream context.
+const sessionProxyTargets = new Map<string, string>()
+let defaultProxyTargetBase: string | null = null
+
+declare module 'express-serve-static-core' {
+  interface Request {
+    authSession?: AuthSession
+  }
+}
+
+function getAuthSession(req: { headers?: IncomingMessage['headers'] }): AuthSession | null {
+  const cookieHeader = typeof req.headers?.cookie === 'string' ? req.headers.cookie : undefined
+  const token = parseCookieValue(cookieHeader, AUTH_COOKIE_NAME)
+  if (!token) return null
+  const session = authSessions.get(token)
+  if (!session) return null
+  if (Date.now() - session.lastSeenAt > AUTH_IDLE_TTL_MS) {
+    authSessions.delete(token)
+    return null
+  }
+  return session
+}
+
+function createAuthSession(username: string, role: UserRole): AuthSession {
+  const session: AuthSession = {
+    token: randomUUID(),
+    username,
+    role,
+    loginAt: Date.now(),
+    lastSeenAt: Date.now(),
+    nowPlaying: null
+  }
+  authSessions.set(session.token, session)
+  return session
+}
+
+function setAuthCookie(res: ServerResponse, token: string): void {
+  res.setHeader('Set-Cookie', `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`)
+}
+
+function clearAuthCookie(res: ServerResponse): void {
+  res.setHeader('Set-Cookie', `${AUTH_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+}
+
+function destroyAuthSession(token: string): void {
+  authSessions.delete(token)
+  sessionProxyTargets.delete(token)
+}
+
+// Periodic sweep so abandoned sessions (closed tabs, no more heartbeats) don't accumulate
+// forever; getAuthSession already lazy-expires on every lookup.
+setInterval(() => {
+  const now = Date.now()
+  for (const [token, session] of authSessions) {
+    if (now - session.lastSeenAt > AUTH_IDLE_TTL_MS) destroyAuthSession(token)
+  }
+}, 10 * 60 * 1000).unref()
+
+function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  const session = getAuthSession(req)
+  if (!session) {
+    res.status(401).json({ error: 'Not logged in' })
+    return
+  }
+  session.lastSeenAt = Date.now()
+  req.authSession = session
+  next()
+}
+
+function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  if (req.authSession?.role !== 'admin') {
+    res.status(403).json({ error: 'Admin access required' })
+    return
+  }
+  next()
+}
+
+// --- Xtream/M3U target state --------------------------------------------------------------
+// This is intentionally request-aware and login-aware, not a single process-global target: the
+// web app can now serve multiple logged-in users without everyone's requests silently sharing
+// the same upstream Xtream base. The app still keeps a default fallback target for older
+// clients and for single-user setups, but the actual active target lives on the auth session.
 function getProxyTargetBase(req?: IncomingMessage): string | null {
   if (!req) return defaultProxyTargetBase ? normalizeProxyTargetBase(defaultProxyTargetBase) : null
   const target = getTargetForRequest(req.headers, defaultProxyTargetBase, sessionProxyTargets)
   return target ? normalizeProxyTargetBase(target) : null
-}
-
-function ensureSessionId(req: IncomingMessage, res: ServerResponse): string {
-  const sessionId = getSessionIdFromRequest(req)
-  if (sessionId) return sessionId
-
-  const nextSessionId = randomUUID()
-  res.setHeader('Set-Cookie', `allison_web_iptv_session=${encodeURIComponent(nextSessionId)}; Path=/; HttpOnly; SameSite=Lax`)
-  return nextSessionId
 }
 
 // --- ffmpeg / transcode service ------------------------------------------------------------
@@ -83,9 +172,10 @@ const transcodeService = createTranscodeService({ resolveFfmpegPath })
 
 // --- EPG aggregation service ----------------------------------------------------------------
 // Fetches/caches/merges the provider guide with any extra XMLTV sources configured on the
-// session (see LoginScreen's "Additional EPG guide URLs") — the server-side replacement for the
-// client's old download-98MB-of-XML-per-tab approach, and the home of the wider channel→guide
-// matching layer (epgMatching.ts) that recovers channels the exact-id join missed.
+// account (see the IPTV config screen's "Additional EPG guide URLs") — the server-side
+// replacement for the client's old download-98MB-of-XML-per-tab approach, and the home of the
+// wider channel→guide matching layer (epgMatching.ts) that recovers channels the exact-id join
+// missed.
 const epgService = createEpgService()
 
 const MAX_EPG_URLS = 8
@@ -134,20 +224,228 @@ proxyServer.listen(PROXY_INTERNAL_PORT, '127.0.0.1', () => {
 const app = express()
 app.use(express.json())
 
-// Genuinely new work with no desktop-app counterpart at all — the Electron app never needed
-// this because Electron's own window was implicitly the one and only "user." Deliberately
-// minimal for this scaffold: a single shared secret via env var, not a real account system —
-// see the effort-assessment plan's "Add a real login gate" for what a fuller version needs.
-app.post('/api/login', (req, res) => {
-  const configuredPassword = process.env.ACCESS_PASSWORD
-  if (!configuredPassword) {
-    res.status(500).json({ error: 'Server has no ACCESS_PASSWORD configured' })
+// --- Auth: app-level username/password accounts (replaces the old ACCESS_PASSWORD gate) ----
+
+// Which screen the client should show: first-run setup (no users yet), the login form, or the
+// app itself. iptvConfigured tells the client whether the post-login IPTV config step can
+// auto-connect or needs to ask for provider details.
+app.get('/api/auth/state', (req, res) => {
+  const session = getAuthSession(req)
+  if (session) session.lastSeenAt = Date.now()
+  const iptvCredentials = session ? usersStore.getIptvCredentials(session.username) : null
+  res.json({
+    usersExist: usersStore.hasUsers(),
+    authenticated: Boolean(session),
+    user: session ? { username: session.username, role: session.role } : null,
+    iptvConfigured: Boolean(iptvCredentials)
+  })
+})
+
+// First-run bootstrap: creates the initial admin account. Only accepted while no users exist
+// at all — afterwards account creation goes through the admin panel.
+app.post('/api/auth/setup', (req, res) => {
+  if (usersStore.hasUsers()) {
+    res.status(409).json({ error: 'Setup already completed — log in instead' })
     return
   }
-  if (req.body?.password !== configuredPassword) {
-    res.status(401).json({ error: 'Incorrect password' })
+  try {
+    const username = validateUsername(req.body?.username)
+    const password = validatePassword(req.body?.password)
+    const user = usersStore.createUser({ username, password, role: validateRole('admin') })
+    usersStore.recordLogin(username)
+    const session = createAuthSession(user.username, user.role)
+    setAuthCookie(res, session.token)
+    res.json({ ok: true, user: { username: user.username, role: user.role } })
+  } catch (err) {
+    if (err instanceof UserStoreError) {
+      res.status(400).json({ error: err.message })
+      return
+    }
+    console.error('[auth] setup failed:', err)
+    res.status(500).json({ error: 'Could not create the admin account' })
+  }
+})
+
+app.post('/api/auth/login', (req, res) => {
+  const username = typeof req.body?.username === 'string' ? req.body.username.trim() : ''
+  const password = typeof req.body?.password === 'string' ? req.body.password : ''
+  if (!username || !password) {
+    res.status(400).json({ error: 'Username and password are required' })
     return
   }
+  const user = usersStore.verifyCredentials(username, password)
+  if (!user) {
+    res.status(401).json({ error: 'Incorrect username or password' })
+    return
+  }
+  usersStore.recordLogin(user.username)
+  const session = createAuthSession(user.username, user.role)
+  setAuthCookie(res, session.token)
+  res.json({ ok: true, user: { username: user.username, role: user.role } })
+})
+
+app.post('/api/auth/logout', (req, res) => {
+  const session = getAuthSession(req)
+  if (session) destroyAuthSession(session.token)
+  clearAuthCookie(res)
+  res.json({ ok: true })
+})
+
+// Activity heartbeat: keeps the login alive and records what the user is currently streaming
+// so the admin console can show it. Sent on playback changes and every ~15s while playing.
+app.post('/api/auth/activity', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const nowPlaying = req.body?.nowPlaying
+  if (nowPlaying === null || nowPlaying === undefined) {
+    session.nowPlaying = null
+  } else if (typeof nowPlaying === 'object') {
+    const title = typeof nowPlaying.title === 'string' ? nowPlaying.title.slice(0, 200) : ''
+    const kind = nowPlaying.kind === 'movie' || nowPlaying.kind === 'series' ? nowPlaying.kind : 'live'
+    session.nowPlaying = title ? { title, kind } : null
+  }
+  res.json({ ok: true })
+})
+
+// --- Admin console: who is logged in, what they're watching, and account management --------
+
+app.get('/api/admin/sessions', requireAuth, requireAdmin, (_req, res) => {
+  const now = Date.now()
+  const sessions = [...authSessions.values()]
+    .sort((a, b) => a.loginAt - b.loginAt)
+    .map((session) => ({
+      token: session.token,
+      username: session.username,
+      role: session.role,
+      loginAt: session.loginAt,
+      lastSeenAt: session.lastSeenAt,
+      durationMs: now - session.loginAt,
+      nowPlaying: session.nowPlaying
+    }))
+  res.json({ ok: true, sessions })
+})
+
+// Force-logout a specific login (e.g. someone left a session playing at home).
+app.post('/api/admin/sessions/:token/logout', requireAuth, requireAdmin, (req, res) => {
+  const token = typeof req.params.token === 'string' ? req.params.token : ''
+  if (!authSessions.has(token)) {
+    res.status(404).json({ error: 'Session not found (it may have already ended)' })
+    return
+  }
+  destroyAuthSession(token)
+  res.json({ ok: true })
+})
+
+app.get('/api/admin/users', requireAuth, requireAdmin, (_req, res) => {
+  res.json({ ok: true, users: usersStore.listUsers() })
+})
+
+app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const user = usersStore.createUser({
+      username: req.body?.username,
+      password: req.body?.password,
+      role: validateRole(req.body?.role)
+    })
+    res.json({ ok: true, user })
+  } catch (err) {
+    if (err instanceof UserStoreError) {
+      res.status(400).json({ error: err.message })
+      return
+    }
+    console.error('[admin] create user failed:', err)
+    res.status(500).json({ error: 'Could not create the user' })
+  }
+})
+
+app.delete('/api/admin/users/:username', requireAuth, requireAdmin, (req, res) => {
+  const username = typeof req.params.username === 'string' ? req.params.username : ''
+  if (username === (req.authSession as AuthSession).username) {
+    res.status(400).json({ error: 'You cannot remove the account you are logged in with' })
+    return
+  }
+  try {
+    const user = usersStore.deleteUser(username)
+    // Drop any live logins belonging to the removed account immediately.
+    for (const [token, session] of authSessions) {
+      if (session.username === user.username) destroyAuthSession(token)
+    }
+    res.json({ ok: true, user })
+  } catch (err) {
+    if (err instanceof UserStoreError) {
+      res.status(400).json({ error: err.message })
+      return
+    }
+    console.error('[admin] delete user failed:', err)
+    res.status(500).json({ error: 'Could not remove the user' })
+  }
+})
+
+// --- Post-login IPTV configuration (per account) --------------------------------------------
+
+// Resolves the per-account credentials /api/epg needs (the provider guide is fetched
+// server-side with them — the same encrypted store /api/session reads). A login that never
+// configured IPTV gets a plain 401 rather than an empty guide.
+function resolveEpgCredentials(req: IncomingMessage): (EpgServiceCredentials & { epgUrls: string[] }) | null {
+  const cookieHeader = typeof req.headers?.cookie === 'string' ? req.headers.cookie : undefined
+  const token = parseCookieValue(cookieHeader, AUTH_COOKIE_NAME)
+  if (!token || !authSessions.has(token)) return null
+  const session = authSessions.get(token)
+  if (!session) return null
+  const stored = usersStore.getIptvCredentials(session.username)
+  if (!stored) return null
+  try {
+    const credentials = decryptSessionCredentials(stored)
+    return { server: credentials.server, username: credentials.username, password: credentials.password, epgUrls: credentials.epgUrls ?? [] }
+  } catch {
+    return null
+  }
+}
+
+// The client's post-login IPTV check: returns the account's saved provider config (including
+// the provider password, which the client needs to build stream URLs) or configured:false so
+// the UI asks for it.
+app.get('/api/session', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const stored = usersStore.getIptvCredentials(session.username)
+  if (!stored) {
+    res.json({ ok: true, configured: false, server: null, username: null, password: null, epgUrls: [] })
+    return
+  }
+  try {
+    const credentials = decryptSessionCredentials(stored)
+    res.json({ ok: true, configured: true, ...credentials })
+  } catch {
+    usersStore.setIptvCredentials(session.username, null)
+    res.json({ ok: true, configured: false, server: null, username: null, password: null, epgUrls: [] })
+  }
+})
+
+app.post('/api/session/save', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const { server, username, password, epgUrls } = req.body ?? {}
+  if (typeof server !== 'string' || typeof username !== 'string' || typeof password !== 'string' || !server.trim() || !username.trim() || !password) {
+    res.status(400).json({ error: 'Missing IPTV server, username or password' })
+    return
+  }
+  const credentials: SessionCredentials = {
+    server: server.trim(),
+    username: username.trim(),
+    password,
+    epgUrls: sanitizeEpgUrls(epgUrls)
+  }
+  usersStore.setIptvCredentials(session.username, encryptSessionCredentials(credentials))
+
+  // Point the proxy at the provider right away so the client's first Xtream request works
+  // without a separate /api/connect round trip.
+  const normalizedServer = normalizeProxyTargetBase(credentials.server)
+  sessionProxyTargets.set(session.token, normalizedServer)
+  defaultProxyTargetBase = normalizedServer
+  res.json({ ok: true })
+})
+
+app.post('/api/session/clear', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  usersStore.setIptvCredentials(session.username, null)
   res.json({ ok: true })
 })
 
@@ -180,30 +478,14 @@ app.get('/api/version-check', (_req, res) => {
   })()
 })
 
-// Resolves the per-session credentials /api/epg needs (the provider guide is fetched
-// server-side with them — the same encrypted session store /api/session reads). A session that
-// never completed a login has no credentials and gets a plain 401 rather than an empty guide.
-function resolveEpgCredentials(req: IncomingMessage): (EpgServiceCredentials & { epgUrls: string[] }) | null {
-  const sessionId = getSessionIdFromRequest(req)
-  if (!sessionId) return null
-  const stored = sessionCredentialStore.get(sessionId)
-  if (!stored) return null
-  try {
-    const credentials = decryptSessionCredentials(stored)
-    return { server: credentials.server, username: credentials.username, password: credentials.password, epgUrls: credentials.epgUrls ?? [] }
-  } catch {
-    return null
-  }
-}
-
 // Windowed, aggregated programme listings for the EPG grid — provider guide first, extra
 // user-configured XMLTV sources filling channels the provider has nothing for (epgService.ts).
 // Clients refetch per time-window navigation; guides themselves are cached server-side per TTL.
-app.get('/api/epg', (req, res) => {
+app.get('/api/epg', requireAuth, (req, res) => {
   void (async (): Promise<void> => {
     const credentials = resolveEpgCredentials(req)
     if (!credentials) {
-      res.status(401).json({ error: 'No session credentials — log in first' })
+      res.status(401).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
       return
     }
     const startMs = Number(req.query.start)
@@ -225,11 +507,11 @@ app.get('/api/epg', (req, res) => {
 // Per-source health of the aggregated guide — a verification/ops surface for "is the provider
 // guide actually loading, and did my extra URLs work", deliberately separate from /api/epg so a
 // status poll never pays for windowed listings.
-app.get('/api/epg/status', (req, res) => {
+app.get('/api/epg/status', requireAuth, (req, res) => {
   void (async (): Promise<void> => {
     const credentials = resolveEpgCredentials(req)
     if (!credentials) {
-      res.status(401).json({ error: 'No session credentials — log in first' })
+      res.status(401).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
       return
     }
     try {
@@ -242,135 +524,20 @@ app.get('/api/epg/status', (req, res) => {
   })()
 })
 
-app.get('/api/session', (req, res) => {
-  const sessionId = getSessionIdFromRequest(req)
-  if (!sessionId) {
-    res.json({ ok: true, sessionId: null, server: null, username: null, password: null, accessPassword: null })
-    return
-  }
-
-  const stored = sessionCredentialStore.get(sessionId)
-  if (!stored) {
-    res.json({ ok: true, sessionId, server: null, username: null, password: null, accessPassword: null })
-    return
-  }
-
-  try {
-    const credentials = decryptSessionCredentials(stored)
-    res.json({ ok: true, sessionId, ...credentials })
-  } catch {
-    sessionCredentialStore.delete(sessionId)
-    res.json({ ok: true, sessionId, server: null, username: null, password: null, accessPassword: null })
-  }
-})
-
-app.get('/api/session/profiles', (req, res) => {
-  const sessionId = getSessionIdFromRequest(req)
-  if (!sessionId) {
-    res.json({ ok: true, sessionId: null, activeProfileId: null, profiles: [] })
-    return
-  }
-
-  const stored = sessionProfileStore.get(sessionId)
-  if (!stored) {
-    res.json({ ok: true, sessionId, activeProfileId: null, profiles: [] })
-    return
-  }
-
-  try {
-    const state = decryptSessionProfileState(stored)
-    res.json({ ok: true, sessionId, ...state })
-  } catch {
-    sessionProfileStore.delete(sessionId)
-    res.json({ ok: true, sessionId, activeProfileId: null, profiles: [] })
-  }
-})
-
-app.post('/api/session/save', (req, res) => {
-  const sessionId = ensureSessionId(req, res)
-  const { accessPassword, server, username, password, profileId, profileName, epgUrls } = req.body ?? {}
-  const legacyCredentials = { accessPassword, server, username, password }
-  if (typeof accessPassword === 'string' && typeof server === 'string' && typeof username === 'string' && typeof password === 'string') {
-    const payload: SessionCredentials = { accessPassword, server, username, password, epgUrls: sanitizeEpgUrls(epgUrls) }
-    sessionCredentialStore.set(sessionId, encryptSessionCredentials(payload))
-
-    const previousProfiles = (() => {
-      const saved = sessionProfileStore.get(sessionId)
-      if (!saved) return { activeProfileId: null, profiles: [] }
-      try {
-        return decryptSessionProfileState(saved)
-      } catch {
-        sessionProfileStore.delete(sessionId)
-        return { activeProfileId: null, profiles: [] }
-      }
-    })()
-
-    const nextProfileId = typeof profileId === 'string' && profileId.trim().length > 0 ? profileId : `profile-${Date.now()}`
-    const nextName = typeof profileName === 'string' && profileName.trim().length > 0 ? profileName : username
-    const nextProfiles = previousProfiles.profiles.filter((profile) => profile.id !== nextProfileId)
-    nextProfiles.push({ id: nextProfileId, name: nextName, credentials: payload, epgUrls: payload.epgUrls })
-    const nextState = {
-      activeProfileId: previousProfiles.activeProfileId ?? nextProfileId,
-      profiles: nextProfiles
-    }
-    sessionProfileStore.set(sessionId, encryptSessionProfileState(nextState))
-    res.json({ ok: true, sessionId, profileId: nextProfileId, profiles: nextState.profiles, activeProfileId: nextState.activeProfileId })
-    return
-  }
-
-  res.status(400).json({ error: 'Missing session credentials' })
-})
-
-app.post('/api/session/profiles', (req, res) => {
-  const sessionId = ensureSessionId(req, res)
-  const { activeProfileId, profiles } = req.body ?? {}
-  if (!Array.isArray(profiles)) {
-    res.status(400).json({ error: 'Missing profiles list' })
-    return
-  }
-
-  const nextState = {
-    activeProfileId: typeof activeProfileId === 'string' ? activeProfileId : null,
-    profiles: profiles.map((profile) => ({
-      id: String(profile?.id ?? `profile-${Date.now()}-${Math.random().toString(16).slice(2)}`),
-      name: typeof profile?.name === 'string' ? profile.name : 'Saved profile',
-      credentials: {
-        accessPassword: String(profile?.credentials?.accessPassword ?? ''),
-        server: String(profile?.credentials?.server ?? ''),
-        username: String(profile?.credentials?.username ?? ''),
-        password: String(profile?.credentials?.password ?? '')
-      },
-      epgUrls: sanitizeEpgUrls(profile?.epgUrls) ?? sanitizeEpgUrls(profile?.credentials?.epgUrls)
-    }))
-  }
-
-  sessionProfileStore.set(sessionId, encryptSessionProfileState(nextState))
-  res.json({ ok: true, sessionId, ...nextState })
-})
-
-app.post('/api/session/clear', (req, res) => {
-  const sessionId = getSessionIdFromRequest(req)
-  if (sessionId) {
-    sessionCredentialStore.delete(sessionId)
-  }
-  res.clearCookie('allison_web_iptv_session')
-  res.json({ ok: true })
-})
-
 // Points the proxy at a (possibly different) Xtream server — the web equivalent of the
 // desktop app's own proxy.setTarget IPC call (useAppStore.ts's connect()).
-app.post('/api/connect', (req, res) => {
+app.post('/api/connect', requireAuth, (req, res) => {
   const server = typeof req.body?.server === 'string' ? req.body.server : null
   if (!server) {
     res.status(400).json({ error: 'Missing "server" in request body' })
     return
   }
 
+  const session = req.authSession as AuthSession
   const normalizedServer = normalizeProxyTargetBase(server)
-  const sessionId = ensureSessionId(req, res)
-  sessionProxyTargets.set(sessionId, normalizedServer)
+  sessionProxyTargets.set(session.token, normalizedServer)
   defaultProxyTargetBase = normalizedServer
-  res.json({ ok: true, sessionId })
+  res.json({ ok: true })
 })
 
 // Resolves a client-relative stream path (e.g. /live/user/pass/123.m3u8, exactly what
@@ -379,13 +546,13 @@ app.post('/api/connect', (req, res) => {
 // network itself, not through this app's own proxy, so it needs a real reachable URL rather
 // than a same-origin relative one. Mirrors the desktop app's own Player.tsx, which passes
 // nowPlaying.url (already the raw upstream URL there) straight to transcode:start.
-function resolveUpstreamUrl(relativeOrAbsolute: string, req?: IncomingMessage): string {
+function resolveUpstreamUrl(relativeOrAbsolute: string, req: Request): string {
   const targetBase = getProxyTargetBase(req)
-  if (!targetBase) throw new Error('Not connected to an Xtream server')
+  if (!targetBase) throw new Error('Not connected to an IPTV server')
   return new URL(relativeOrAbsolute, targetBase).href
 }
 
-app.post('/api/transcode/start', (req, res) => {
+app.post('/api/transcode/start', requireAuth, (req, res) => {
   const { sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex } = req.body ?? {}
   if (typeof sourceUrl !== 'string' || typeof sessionId !== 'string') {
     res.status(400).json({ error: 'Missing sourceUrl/sessionId' })
@@ -407,7 +574,7 @@ app.post('/api/transcode/start', (req, res) => {
     })
 })
 
-app.post('/api/transcode/stop', (req, res) => {
+app.post('/api/transcode/stop', requireAuth, (req, res) => {
   const sessionId = req.body?.sessionId
   if (typeof sessionId !== 'string') {
     res.status(400).json({ error: 'Missing sessionId' })
@@ -422,7 +589,7 @@ app.post('/api/transcode/stop', (req, res) => {
     })
 })
 
-app.post('/api/transcode/probeTracks', (req, res) => {
+app.post('/api/transcode/probeTracks', requireAuth, (req, res) => {
   const sourceUrl = req.body?.sourceUrl
   if (typeof sourceUrl !== 'string') {
     res.status(400).json({ error: 'Missing sourceUrl' })
@@ -439,6 +606,17 @@ app.post('/api/transcode/probeTracks', (req, res) => {
 
 // Every request the ported proxy owns — the Xtream-base-relative path, plus its two explicit
 // prefixes — gets relayed into the internal proxy server rather than reimplemented here.
+// Gated behind requireAuth so provider streams/API are never reachable without a login.
+app.use((req, res, next) => {
+  if (req.path.startsWith('/__fetch/') || req.path.startsWith('/__transcode/') || req.path === '/player_api.php' || req.path === '/xmltv.php' || req.path.startsWith('/live/') || req.path.startsWith('/movie/') || req.path.startsWith('/series/') || req.path.startsWith('/timeshift/')) {
+    requireAuth(req, res, () => {
+      relayToProxy(req as IncomingMessage, res as ServerResponse)
+    })
+    return
+  }
+  next()
+})
+
 function relayToProxy(req: IncomingMessage, res: ServerResponse): void {
   const relay = httpRequest(
     {
@@ -461,14 +639,6 @@ function relayToProxy(req: IncomingMessage, res: ServerResponse): void {
   req.pipe(relay)
 }
 
-app.use((req, res, next) => {
-  if (req.path.startsWith('/__fetch/') || req.path.startsWith('/__transcode/') || req.path === '/player_api.php' || req.path === '/xmltv.php' || req.path.startsWith('/live/') || req.path.startsWith('/movie/') || req.path.startsWith('/series/') || req.path.startsWith('/timeshift/')) {
-    relayToProxy(req, res)
-    return
-  }
-  next()
-})
-
 const publicDir = path.join(__dirname, '..', '..', 'public')
 app.use(express.static(publicDir))
 app.get('*', (_req, res) => {
@@ -477,6 +647,9 @@ app.get('*', (_req, res) => {
 
 createHttpServer(app).listen(PUBLIC_PORT, () => {
   console.log(`[server] Allison Web IPTV v${pkg.version} listening on http://localhost:${PUBLIC_PORT}`)
+  if (!usersStore.hasUsers()) {
+    console.log('[setup] No user accounts yet — open the app to create the initial admin account')
+  }
 })
 
 // Same reasoning as the desktop app's own 'before-quit' handler: an active transcode session

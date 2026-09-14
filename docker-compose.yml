@@ -6,14 +6,21 @@ services:
       - "8085:8085"
     environment:
       - PORT=8085
-      - ACCESS_PASSWORD=changeme
-      - SESSION_SECRET=change-this-to-a-long-random-secret
+      - SESSION_SECRET=***
+      # All variable/persistent state (user accounts, hashed passwords, encrypted per-user
+      # Xtream/IPTV credentials) lives under /appdata inside the container. The :rw mapping
+      # below is what makes container/image updates keep that data — don't remove it.
+      - DATA_DIR=/appdata
       # Only needed if your own network does TLS inspection (a corporate proxy, some
       # security appliances) — see the README's own account of hitting this directly.
       # Mount a PEM bundle into the container and point this at it if so:
       # - NODE_EXTRA_CA_CERTS=/certs/ca-bundle.pem
-    # volumes:
-    #   - ./ca-bundle.pem:/certs/ca-bundle.pem:ro
+    volumes:
+      # Persistent storage, mapped read-write: survives container recreation and image
+      # updates. Without this, an update wipes accounts and everyone lands back on the
+      # first-run admin setup screen.
+      - ./appdata:/appdata:rw
+      # - ./ca-bundle.pem:/certs/ca-bundle.pem:ro
     # Also baked into the image's own Dockerfile (so a plain `docker run` gets it too) —
     # declared here as well so stack-management UIs that only read the compose file itself
     # (rather than inspecting the image) still surface health status.

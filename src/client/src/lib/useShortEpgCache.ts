@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import type { Session } from '../components/LoginScreen'
+import type { Session } from './appAuth'
 import type { ShortEpgProgram } from './types'
 
 const MAX_CONCURRENT_FETCHES = 4

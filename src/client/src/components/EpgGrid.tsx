@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties, type JSX } from 'react'
 import { List, useListRef } from 'react-window'
 import { pct } from '../lib/epgTime'
-import type { Session } from './LoginScreen'
+import type { Session } from '../lib/appAuth'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
 import { useAggregatedEpg, type AggregatedEpgData } from '../lib/useAggregatedEpg'
 import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
