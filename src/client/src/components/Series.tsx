@@ -169,7 +169,6 @@ export function Series({
       0
     )
     onPlayHandled?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playRequest?.nonce])
 
   const resumeFor = useCallback(

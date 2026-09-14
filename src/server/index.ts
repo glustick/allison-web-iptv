@@ -19,6 +19,8 @@ import { createEpgService, type EpgServiceCredentials } from './lib/epgService.j
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
 import { createSearchService } from './lib/searchService.js'
 import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagnostics.js'
+import { createRateLimiter } from './lib/rateLimit.js'
+import { assertSafeExternalUrl, isSameOrigin, isSecureRequest, securityHeaders, UnsafeUrlError } from './lib/security.js'
 import {
   applyPendingRestore,
   backupDatabase,
@@ -129,12 +131,21 @@ function createAuthSession(username: string, role: UserRole): AuthSession {
   return session
 }
 
-function setAuthCookie(res: ServerResponse, token: string): void {
-  res.setHeader('Set-Cookie', `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`)
+// `Secure` is applied when the request actually arrived over TLS rather than unconditionally:
+// the app is legitimately reached both ways (https:// through the reverse proxy, http:// on the
+// LAN), and an unconditional Secure flag would break LAN sign-in outright.
+function setAuthCookie(res: ServerResponse, token: string, secure: boolean): void {
+  res.setHeader(
+    'Set-Cookie',
+    `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`
+  )
 }
 
-function clearAuthCookie(res: ServerResponse): void {
-  res.setHeader('Set-Cookie', `${AUTH_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+function clearAuthCookie(res: ServerResponse, secure: boolean): void {
+  res.setHeader(
+    'Set-Cookie',
+    `${AUTH_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`
+  )
 }
 
 function destroyAuthSession(token: string): void {
@@ -277,6 +288,17 @@ proxyServer.listen(PROXY_INTERNAL_PORT, '127.0.0.1', () => {
 
 // --- Public app: static client + a small API, with proxy-shaped requests relayed inward ---
 const app = express()
+
+// Behind a reverse proxy (Docker port mapping, Synology's proxy) the real client address and the
+// original scheme arrive in X-Forwarded-*. Trusting those headers only from private/loopback
+// sources avoids the spoofing problem of trusting them unconditionally, while still letting the
+// login throttle see distinct clients and letting cookies know they arrived over TLS.
+// TRUST_PROXY=false turns it off for a directly-exposed deployment.
+app.set('trust proxy', process.env.TRUST_PROXY === 'false' ? false : ['loopback', 'linklocal', 'uniquelocal'])
+app.use((req, res, next) => {
+  securityHeaders(req, res)
+  next()
+})
 app.use(express.json())
 
 // --- Auth: app-level username/password accounts (replaces the old ACCESS_PASSWORD gate) ----
@@ -316,7 +338,7 @@ app.post('/api/auth/setup', (req, res) => {
     const user = usersStore.createUser({ username, password, role: validateRole('admin') })
     usersStore.recordLogin(username)
     const session = createAuthSession(user.username, user.role)
-    setAuthCookie(res, session.token)
+    setAuthCookie(res, session.token, isSecureRequest(req))
     res.json({ ok: true, user: { username: user.username, role: user.role } })
   } catch (err) {
     if (err instanceof UserStoreError) {
@@ -330,6 +352,10 @@ app.post('/api/auth/setup', (req, res) => {
   }
 })
 
+// Sign-in throttling: one key per caller address and one per account, because "one host trying
+// many accounts" and "many hosts trying one account" are different attacks.
+const loginLimiter = createRateLimiter()
+
 app.post('/api/auth/login', (req, res) => {
   const username = typeof req.body?.username === 'string' ? req.body.username.trim() : ''
   const password = typeof req.body?.password === 'string' ? req.body.password : ''
@@ -337,18 +363,30 @@ app.post('/api/auth/login', (req, res) => {
     res.status(400).json({ error: 'Username and password are required' })
     return
   }
+  const throttleKeys = [`ip:${req.ip ?? req.socket.remoteAddress ?? 'unknown'}`, `user:${username.toLowerCase()}`]
+  const blocked = throttleKeys.map((key) => loginLimiter.check(key)).filter((decision) => !decision.allowed)
+  if (blocked.length > 0) {
+    const retryAfter = Math.max(...blocked.map((decision) => decision.retryAfterSeconds ?? 60))
+    res.setHeader('Retry-After', String(retryAfter))
+    res.status(429).json({
+      error: `Too many failed sign-in attempts. Try again in ${Math.max(1, Math.ceil(retryAfter / 60))} minute(s).`
+    })
+    return
+  }
   try {
     const user = usersStore.verifyCredentials(username, password)
     if (!user) {
+      for (const key of throttleKeys) loginLimiter.recordFailure(key)
       res.status(401).json({ error: 'Incorrect username or password' })
       return
     }
+    for (const key of throttleKeys) loginLimiter.recordSuccess(key)
     // recordLogin writes the users file — on a read-only or full data volume that write is
     // what fails here, so keep the login itself inside this guard rather than letting an
     // uncaught throw turn into an opaque HTML 500.
     usersStore.recordLogin(user.username)
     const session = createAuthSession(user.username, user.role)
-    setAuthCookie(res, session.token)
+    setAuthCookie(res, session.token, isSecureRequest(req))
     res.json({ ok: true, user: { username: user.username, role: user.role } })
   } catch (err) {
     console.error('[auth] login failed:', err)
@@ -359,7 +397,7 @@ app.post('/api/auth/login', (req, res) => {
 app.post('/api/auth/logout', (req, res) => {
   const session = getAuthSession(req)
   if (session) destroyAuthSession(session.token)
-  clearAuthCookie(res)
+  clearAuthCookie(res, isSecureRequest(req))
   res.json({ ok: true })
 })
 
@@ -671,6 +709,11 @@ app.get('/api/admin/health', requireAuth, requireAdmin, (req, res) => {
           active: transcodeService.stats()
         },
         search: searchService.status(),
+        security: {
+          loginThrottleKeys: loginLimiter.size(),
+          trustProxy: app.get('trust proxy') !== false,
+          secureRequest: isSecureRequest(req)
+        },
         provider: credentials ? await probeProvider(credentials) : { configured: false },
         backups: listBackups(DATA_DIR),
         errors: recentErrors(20)
@@ -1033,10 +1076,16 @@ app.post('/api/epg/sources', requireAuth, (req, res) => {
     res.status(400).json({ error: 'epgUrls must be an array of URLs' })
     return
   }
-  const invalid = raw.find((url: unknown) => typeof url !== 'string' || !/^https?:\/\//i.test(url.trim()))
-  if (invalid !== undefined) {
-    res.status(400).json({ error: 'Each EPG URL must start with http:// or https://' })
-    return
+  // Validated, not merely pattern-matched: a guide URL is fetched *by the server*, so loopback
+  // and cloud-metadata addresses are refused rather than probed.
+  try {
+    for (const url of raw) assertSafeExternalUrl(url)
+  } catch (err) {
+    if (err instanceof UnsafeUrlError) {
+      res.status(400).json({ error: err.message })
+      return
+    }
+    throw err
   }
   try {
     const credentials = resolveAccountCredentials(session.username)
@@ -1148,7 +1197,23 @@ app.post('/api/connect', requireAuth, (req, res) => {
 function resolveUpstreamUrl(relativeOrAbsolute: string, req: Request): string {
   const targetBase = getProxyTargetBase(req)
   if (!targetBase) throw new Error('Not connected to an IPTV server')
-  return new URL(relativeOrAbsolute, targetBase).href
+  // The client normally sends a same-origin path (/live/user/pass/id.m3u8). An *absolute* URL in
+  // that field would replace the provider base wholesale, which made this a request-forgery
+  // primitive: any signed-in user could point the server at an arbitrary address and have the
+  // response handed back as "video". Only the configured provider's own origin is allowed.
+  let resolved: URL
+  try {
+    resolved = new URL(relativeOrAbsolute, targetBase)
+  } catch {
+    throw new Error('Invalid source URL')
+  }
+  if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+    throw new Error('Only http(s) sources are supported')
+  }
+  if (!isSameOrigin(resolved, new URL(targetBase))) {
+    throw new Error('Refusing to fetch a URL outside the configured IPTV provider')
+  }
+  return resolved.href
 }
 
 app.post('/api/transcode/start', requireAuth, (req, res) => {

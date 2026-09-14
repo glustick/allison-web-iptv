@@ -145,7 +145,6 @@ export function LiveTv({
     setSelection({ type: 'all' })
     selectChannel(synthesizeStream(playRequest.streamId, playRequest.name, null))
     onPlayHandled?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playRequest?.nonce])
 
   const liveFavourites = useMemo(() => prefs.favourites.filter((f) => f.kind === 'live'), [prefs.favourites])

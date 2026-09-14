@@ -81,7 +81,6 @@ export function Movies({
     if (!playRequest || playRequest.kind !== 'movie') return
     play(playRequest.streamId, playRequest.name, 0)
     onPlayHandled?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playRequest?.nonce])
 
   const movieResume = useMemo(() => {
