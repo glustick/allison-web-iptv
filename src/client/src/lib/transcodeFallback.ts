@@ -61,6 +61,12 @@ export function useTranscodeFallback(): {
   selectTracks: (requested: TrackSelectionRequest, audioTracks?: Array<{ index: number }>, subtitleTracks?: Array<{ index: number; supported?: boolean }>) => TrackSelectionResult
   reset: () => void
   beginRun: () => void
+  /** True while the player is running off a local transcode session rather than the source. */
+  hasSession: () => boolean
+  /** Tears down the current session (if any) and starts a fresh one — the recovery path for a
+   *  transcode whose output stopped advancing, where reloading the same dead session id would
+   *  leave the picture frozen forever. */
+  restartFallback: (originalUrl: string, onReload: () => void, onError?: (message: string) => void) => boolean
 } {
   const transcodedUrlRef = useRef<string | null>(null)
   const triedRef = useRef(false)
@@ -68,19 +74,24 @@ export function useTranscodeFallback(): {
   const sessionIdRef = useRef<string | null>(null)
   const [, forceRender] = useState(0)
 
+  const stopSession = useCallback((sessionId: string | null): void => {
+    if (!sessionId) return
+    fetch('/api/transcode/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId })
+    }).catch((err) => console.error('[transcode] failed to stop session:', err))
+  }, [])
+  const stopSessionRef = useRef(stopSession)
+  stopSessionRef.current = stopSession
+
   const reset = useCallback(() => {
     triedRef.current = false
     awaitingRef.current = false
     transcodedUrlRef.current = null
     const stale = sessionIdRef.current
     sessionIdRef.current = null
-    if (stale) {
-      fetch('/api/transcode/stop', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: stale })
-      }).catch((err) => console.error('[transcode] failed to stop abandoned session:', err))
-    }
+    stopSessionRef.current(stale)
   }, [])
 
   const beginRun = useCallback(() => {
@@ -143,5 +154,30 @@ export function useTranscodeFallback(): {
     [startFallback]
   )
 
-  return { getSourceUrl, tryFallback, tryFallbackForSilentAudio, selectTracks, reset, beginRun }
+  const hasSession = useCallback((): boolean => transcodedUrlRef.current !== null, [])
+
+  const restartFallback = useCallback(
+    (originalUrl: string, onReload: () => void, onError?: (message: string) => void): boolean => {
+      // Drop the dead session first so the replacement gets its own /__transcode/<id>/ output.
+      const stale = sessionIdRef.current
+      sessionIdRef.current = null
+      transcodedUrlRef.current = null
+      stopSession(stale)
+      triedRef.current = true
+      startFallback(originalUrl, false, onReload, onError)
+      return true
+    },
+    [startFallback, stopSession]
+  )
+
+  return {
+    getSourceUrl,
+    tryFallback,
+    tryFallbackForSilentAudio,
+    selectTracks,
+    reset,
+    beginRun,
+    hasSession,
+    restartFallback
+  }
 }

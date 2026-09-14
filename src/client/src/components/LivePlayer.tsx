@@ -34,13 +34,19 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
   const [audioTrack, setAudioTrack] = useState(-1)
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
-  const { getSourceUrl, tryFallback, reset, beginRun } = useTranscodeFallback()
+  const { getSourceUrl, tryFallback, reset, beginRun, hasSession, restartFallback } = useTranscodeFallback()
+  // Recovery ladder state, deliberately on the component (not in the effect): the effect is
+  // torn down and rebuilt by every reload tick, and an attempt counter that reset with it
+  // would loop forever instead of ever escalating.
+  const reloadAttemptsRef = useRef(0)
+  const lastReloadAtRef = useRef(0)
 
   // A genuinely different channel resets the fallback (and stops any in-flight ffmpeg
   // session) — an internal reload (reloadTick bumping after a successful fallback) must not,
   // or the freshly-started transcode session would immediately be torn down again.
   useEffect(() => {
     reset()
+    reloadAttemptsRef.current = 0
   }, [channelKey, reset])
 
   useEffect(() => {
@@ -100,8 +106,35 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
         kicksSinceLastFragment
       })
       if (actions.reloadSource) {
-        console.warn('[player] live stream wedged after backgrounding; reloading source')
         gaveUp = true
+        const attempt = reloadAttemptsRef.current + 1
+        reloadAttemptsRef.current = attempt
+        lastReloadAtRef.current = Date.now()
+        console.warn(`[player] live stream stalled; recovery attempt ${attempt}`)
+        // Escalation, because a plain reload can only fix a wedged *player*, not a wedged
+        // *stream*: 1) rebuild the source; 2) switch engines (start a transcode, or replace a
+        // dead transcode session — reloading the same dead session id just re-freezes);
+        // 3) stop pretending and offer a visible retry instead of a silent frozen frame.
+        if (attempt === 2) {
+          const escalated = hasSession()
+            ? restartFallback(
+                url,
+                () => setReloadTick((t) => t + 1),
+                (message) => {
+                  fatalErrorShown = true
+                  setError(`Playback stalled and restarting the transcode failed: ${message}`)
+                }
+              )
+            : false
+          if (escalated) return
+        }
+        if (attempt >= 3) {
+          fatalErrorShown = true
+          setError(
+            'This stream stopped responding and could not be recovered automatically. Press Retry to start it again.'
+          )
+          return
+        }
         setReloadTick((t) => t + 1)
         return
       }
@@ -117,6 +150,11 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     const noteFragmentActivity = (): void => {
       lastFragmentAt = Date.now()
       kicksSinceLastFragment = 0
+      // Fragments after a recovery attempt mean it actually worked — give a later, unrelated
+      // stall its own full ladder instead of inheriting this one's count.
+      if (reloadAttemptsRef.current > 0 && Date.now() - lastReloadAtRef.current > 30_000) {
+        reloadAttemptsRef.current = 0
+      }
     }
 
     if (Hls.isSupported()) {
@@ -226,6 +264,24 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     }
   }, [channelKey, reloadTick])
 
+  // A player-level retry can never succeed if the login itself ended (server restart, expired
+  // session) — in that case send the user through sign-in rather than looping on a dead source.
+  async function retryPlayback(): Promise<void> {
+    try {
+      const res = await fetch('/api/auth/state')
+      const data = res.ok ? ((await res.json()) as { authenticated?: boolean }) : null
+      if (!data?.authenticated) {
+        window.location.reload()
+        return
+      }
+    } catch {
+      // Offline — fall through and retry the player anyway.
+    }
+    reloadAttemptsRef.current = 0
+    setError(null)
+    setReloadTick((t) => t + 1)
+  }
+
   return (
     <div className="player-wrap">
       <video ref={videoRef} controls />
@@ -243,7 +299,14 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
           if (hlsRef.current) hlsRef.current.subtitleTrack = index
         }}
       />
-      {error && <div className="login-error" style={{ padding: '6px 16px' }}>{error}</div>}
+      {error && (
+        <div className="player-error">
+          <span>{error}</span>
+          <button type="button" className="admin-small-btn" onClick={() => void retryPlayback()}>
+            Retry
+          </button>
+        </div>
+      )}
     </div>
   )
 }

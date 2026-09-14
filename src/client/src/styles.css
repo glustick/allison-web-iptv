@@ -869,3 +869,12 @@ body.resizing-row {
   border-color: #3a4154;
   color: #ffffff;
 }
+
+.player-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  color: #ff6b6b;
+  font-size: 13px;
+}

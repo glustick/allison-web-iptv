@@ -166,7 +166,27 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 function getProxyTargetBase(req?: IncomingMessage): string | null {
   if (!req) return defaultProxyTargetBase ? normalizeProxyTargetBase(defaultProxyTargetBase) : null
   const target = getTargetForRequest(req.headers, defaultProxyTargetBase, sessionProxyTargets)
-  return target ? normalizeProxyTargetBase(target) : null
+  if (target) return normalizeProxyTargetBase(target)
+
+  // Fall back to the account's own saved provider. Without this, a session that never POSTed
+  // /api/connect — a fresh login, a reloaded player, or any request after a server restart —
+  // had no per-session target and every stream request failed with "No upstream Xtream server
+  // configured" (502). Found live: the provider was healthy and answered fine directly while
+  // the app rejected its own player's playlist requests, which the player could only retry
+  // silently — the "freezes and never recovers" report. The resolved target is cached on the
+  // session so the lookup happens once.
+  const session = getAuthSession(req)
+  if (!session) return null
+  const stored = usersStore.getIptvCredentials(session.username)
+  if (!stored) return null
+  try {
+    const credentials = decryptSessionCredentials(stored)
+    const normalized = normalizeProxyTargetBase(credentials.server)
+    sessionProxyTargets.set(session.token, normalized)
+    return normalized
+  } catch {
+    return null
+  }
 }
 
 // --- ffmpeg / transcode service ------------------------------------------------------------
