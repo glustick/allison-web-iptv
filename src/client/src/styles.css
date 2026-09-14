@@ -225,6 +225,33 @@ body {
   cursor: col-resize;
 }
 
+/* The category sidebar's divider sits on its *right* edge, straddling the border so it is a
+   comfortable grab target. This rule is load-bearing: .resize-handle--col supplies only the
+   vertical span and width, so without a horizontal offset the handle falls back to its static
+   position — the sidebar's left edge, underneath the category buttons — leaving the sidebar
+   looking un-resizable. (It was missing from the release that introduced the handle, so the
+   sidebar never actually resized; Live TV, Movies and Series all share .sidebar and this class.) */
+.resize-handle--sidebar {
+  right: -4px;
+  width: 10px;
+}
+
+/* A hairline grip so the handle is discoverable at rest, not only once the pointer finds it. */
+.resize-handle--sidebar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: #232733;
+}
+
+.resize-handle--sidebar:hover::after,
+body.resizing-col .resize-handle--sidebar::after {
+  background: #4f7cff;
+}
+
 .resize-handle--row {
   left: 0;
   right: 0;
