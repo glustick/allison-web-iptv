@@ -62,7 +62,9 @@ function synthesizeStream(streamId: number, name: string, category: string | nul
 
 export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpenEpgSettings?: () => void }): JSX.Element {
   const [categories, setCategories] = useState<Category[]>([])
-  const [selection, setSelection] = useState<Selection>({ type: 'all' })
+  // Favourites is the landing view: it is what someone checks first after signing in, and an
+  // empty one explains itself (see the grid's emptyMessage) rather than showing nothing useful.
+  const [selection, setSelection] = useState<Selection>({ type: 'favourites' })
   const [providerChannels, setProviderChannels] = useState<LiveStream[]>([])
   const [nowPlaying, setNowPlaying] = useState<LiveStream | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -290,37 +292,6 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
         >
           ★ Favourites{liveFavourites.length > 0 ? ` (${liveFavourites.length})` : ''}
         </button>
-        <button
-          className={selection.type === 'history' ? 'category-btn active' : 'category-btn'}
-          onClick={() => {
-            setSelection({ type: 'history' })
-            setPicking(false)
-          }}
-        >
-          🕘 History
-        </button>
-        <button
-          className={selection.type === 'all' ? 'category-btn active' : 'category-btn'}
-          onClick={() => {
-            setSelection({ type: 'all' })
-            setPicking(false)
-          }}
-        >
-          All
-        </button>
-        {categories.map((cat) => (
-          <button
-            key={cat.category_id}
-            className={selection.type === 'provider' && selection.id === cat.category_id ? 'category-btn active' : 'category-btn'}
-            onClick={() => {
-              setSelection({ type: 'provider', id: cat.category_id })
-              setPicking(false)
-            }}
-          >
-            {cat.category_name}
-          </button>
-        ))}
-
         <div className="sidebar-section-label">My categories</div>
         {prefs.categories.map((category) => (
           <button
@@ -358,6 +329,37 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
             ＋ New category
           </button>
         )}
+
+        <button
+          className={selection.type === 'history' ? 'category-btn active' : 'category-btn'}
+          onClick={() => {
+            setSelection({ type: 'history' })
+            setPicking(false)
+          }}
+        >
+          🕘 History
+        </button>
+        <button
+          className={selection.type === 'all' ? 'category-btn active' : 'category-btn'}
+          onClick={() => {
+            setSelection({ type: 'all' })
+            setPicking(false)
+          }}
+        >
+          All
+        </button>
+        {categories.map((cat) => (
+          <button
+            key={cat.category_id}
+            className={selection.type === 'provider' && selection.id === cat.category_id ? 'category-btn active' : 'category-btn'}
+            onClick={() => {
+              setSelection({ type: 'provider', id: cat.category_id })
+              setPicking(false)
+            }}
+          >
+            {cat.category_name}
+          </button>
+        ))}
 
         <div
           className="resize-handle resize-handle--col resize-handle--sidebar"

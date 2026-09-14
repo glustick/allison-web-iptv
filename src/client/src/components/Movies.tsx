@@ -30,7 +30,8 @@ export function formatClock(totalSeconds: number): string {
 
 export function Movies({ session }: { session: Session }): JSX.Element {
   const [categories, setCategories] = useState<Category[]>([])
-  const [selection, setSelection] = useState<Selection>({ type: 'all' })
+  // Same landing view as live TV: favourites, which explains itself when empty.
+  const [selection, setSelection] = useState<Selection>({ type: 'favourites' })
   const [movies, setMovies] = useState<VodStream[]>([])
   const [nowPlaying, setNowPlaying] = useState<VodStream | null>(null)
   // The position this playback started from, so the player seeks there once and the UI can show
