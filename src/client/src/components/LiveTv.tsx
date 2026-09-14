@@ -3,6 +3,7 @@ import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { LivePlayer } from './LivePlayer'
 import { EpgGrid } from './EpgGrid'
+import { ReorderableChannelList, type ReorderableRow } from './ReorderableChannelList'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
 import {
@@ -13,7 +14,9 @@ import {
   fetchPrefs,
   recordHistory,
   removeChannelFromCategory,
+  reorderCategoryChannels,
   renameCategory,
+  setFavouriteOrder,
   setFavourite,
   type CustomCategory,
   type MediaKind,
@@ -154,6 +157,54 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
     }
     return providerChannels
   }, [selection, liveFavourites, historyChannels, selectedCustom, providerChannels])
+
+  // Library views are plain lists (short, personal, reorderable); the guide grid stays for the
+  // provider's own categories, where a virtualised 27k-row table is the right tool.
+  const libraryRows: ReorderableRow[] = useMemo(() => {
+    if (selection.type === 'favourites') {
+      return liveFavourites.map((favourite) => ({
+        key: `live:${favourite.streamId}`,
+        streamId: favourite.streamId,
+        name: favourite.name,
+        kind: 'live' as const
+      }))
+    }
+    if (selection.type === 'history') {
+      return historyChannels.map((channel) => ({
+        key: `live:${channel.stream_id}`,
+        streamId: channel.stream_id,
+        name: channel.name,
+        kind: 'live' as const
+      }))
+    }
+    if (selection.type === 'custom') {
+      return (selectedCustom?.channels ?? [])
+        .filter((channel) => channel.kind === 'live')
+        .map((channel) => ({
+          key: `live:${channel.streamId}`,
+          streamId: channel.streamId,
+          name: channel.name,
+          kind: 'live' as const
+        }))
+    }
+    return []
+  }, [selection, liveFavourites, historyChannels, selectedCustom])
+
+  const handleLibraryReorder = useCallback(
+    (ordered: ReorderableRow[]): void => {
+      const payload = ordered.map((row) => ({ kind: row.kind, streamId: row.streamId }))
+      if (selection.type === 'favourites') {
+        void setFavouriteOrder(payload)
+          .then((favourites) => applyPrefs({ ...prefs, favourites }))
+          .catch((err) => handlePrefsError(err, 'Could not save the new order'))
+      } else if (selection.type === 'custom' && selectedCustom) {
+        void reorderCategoryChannels(selectedCustom.id, payload)
+          .then((categories) => applyPrefs({ ...prefs, categories }))
+          .catch((err) => handlePrefsError(err, 'Could not save the new order'))
+      }
+    },
+    [applyPrefs, handlePrefsError, prefs, selectedCustom, selection]
+  )
 
   const isFavourite = useCallback(
     (streamId: number): boolean => liveFavourites.some((favourite) => favourite.streamId === streamId),
@@ -447,7 +498,51 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
           )}
         </div>
 
-        {picking && selectedCustom ? (
+        {(selection.type === 'favourites' || selection.type === 'history' || selection.type === 'custom') && !picking ? (
+          <ReorderableChannelList
+            rows={libraryRows}
+            reorderable={selection.type !== 'history'}
+            activeKey={nowPlaying ? `live:${nowPlaying.stream_id}` : undefined}
+            emptyMessage={
+              selection.type === 'favourites'
+                ? 'No favourites yet — press ☆ on a channel while it plays.'
+                : selection.type === 'history'
+                  ? 'Nothing watched yet.'
+                  : 'Empty category — use Add channels to pick channels from any category.'
+            }
+            onPlay={(row) =>
+              selectChannel(
+                channels.find((channel) => channel.stream_id === row.streamId) ?? synthesizeStream(row.streamId, row.name, null)
+              )
+            }
+            onReorder={handleLibraryReorder}
+            rowActions={(row) =>
+              selection.type === 'favourites' ? (
+                <button
+                  type="button"
+                  className="admin-small-btn"
+                  title="Remove from favourites"
+                  onClick={() => {
+                    void setFavourite({ kind: 'live', streamId: row.streamId, name: row.name }, false)
+                      .then((favourites) => applyPrefs({ ...prefs, favourites }))
+                      .catch((err) => handlePrefsError(err, 'Could not update favourites'))
+                  }}
+                >
+                  ✕
+                </button>
+              ) : selection.type === 'custom' && selectedCustom ? (
+                <button
+                  type="button"
+                  className="admin-small-btn danger"
+                  title="Remove from this category"
+                  onClick={() => void handleRemoveFromCategory({ stream_id: row.streamId, name: row.name } as LiveStream)}
+                >
+                  ✕
+                </button>
+              ) : null
+            }
+          />
+        ) : picking && selectedCustom ? (
           <div className="channel-picker">
             <div className="channel-picker-head">
               <span>

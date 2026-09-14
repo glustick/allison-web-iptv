@@ -1149,3 +1149,71 @@ body.resizing-col {
 .resume-note {
   color: #7de08d;
 }
+
+/* --- Reorderable library lists ------------------------------------------------------------ */
+
+.reorder-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.reorder-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px 4px 8px;
+  border-bottom: 1px solid #14171f;
+}
+
+.reorder-row:hover {
+  background: #12151c;
+}
+
+.reorder-row.active {
+  background: #161b26;
+}
+
+.reorder-row.drag-over {
+  border-top: 2px solid #4f7cff;
+}
+
+.reorder-grip {
+  color: #5b6270;
+  cursor: grab;
+  letter-spacing: -2px;
+  user-select: none;
+  padding: 0 2px;
+}
+
+.reorder-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: none;
+  border: none;
+  color: #c8cdd6;
+  font-size: 13px;
+  text-align: left;
+  padding: 6px 0;
+  cursor: pointer;
+}
+
+.reorder-name:hover {
+  color: #ffffff;
+}
+
+.reorder-buttons {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.reorder-buttons .admin-small-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

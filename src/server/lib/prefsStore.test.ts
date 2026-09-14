@@ -4,6 +4,7 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPrefsStore, PrefsError, type PrefsStore } from './prefsStore.js'
 import { createUsersStore } from './usersStore.js'
+import Database from 'better-sqlite3'
 
 let dir: string
 let store: PrefsStore
@@ -141,6 +142,8 @@ describe('persistence', () => {
     expect(store.listCategories('goner')).toEqual([])
   })
 
+})
+
 describe('resume positions', () => {
   const movie = (streamId: number, name: string) => ({ kind: 'movie' as const, streamId, name, category: 'Movies' })
 
@@ -205,4 +208,76 @@ describe('resume positions', () => {
     expect(store.listResumePositions('temp')).toEqual([])
   })
 })
+
+describe('drag-and-drop ordering', () => {
+  it('stores an explicit favourites order, keeps it across a reopen, and puts new ones on top', () => {
+    store.setFavourite('alice', live(1, 'One'), true)
+    store.setFavourite('alice', live(2, 'Two'), true)
+    store.setFavourite('alice', live(3, 'Three'), true)
+    // Newest first by default.
+    expect(store.listFavourites('alice').map((f) => f.name)).toEqual(['Three', 'Two', 'One'])
+
+    store.setFavouriteOrder('alice', [
+      { kind: 'live', streamId: 1 },
+      { kind: 'live', streamId: 3 },
+      { kind: 'live', streamId: 2 }
+    ])
+    expect(store.listFavourites('alice').map((f) => f.name)).toEqual(['One', 'Three', 'Two'])
+
+    const reopened = createPrefsStore({ dataDir: dir })
+    expect(reopened.listFavourites('alice').map((f) => f.name)).toEqual(['One', 'Three', 'Two'])
+
+    // A newly favourited channel appears at the top without disturbing the arrangement.
+    reopened.setFavourite('alice', live(4, 'Four'), true)
+    expect(reopened.listFavourites('alice').map((f) => f.name)).toEqual(['Four', 'One', 'Three', 'Two'])
+  })
+
+  it('validates the order payload and ignores rows belonging to other users', () => {
+    store.setFavourite('alice', live(1, 'One'), true)
+    store.setFavourite('bob', live(2, 'Two'), true)
+    expect(() => store.setFavouriteOrder('alice', 'nope' as never)).toThrow(/array/)
+
+    // Alice's order can't touch Bob's rows.
+    store.setFavouriteOrder('alice', [{ kind: 'live', streamId: 2 }])
+    expect(store.listFavourites('bob').map((f) => f.name)).toEqual(['Two'])
+  })
+
+  it('reorders the channels inside a custom category', () => {
+    const category = store.createCategory('alice', 'Mix')
+    store.addChannelToCategory('alice', category.id, live(10, 'Ten'))
+    store.addChannelToCategory('alice', category.id, live(11, 'Eleven'))
+    store.addChannelToCategory('alice', category.id, { kind: 'movie', streamId: 12, name: 'Twelve' })
+    expect(store.listCategories('alice')[0].channels.map((c) => c.name)).toEqual(['Ten', 'Eleven', 'Twelve'])
+
+    store.reorderCategoryChannels('alice', category.id, [
+      { kind: 'movie', streamId: 12 },
+      { kind: 'live', streamId: 10 },
+      { kind: 'live', streamId: 11 }
+    ])
+    expect(store.listCategories('alice')[0].channels.map((c) => c.name)).toEqual(['Twelve', 'Ten', 'Eleven'])
+
+    const reopened = createPrefsStore({ dataDir: dir })
+    expect(reopened.listCategories('alice')[0].channels.map((c) => c.name)).toEqual(['Twelve', 'Ten', 'Eleven'])
+
+    expect(() => store.reorderCategoryChannels('alice', 9999, [])).toThrow(/does not exist/)
+  })
+
+  it('adds the ordering column to a database created before it existed', () => {
+    // Upgrades must migrate in place: CREATE TABLE IF NOT EXISTS would leave an older
+    // favourites table without the column and every ordered query would fail.
+    const legacyDir = mkdtempSync(join(tmpdir(), 'allison-legacy-order-'))
+    const legacy = new Database(join(legacyDir, 'allison.db'))
+    legacy.exec(`CREATE TABLE favourites (
+      username TEXT NOT NULL, kind TEXT NOT NULL, stream_id INTEGER NOT NULL,
+      name TEXT NOT NULL, category TEXT, added_at TEXT NOT NULL,
+      PRIMARY KEY (username, kind, stream_id))`)
+    legacy.prepare('INSERT INTO favourites VALUES (?, ?, ?, ?, ?, ?)').run('alice', 'live', 5, 'Legacy Channel', null, '2026-01-01T00:00:00.000Z')
+    legacy.close()
+
+    const migrated = createPrefsStore({ dataDir: legacyDir })
+    expect(migrated.listFavourites('alice').map((f) => f.name)).toEqual(['Legacy Channel'])
+    migrated.setFavouriteOrder('alice', [{ kind: 'live', streamId: 5 }])
+    expect(migrated.listFavourites('alice')).toHaveLength(1)
+    rmSync(legacyDir, { recursive: true, force: true })
+  })
 })

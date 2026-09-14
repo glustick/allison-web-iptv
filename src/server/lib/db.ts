@@ -26,6 +26,7 @@ export function openDatabase(dataDir: string): DbHandle {
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
   createSchema(db)
+  migrateSchema(db)
   migrateFlatFile(db, dataDir)
   return { db, path, close: () => db.close() }
 }
@@ -51,6 +52,9 @@ function createSchema(db: Database.Database): void {
       name       TEXT NOT NULL,
       category   TEXT,
       added_at   TEXT NOT NULL,
+      -- Drag-to-reorder position. New favourites take the lowest value so they appear on top
+      -- without disturbing an order the user has arranged by hand.
+      position   INTEGER,
       PRIMARY KEY (username, kind, stream_id)
     );
 
@@ -105,6 +109,22 @@ function createSchema(db: Database.Database): void {
       value TEXT NOT NULL
     );
   `)
+}
+
+/**
+ * In-place schema upgrades for databases created by an earlier version. SQLite's CREATE TABLE
+ * IF NOT EXISTS never adds a column to an existing table, so a new column needs an explicit
+ * ALTER — otherwise an upgrade would leave the column missing and every ordered query would
+ * fail against a database that looks fine.
+ */
+function migrateSchema(db: Database.Database): void {
+  const columns = db.prepare('PRAGMA table_info(favourites)').all() as Array<{ name: string }>
+  if (!columns.some((column) => column.name === 'position')) {
+    db.exec('ALTER TABLE favourites ADD COLUMN position INTEGER')
+    // Existing rows had no order of their own; insertion order is the closest thing to one.
+    db.exec('UPDATE favourites SET position = rowid WHERE position IS NULL')
+    console.log('[db] added favourites.position for channel ordering')
+  }
 }
 
 /**

@@ -609,6 +609,29 @@ app.post('/api/prefs/favourites', requireAuth, (req, res) => {
   }
 })
 
+// Drag-and-drop ordering. Both routes take the full desired order rather than a from/to pair:
+// the client already knows the final arrangement, and a full list is idempotent — a retry after
+// a dropped connection can't scramble anything.
+app.post('/api/prefs/favourites/order', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.setFavouriteOrder(session.username, req.body?.order ?? [])
+    res.json({ ok: true, favourites: prefsStore.listFavourites(session.username) })
+  } catch (err) {
+    handlePrefsError(res, err, 'reorder favourites')
+  }
+})
+
+app.post('/api/prefs/categories/:id/order', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.reorderCategoryChannels(session.username, Number(req.params.id), req.body?.order ?? [])
+    res.json({ ok: true, categories: prefsStore.listCategories(session.username) })
+  } catch (err) {
+    handlePrefsError(res, err, 'reorder category')
+  }
+})
+
 app.get('/api/prefs/history', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
   try {

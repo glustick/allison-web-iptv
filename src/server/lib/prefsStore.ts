@@ -104,6 +104,10 @@ function cleanName(name: unknown, label: string, max: number): string {
 export interface PrefsStore {
   listFavourites(username: string): Favourite[]
   setFavourite(username: string, channel: ChannelRef, favourite: boolean): void
+  /** Replaces the display order of this user's favourites (drag-and-drop). */
+  setFavouriteOrder(username: string, order: Array<{ kind: MediaKind; streamId: number }>): void
+  /** Replaces the display order of one custom category's channels. */
+  reorderCategoryChannels(username: string, id: number, order: Array<{ kind: MediaKind; streamId: number }>): void
   listHistory(username: string, limit?: number): HistoryEntry[]
   recordHistory(username: string, channel: ChannelRef): void
   clearHistory(username: string): void
@@ -151,7 +155,11 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
     listFavourites(username: string): Favourite[] {
       const db = requireDb()
       const rows = db
-        .prepare('SELECT kind, stream_id, name, category, added_at FROM favourites WHERE username = ? ORDER BY added_at DESC')
+        .prepare(
+          `SELECT kind, stream_id, name, category, added_at FROM favourites
+            WHERE username = ?
+            ORDER BY position IS NULL, position, added_at DESC`
+        )
         .all(username) as Array<{ kind: string; stream_id: number; name: string; category: string | null; added_at: string }>
       return rows.map((row) => ({
         kind: validateKind(row.kind),
@@ -168,15 +176,46 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       const streamId = validateStreamId(channel.streamId)
       const name = cleanName(channel.name, 'name', MAX_NAME_LENGTH)
       if (favourite) {
+        const lowest = (
+          db.prepare('SELECT MIN(position) AS min FROM favourites WHERE username = ?').get(username) as { min: number | null }
+        ).min
+        // Placed above the current top: a new favourite is what you want to see, and everything
+        // already arranged keeps its relative order.
+        const position = (lowest ?? 0) - 1
         db.prepare(
-          `INSERT INTO favourites (username, kind, stream_id, name, category, added_at)
-           VALUES (?, ?, ?, ?, ?, ?)
+          `INSERT INTO favourites (username, kind, stream_id, name, category, added_at, position)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (username, kind, stream_id)
            DO UPDATE SET name = excluded.name, category = excluded.category`
-        ).run(username, kind, streamId, name, channel.category ?? null, new Date().toISOString())
+        ).run(username, kind, streamId, name, channel.category ?? null, new Date().toISOString(), position)
       } else {
         db.prepare('DELETE FROM favourites WHERE username = ? AND kind = ? AND stream_id = ?').run(username, kind, streamId)
       }
+    },
+
+    setFavouriteOrder(username: string, order: Array<{ kind: MediaKind; streamId: number }>): void {
+      const db = requireDb()
+      if (!Array.isArray(order)) throw new PrefsError('order must be an array')
+      const update = db.prepare('UPDATE favourites SET position = ? WHERE username = ? AND kind = ? AND stream_id = ?')
+      db.transaction(() => {
+        order.forEach((entry, index) => {
+          update.run(index, username, validateKind(entry.kind), validateStreamId(entry.streamId))
+        })
+      })()
+    },
+
+    reorderCategoryChannels(username: string, id: number, order: Array<{ kind: MediaKind; streamId: number }>): void {
+      const db = requireDb()
+      if (!categoryById(db, username, id)) throw new PrefsError('That category does not exist')
+      if (!Array.isArray(order)) throw new PrefsError('order must be an array')
+      const update = db.prepare(
+        'UPDATE custom_category_channels SET position = ? WHERE category_id = ? AND kind = ? AND stream_id = ?'
+      )
+      db.transaction(() => {
+        order.forEach((entry, index) => {
+          update.run(index, id, validateKind(entry.kind), validateStreamId(entry.streamId))
+        })
+      })()
     },
 
     listHistory(username: string, limit = 100): HistoryEntry[] {
@@ -230,6 +269,7 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       const channelsFor = db.prepare(
         'SELECT kind, stream_id, name, source_category, position FROM custom_category_channels WHERE category_id = ? ORDER BY position, name COLLATE NOCASE'
       )
+      // Ordering is explicit (drag-and-drop) but ties still fall back to the name for stability.
       return categories.map((category) => ({
         id: category.id,
         name: category.name,

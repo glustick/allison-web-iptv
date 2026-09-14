@@ -6,7 +6,7 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.7.1 — resume playback for movies and series)
+## Current state (v0.8.0 — drag-and-drop ordering for favourites and custom categories)
 
 **v0.7.0** moves everything the app persists into a single **SQLite database** (`allison.db`)
 and builds a proper per-user library on top of it: **★ Favourites** and **🕘 History** in the
@@ -269,6 +269,11 @@ All three live in the sidebar and are stored per account in the database:
   where you filter by any provider category and tick the channels you want. Channels can sit in
   as many custom categories as you like; **Rename**/**Delete** are in the same toolbar, and
   deleting a category never removes the underlying channel.
+
+**Reorder your lists.** Favourites and each custom category are drag-and-drop: grab a row's grip
+(⋮⋮) to move it, or use the ▲/▼ buttons — which are also the keyboard/touch route, and disabled at
+the ends of the list. The order is stored per account in the database, so it survives an update.
+History stays time-ordered (newest first) because reordering a log makes no sense.
 
 **Resume where you left off (movies and series).** Playback position is tracked per title — and
 per *episode* for series — and stored with the account. **Movies → 🕘 History** and

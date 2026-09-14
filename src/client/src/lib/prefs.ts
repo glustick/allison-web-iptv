@@ -86,6 +86,21 @@ export async function setFavourite(channel: ChannelRef, favourite: boolean): Pro
   return data.favourites ?? []
 }
 
+/** Replaces the display order of the account's favourites (drag-and-drop / move buttons). */
+export async function setFavouriteOrder(order: Array<{ kind: MediaKind; streamId: number }>): Promise<Favourite[]> {
+  const data = await request<{ favourites: Favourite[] }>('/api/prefs/favourites/order', jsonPost({ order }))
+  return data.favourites ?? []
+}
+
+/** Replaces the display order of a custom category's channels. */
+export async function reorderCategoryChannels(
+  id: number,
+  order: Array<{ kind: MediaKind; streamId: number }>
+): Promise<CustomCategory[]> {
+  const data = await request<{ categories: CustomCategory[] }>(`/api/prefs/categories/${id}/order`, jsonPost({ order }))
+  return data.categories ?? []
+}
+
 export async function recordHistory(channel: ChannelRef): Promise<void> {
   await request('/api/prefs/history', jsonPost(channel))
 }
