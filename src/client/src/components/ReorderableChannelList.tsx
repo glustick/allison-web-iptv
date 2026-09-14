@@ -13,6 +13,8 @@ export interface ReorderableRow {
   streamId: number
   name: string
   kind: 'live' | 'movie' | 'series'
+  /** Channel artwork, when the entry (or a loaded channel list) has it. */
+  icon?: string | null
   /** Optional trailing note (a resume point, a status). */
   badge?: string
 }
@@ -97,7 +99,12 @@ export function ReorderableChannelList({
             </span>
           )}
           <button type="button" className="reorder-name" onClick={() => onPlay(row)}>
-            <span>{row.name}</span>
+            {row.icon ? (
+              <img className="reorder-icon" src={row.icon} alt="" loading="lazy" />
+            ) : (
+              <span className="reorder-icon placeholder" aria-hidden="true" />
+            )}
+            <span className="reorder-label">{row.name}</span>
             {row.badge && <span className="resume-badge">{row.badge}</span>}
           </button>
           {rowActions?.(row)}

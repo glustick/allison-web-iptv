@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react'
 import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { LivePlayer } from './LivePlayer'
@@ -160,13 +160,22 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
 
   // Library views are plain lists (short, personal, reorderable); the guide grid stays for the
   // provider's own categories, where a virtualised 27k-row table is the right tool.
+  // Artwork for library rows: the icon stored with the entry, falling back to the provider's
+  // channel list when it happens to be loaded (e.g. after visiting All).
+  const providerIconById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const channel of providerChannels) if (channel.stream_icon) map.set(channel.stream_id, channel.stream_icon)
+    return map
+  }, [providerChannels])
+
   const libraryRows: ReorderableRow[] = useMemo(() => {
     if (selection.type === 'favourites') {
       return liveFavourites.map((favourite) => ({
         key: `live:${favourite.streamId}`,
         streamId: favourite.streamId,
         name: favourite.name,
-        kind: 'live' as const
+        kind: 'live' as const,
+        icon: favourite.icon ?? providerIconById.get(favourite.streamId) ?? null
       }))
     }
     if (selection.type === 'history') {
@@ -174,7 +183,8 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
         key: `live:${channel.stream_id}`,
         streamId: channel.stream_id,
         name: channel.name,
-        kind: 'live' as const
+        kind: 'live' as const,
+        icon: providerIconById.get(channel.stream_id) ?? null
       }))
     }
     if (selection.type === 'custom') {
@@ -184,11 +194,53 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
           key: `live:${channel.streamId}`,
           streamId: channel.streamId,
           name: channel.name,
-          kind: 'live' as const
+          kind: 'live' as const,
+          icon: channel.icon ?? providerIconById.get(channel.streamId) ?? null
         }))
     }
     return []
-  }, [selection, liveFavourites, historyChannels, selectedCustom])
+  }, [selection, liveFavourites, historyChannels, selectedCustom, providerIconById])
+
+  // Entries saved before artwork was stored have none. Rather than asking anyone to re-add them,
+  // fetch the provider's channel list once per session, match by stream id, and persist what we
+  // find — after which the icon is part of the entry itself.
+  const iconBackfillRef = useRef(false)
+  useEffect(() => {
+    if (iconBackfillRef.current) return
+    const isLibrary = selection.type === 'favourites' || selection.type === 'custom'
+    if (!isLibrary) return
+    const missing = libraryRows.filter((row) => !row.icon).slice(0, 50)
+    if (missing.length === 0) {
+      iconBackfillRef.current = true
+      return
+    }
+    iconBackfillRef.current = true
+    void session.client
+      .getLiveStreams()
+      .then(async (all) => {
+        const icons = new Map(all.filter((channel) => channel.stream_icon).map((channel) => [channel.stream_id, channel.stream_icon]))
+        let categories = prefs.categories
+        let favourites = prefs.favourites
+        for (const row of missing) {
+          const icon = icons.get(row.streamId)
+          if (!icon) continue
+          if (selection.type === 'favourites') {
+            favourites = await setFavourite({ kind: 'live', streamId: row.streamId, name: row.name, icon }, true)
+          } else if (selectedCustom) {
+            categories = await addChannelToCategory(selectedCustom.id, {
+              kind: 'live',
+              streamId: row.streamId,
+              name: row.name,
+              icon
+            })
+          }
+        }
+        applyPrefs({ ...prefs, favourites, categories })
+      })
+      .catch(() => {
+        // A failed backfill just means no artwork this session; nothing else depends on it.
+      })
+  }, [applyPrefs, libraryRows, prefs, selectedCustom, selection, session])
 
   const handleLibraryReorder = useCallback(
     (ordered: ReorderableRow[]): void => {
@@ -227,7 +279,13 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
     async (channel: LiveStream): Promise<void> => {
       try {
         const favourites = await setFavourite(
-          { kind: 'live', streamId: channel.stream_id, name: channel.name, category: channel.category_id },
+          {
+            kind: 'live',
+            streamId: channel.stream_id,
+            name: channel.name,
+            category: channel.category_id,
+            icon: channel.stream_icon
+          },
           !isFavourite(channel.stream_id)
         )
         applyPrefs({ ...prefs, favourites })
@@ -266,7 +324,8 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
             kind: 'live',
             streamId: channel.stream_id,
             name: channel.name,
-            category: channel.category_id
+            category: channel.category_id,
+            icon: channel.stream_icon
           })
         }
       }
@@ -446,7 +505,8 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
                         kind: 'live',
                         streamId: nowPlaying.stream_id,
                         name: nowPlaying.name,
-                        category: nowPlaying.category_id
+                        category: nowPlaying.category_id,
+                        icon: nowPlaying.stream_icon
                       })
                         .then((cats) => applyPrefs({ ...prefs, categories: cats }))
                         .catch((err) => handlePrefsError(err, 'Could not add the channel'))

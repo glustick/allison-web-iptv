@@ -29,6 +29,7 @@ export interface Favourite {
   streamId: number
   name: string
   category: string | null
+  icon: string | null
   addedAt: string
 }
 
@@ -46,6 +47,7 @@ export interface CustomCategoryChannel {
   streamId: number
   name: string
   sourceCategory: string | null
+  icon: string | null
   position: number
 }
 
@@ -78,6 +80,16 @@ export interface ChannelRef {
   streamId: number
   name: string
   category?: string | null
+  /** Channel artwork, so a saved entry renders without needing the provider's list. */
+  icon?: string | null
+}
+
+/** Only http(s) artwork is kept — anything else would end up as a broken image in the UI. */
+function cleanIcon(icon: unknown): string | null {
+  if (typeof icon !== 'string') return null
+  const trimmed = icon.trim()
+  if (trimmed.length === 0 || trimmed.length > 500) return null
+  return /^https?:\/\//i.test(trimmed) ? trimmed : null
 }
 
 function validateKind(kind: unknown): MediaKind {
@@ -156,16 +168,24 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       const db = requireDb()
       const rows = db
         .prepare(
-          `SELECT kind, stream_id, name, category, added_at FROM favourites
+          `SELECT kind, stream_id, name, category, stream_icon, added_at FROM favourites
             WHERE username = ?
             ORDER BY position IS NULL, position, added_at DESC`
         )
-        .all(username) as Array<{ kind: string; stream_id: number; name: string; category: string | null; added_at: string }>
+        .all(username) as Array<{
+        kind: string
+        stream_id: number
+        name: string
+        category: string | null
+        stream_icon: string | null
+        added_at: string
+      }>
       return rows.map((row) => ({
         kind: validateKind(row.kind),
         streamId: row.stream_id,
         name: row.name,
         category: row.category,
+        icon: row.stream_icon,
         addedAt: row.added_at
       }))
     },
@@ -183,11 +203,13 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
         // already arranged keeps its relative order.
         const position = (lowest ?? 0) - 1
         db.prepare(
-          `INSERT INTO favourites (username, kind, stream_id, name, category, added_at, position)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO favourites (username, kind, stream_id, name, category, added_at, position, stream_icon)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (username, kind, stream_id)
-           DO UPDATE SET name = excluded.name, category = excluded.category`
-        ).run(username, kind, streamId, name, channel.category ?? null, new Date().toISOString(), position)
+           DO UPDATE SET name = excluded.name,
+                         category = excluded.category,
+                         stream_icon = COALESCE(excluded.stream_icon, favourites.stream_icon)`
+        ).run(username, kind, streamId, name, channel.category ?? null, new Date().toISOString(), position, cleanIcon(channel.icon))
       } else {
         db.prepare('DELETE FROM favourites WHERE username = ? AND kind = ? AND stream_id = ?').run(username, kind, streamId)
       }
@@ -267,22 +289,30 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
         .prepare('SELECT id, name, position FROM custom_categories WHERE username = ? ORDER BY position, name COLLATE NOCASE')
         .all(username) as Array<{ id: number; name: string; position: number }>
       const channelsFor = db.prepare(
-        'SELECT kind, stream_id, name, source_category, position FROM custom_category_channels WHERE category_id = ? ORDER BY position, name COLLATE NOCASE'
+        'SELECT kind, stream_id, name, source_category, stream_icon, position FROM custom_category_channels WHERE category_id = ? ORDER BY position, name COLLATE NOCASE'
       )
       // Ordering is explicit (drag-and-drop) but ties still fall back to the name for stability.
       return categories.map((category) => ({
         id: category.id,
         name: category.name,
         position: category.position,
-        channels: (channelsFor.all(category.id) as Array<{ kind: string; stream_id: number; name: string; source_category: string | null; position: number }>).map(
-          (row) => ({
-            kind: validateKind(row.kind),
-            streamId: row.stream_id,
-            name: row.name,
-            sourceCategory: row.source_category,
-            position: row.position
-          })
-        )
+        channels: (
+          channelsFor.all(category.id) as Array<{
+            kind: string
+            stream_id: number
+            name: string
+            source_category: string | null
+            stream_icon: string | null
+            position: number
+          }>
+        ).map((row) => ({
+          kind: validateKind(row.kind),
+          streamId: row.stream_id,
+          name: row.name,
+          sourceCategory: row.source_category,
+          icon: row.stream_icon,
+          position: row.position
+        }))
       }))
     },
 
@@ -330,11 +360,13 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       const position =
         ((db.prepare('SELECT MAX(position) AS max FROM custom_category_channels WHERE category_id = ?').get(id) as { max: number | null }).max ?? -1) + 1
       db.prepare(
-        `INSERT INTO custom_category_channels (category_id, kind, stream_id, name, source_category, position)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO custom_category_channels (category_id, kind, stream_id, name, source_category, position, stream_icon)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (category_id, kind, stream_id)
-         DO UPDATE SET name = excluded.name, source_category = excluded.source_category`
-      ).run(id, kind, streamId, name, channel.category ?? null, position)
+         DO UPDATE SET name = excluded.name,
+                       source_category = excluded.source_category,
+                       stream_icon = COALESCE(excluded.stream_icon, custom_category_channels.stream_icon)`
+      ).run(id, kind, streamId, name, channel.category ?? null, position, cleanIcon(channel.icon))
     },
 
     listResumePositions(username: string, kind?: MediaKind): ResumePosition[] {

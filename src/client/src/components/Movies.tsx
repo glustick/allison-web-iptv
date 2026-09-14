@@ -186,7 +186,13 @@ export function Movies({ session }: { session: Session }): JSX.Element {
                   onClick={() => {
                     const isFavourite = movieFavourites.some((favourite) => favourite.streamId === nowPlaying.stream_id)
                     void setFavourite(
-                      { kind: 'movie', streamId: nowPlaying.stream_id, name: nowPlaying.name, category: nowPlaying.category_id },
+                      {
+                        kind: 'movie',
+                        streamId: nowPlaying.stream_id,
+                        name: nowPlaying.name,
+                        category: nowPlaying.category_id,
+                        icon: nowPlaying.stream_icon
+                      },
                       !isFavourite
                     )
                       .then((favourites) => setPrefs((current) => ({ ...current, favourites })))

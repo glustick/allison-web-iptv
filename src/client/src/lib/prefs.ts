@@ -10,6 +10,8 @@ export interface Favourite {
   streamId: number
   name: string
   category: string | null
+  /** Channel artwork, stored with the entry so a list renders without the provider's own list. */
+  icon: string | null
   addedAt: string
 }
 
@@ -27,6 +29,7 @@ export interface CustomCategoryChannel {
   streamId: number
   name: string
   sourceCategory: string | null
+  icon: string | null
   position: number
 }
 
@@ -59,6 +62,7 @@ export interface ChannelRef {
   streamId: number
   name: string
   category?: string | null
+  icon?: string | null
 }
 
 const EMPTY: PrefsState = { favourites: [], categories: [], history: [], resume: [] }

@@ -38,6 +38,27 @@ describe('favourites', () => {
     expect(() => store.setFavourite('alice', { kind: 'live', streamId: 4, name: '   ' }, true)).toThrow(/required/)
   })
 
+  it('stores channel artwork with favourites and category entries', () => {
+    const withIcon = { kind: 'live' as const, streamId: 9, name: 'Logo Channel', icon: 'https://logos.example/9.png' }
+    store.setFavourite('alice', withIcon, true)
+    expect(store.listFavourites('alice')[0].icon).toBe('https://logos.example/9.png')
+
+    // Re-saving without an icon keeps the one already stored (COALESCE), and a re-save with a new
+    // one updates it.
+    store.setFavourite('alice', { ...withIcon, icon: null }, true)
+    expect(store.listFavourites('alice')[0].icon).toBe('https://logos.example/9.png')
+    store.setFavourite('alice', { ...withIcon, icon: 'https://logos.example/new.png' }, true)
+    expect(store.listFavourites('alice')[0].icon).toBe('https://logos.example/new.png')
+
+    // Junk is rejected rather than becoming a broken image in the UI.
+    store.setFavourite('alice', { ...withIcon, streamId: 10, icon: 'javascript:alert(1)' }, true)
+    expect(store.listFavourites('alice').find((f) => f.streamId === 10)?.icon).toBeNull()
+
+    const category = store.createCategory('alice', 'Logos')
+    store.addChannelToCategory('alice', category.id, withIcon)
+    expect(store.listCategories('alice')[0].channels[0].icon).toBe('https://logos.example/9.png')
+  })
+
   it('keeps favourites per user', () => {
     store.setFavourite('alice', live(1, 'A'), true)
     store.setFavourite('bob', live(2, 'B'), true)
@@ -278,6 +299,12 @@ describe('drag-and-drop ordering', () => {
     expect(migrated.listFavourites('alice').map((f) => f.name)).toEqual(['Legacy Channel'])
     migrated.setFavouriteOrder('alice', [{ kind: 'live', streamId: 5 }])
     expect(migrated.listFavourites('alice')).toHaveLength(1)
+    // The artwork column arrives the same way, and an old row simply has none until the client
+    // backfills it.
+    const before = migrated.listFavourites('alice')[0]
+    expect(before.icon).toBeNull()
+    migrated.setFavourite('alice', { kind: 'live', streamId: 5, name: 'Legacy Channel', icon: 'https://logos.example/5.png' }, true)
+    expect(migrated.listFavourites('alice')[0].icon).toBe('https://logos.example/5.png')
     rmSync(legacyDir, { recursive: true, force: true })
   })
 })

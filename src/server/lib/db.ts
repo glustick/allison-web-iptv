@@ -52,6 +52,9 @@ function createSchema(db: Database.Database): void {
       name       TEXT NOT NULL,
       category   TEXT,
       added_at   TEXT NOT NULL,
+      -- Channel artwork, stored with the entry: a favourite's icon must not depend on the
+      -- provider's channel list being loaded (or on the channel still existing in it).
+      stream_icon TEXT,
       -- Drag-to-reorder position. New favourites take the lowest value so they appear on top
       -- without disturbing an order the user has arranged by hand.
       position   INTEGER,
@@ -86,6 +89,7 @@ function createSchema(db: Database.Database): void {
       stream_id       INTEGER NOT NULL,
       name            TEXT NOT NULL,
       source_category TEXT,
+      stream_icon     TEXT,
       position        INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (category_id, kind, stream_id)
     );
@@ -118,13 +122,22 @@ function createSchema(db: Database.Database): void {
  * fail against a database that looks fine.
  */
 function migrateSchema(db: Database.Database): void {
-  const columns = db.prepare('PRAGMA table_info(favourites)').all() as Array<{ name: string }>
-  if (!columns.some((column) => column.name === 'position')) {
-    db.exec('ALTER TABLE favourites ADD COLUMN position INTEGER')
+  const addColumn = (table: string, column: string, ddl: string): boolean => {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    if (columns.some((entry) => entry.name === column)) return false
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`)
+    console.log(`[db] added ${table}.${column}`)
+    return true
+  }
+
+  if (addColumn('favourites', 'position', 'position INTEGER')) {
     // Existing rows had no order of their own; insertion order is the closest thing to one.
     db.exec('UPDATE favourites SET position = rowid WHERE position IS NULL')
-    console.log('[db] added favourites.position for channel ordering')
   }
+  // Artwork for entries saved before it was stored. The client backfills these on first sight
+  // (it has the provider's channel list anyway), so nothing has to be re-added by hand.
+  addColumn('favourites', 'stream_icon', 'stream_icon TEXT')
+  addColumn('custom_category_channels', 'stream_icon', 'stream_icon TEXT')
 }
 
 /**
