@@ -28,7 +28,15 @@ export function formatClock(totalSeconds: number): string {
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`
 }
 
-export function Movies({ session }: { session: Session }): JSX.Element {
+export function Movies({
+  session,
+  playRequest,
+  onPlayHandled
+}: {
+  session: Session
+  playRequest?: { kind: string; streamId: number; name: string; nonce: number } | null
+  onPlayHandled?: () => void
+}): JSX.Element {
   const [categories, setCategories] = useState<Category[]>([])
   // Same landing view as live TV: favourites, which explains itself when empty.
   const [selection, setSelection] = useState<Selection>({ type: 'favourites' })
@@ -68,6 +76,13 @@ export function Movies({ session }: { session: Session }): JSX.Element {
     reportNowPlaying(nowPlaying?.name ?? null, 'movie')
   }, [nowPlaying])
   useEffect(() => () => reportNowPlaying(null), [])
+
+  useEffect(() => {
+    if (!playRequest || playRequest.kind !== 'movie') return
+    play(playRequest.streamId, playRequest.name, 0)
+    onPlayHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playRequest?.nonce])
 
   const movieResume = useMemo(() => {
     const map = new Map<number, ResumePosition>()

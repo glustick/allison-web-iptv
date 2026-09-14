@@ -118,8 +118,9 @@ const PREFIX_MIN_LEN = 3
 const PREFIX_CREDIT = 0.75
 const HAS_DIGIT = /\d/
 
-/** Token-set Dice coefficient, with prefix-abbreviation credit: 2·credit / (|A|+|B|). */
-function tokenSetScore(a: string[], b: string[]): number {
+/** Token-set Dice coefficient, with prefix-abbreviation credit: 2·credit / (|A|+|B|).
+ *  Exported so search ranks with the same notion of similarity as the guide matcher. */
+export function tokenSetScore(a: string[], b: string[]): number {
   if (a.length === 0 || b.length === 0) return 0
   const used = new Array<boolean>(b.length).fill(false)
   let credit = 0

@@ -1,4 +1,4 @@
-import { existsSync } from 'fs'
+import { existsSync, rmSync, writeFileSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'http'
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url'
 import express, { type Request, type Response, type NextFunction } from 'express'
 import { createRequire } from 'module'
 import { createProxyServer, type ProxyServerDeps } from './lib/proxyServer.js'
+import { fetchTextViaUpstream } from './lib/upstreamText.js'
 import { createNodeUpstreamRequest } from './lib/nodeUpstreamRequest.js'
 import { createTranscodeService } from './lib/transcodeService.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
@@ -16,6 +17,17 @@ import { decryptSessionCredentials, encryptSessionCredentials, type SessionCrede
 import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UserRole } from './lib/usersStore.js'
 import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
+import { createSearchService } from './lib/searchService.js'
+import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagnostics.js'
+import {
+  applyPendingRestore,
+  backupDatabase,
+  dailyBackup,
+  listBackups,
+  pendingRestorePath,
+  validateDatabaseFile
+} from './lib/backup.js'
+import { openDatabase } from './lib/db.js'
 import { compareVersions } from './lib/versionCheck.js'
 
 // ffmpeg-static is a plain CommonJS package with no "exports" map — TypeScript's NodeNext
@@ -48,6 +60,16 @@ const PROXY_INTERNAL_PORT = Number(process.env.PROXY_INTERNAL_PORT ?? 4001)
 // are NOT asked at login anymore — each account carries its own encrypted IPTV config which is
 // checked/applied right after the security check (see the /api/session routes).
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '..', '..', 'data')
+
+// Before anything opens the database: apply a restore that was uploaded through the admin panel,
+// and take the once-a-day snapshot. Both have to happen ahead of the stores below.
+captureErrors()
+const restoreOutcome = applyPendingRestore(DATA_DIR)
+if (restoreOutcome.applied) console.log('[backup] applied an uploaded database restore')
+if (restoreOutcome.message) console.error(`[backup] ${restoreOutcome.message}`)
+const snapshot = dailyBackup(DATA_DIR)
+if (snapshot.created) console.log(`[backup] daily snapshot written to ${snapshot.path}`)
+if (snapshot.error) console.error(`[backup] daily snapshot failed: ${snapshot.error}`)
 const usersStore = createUsersStore({ dataDir: DATA_DIR })
 
 export interface NowPlayingInfo {
@@ -562,6 +584,215 @@ app.get('/api/version-check', (_req, res) => {
       res.json({ ok: true, currentVersion: pkg.version, latestVersion, updateAvailable })
     } catch {
       res.json({ ok: true, currentVersion: pkg.version, latestVersion: pkg.version, updateAvailable: false })
+    }
+  })()
+})
+
+// -- Health & diagnostics --------------------------------------------------------------------
+
+// Cached briefly: the health page polls, and hammering the provider's auth endpoint on every
+// poll would be rude (and slow).
+let providerProbeCache: { at: number; value: Record<string, unknown> } | null = null
+
+async function probeProvider(credentials: SessionCredentials): Promise<Record<string, unknown>> {
+  if (providerProbeCache && Date.now() - providerProbeCache.at < 30_000) return providerProbeCache.value
+  const base = credentials.server.trim().replace(/\/+$/, '')
+  const url = `${base}/player_api.php?username=${encodeURIComponent(credentials.username)}&password=${encodeURIComponent(
+    credentials.password
+  )}`
+  let value: Record<string, unknown>
+  try {
+    const body = await fetchTextViaUpstream(undefined, url, 10_000)
+    const parsed = JSON.parse(body) as { user_info?: Record<string, unknown> }
+    const info = parsed.user_info ?? {}
+    value = {
+      reachable: true,
+      auth: info.auth,
+      status: info.status,
+      activeConnections: info.active_cons,
+      maxConnections: info.max_connections,
+      expiresAt: info.exp_date
+    }
+  } catch (err) {
+    value = { reachable: false, error: err instanceof Error ? err.message : String(err) }
+  }
+  providerProbeCache = { at: Date.now(), value }
+  return value
+}
+
+app.get('/api/admin/health', requireAuth, requireAdmin, (req, res) => {
+  void (async (): Promise<void> => {
+    const session = req.authSession as AuthSession
+    try {
+      const databasePath = path.join(DATA_DIR, 'allison.db')
+      const db = openDatabase(DATA_DIR)
+      const count = (table: string): number =>
+        (db.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count
+      const counts = {
+        users: count('users'),
+        favourites: count('favourites'),
+        history: count('history'),
+        customCategories: count('custom_categories'),
+        customCategoryChannels: count('custom_category_channels'),
+        resumePositions: count('resume_positions'),
+        searchIndexed: count('search_index')
+      }
+      db.close()
+
+      // Guide status is read without blocking: peekStatus never waits on a download.
+      let guide: unknown = null
+      const credentials = resolveAccountCredentials(session.username)
+      if (credentials) {
+        try {
+          guide = epgService.peekStatus({ credentials, epgUrls: credentials.epgUrls ?? [] })
+        } catch (err) {
+          guide = { error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+
+      const memory = process.memoryUsage()
+      res.json({
+        ok: true,
+        server: {
+          version: pkg.version,
+          uptimeSeconds: Math.round(process.uptime()),
+          node: process.version,
+          platform: `${process.platform}/${process.arch}`,
+          memoryMb: Math.round(memory.rss / (1024 * 1024))
+        },
+        database: {
+          ...fileStats(databasePath),
+          sizeLabel: formatBytes(fileStats(databasePath).bytes),
+          wal: fileStats(`${databasePath}-wal`),
+          counts
+        },
+        guide,
+        transcode: {
+          active: transcodeService.stats()
+        },
+        search: searchService.status(),
+        provider: credentials ? await probeProvider(credentials) : { configured: false },
+        backups: listBackups(DATA_DIR),
+        errors: recentErrors(20)
+      })
+    } catch (err) {
+      console.error('[health] failed:', err)
+      res.status(500).json({ error: `Could not read health: ${err instanceof Error ? err.message : String(err)}` })
+    }
+  })()
+})
+
+// -- Backup & restore ------------------------------------------------------------------------
+
+app.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
+  void (async (): Promise<void> => {
+    const tempPath = path.join(DATA_DIR, 'allison-backup-export.db')
+    try {
+      await backupDatabase(DATA_DIR, tempPath)
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+      res.download(tempPath, `allison-backup-${stamp}.db`, (err) => {
+        // The file is a full copy of every account and credential, so it does not linger.
+        try {
+          rmSync(tempPath, { force: true })
+        } catch {
+          /* best effort */
+        }
+        if (err && !res.headersSent) res.status(500).end()
+      })
+    } catch (err) {
+      console.error('[backup] export failed:', err)
+      try {
+        rmSync(tempPath, { force: true })
+      } catch {
+        /* best effort */
+      }
+      res.status(500).json({ error: `Could not create the backup: ${err instanceof Error ? err.message : String(err)}` })
+    }
+  })()
+})
+
+// Raw body on purpose: this is a database file, not JSON. Capped well above a realistic database
+// size so a runaway upload can't fill the disk.
+app.post(
+  '/api/admin/restore',
+  requireAuth,
+  requireAdmin,
+  express.raw({ type: '*/*', limit: '512mb' }),
+  (req, res) => {
+    try {
+      const body = req.body as Buffer
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(400).json({ error: 'No file content received' })
+        return
+      }
+      const pending = pendingRestorePath(DATA_DIR)
+      writeFileSync(pending, body)
+      const check = validateDatabaseFile(pending)
+      if (!check.ok) {
+        rmSync(pending, { force: true })
+        res.status(400).json({ error: `That file is not a usable backup: ${check.error}` })
+        return
+      }
+      res.json({ ok: true, requiresRestart: true })
+    } catch (err) {
+      console.error('[backup] restore upload failed:', err)
+      res.status(500).json({ error: `Could not stage the restore: ${err instanceof Error ? err.message : String(err)}` })
+    }
+  }
+)
+
+// -- Search over the provider's catalogue ----------------------------------------------------
+// Indexed in SQLite: instant after the first build, and still answering when the provider is
+// unreachable (which is exactly when a cached index earns its keep).
+const searchService = createSearchService({ dataDir: DATA_DIR })
+
+app.get('/api/search', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const query = typeof req.query.q === 'string' ? req.query.q : ''
+  try {
+    const limit = Number(req.query.limit ?? 40)
+    const kind = typeof req.query.kind === 'string' && ['live', 'movie', 'series'].includes(req.query.kind)
+      ? (req.query.kind as 'live' | 'movie' | 'series')
+      : undefined
+    const hits = query.trim().length === 0 ? [] : searchService.search(query, Number.isFinite(limit) ? limit : 40, kind)
+    // Keep the index warm in the background; a search never waits on a rebuild.
+    const credentials = resolveAccountCredentials(session.username)
+    if (credentials) searchService.ensureFresh(credentials)
+    res.json({ ok: true, query, hits, index: searchService.status() })
+  } catch (err) {
+    console.error('[search] failed:', err)
+    res.status(500).json({ error: `Search failed: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
+app.get('/api/search/status', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    const credentials = resolveAccountCredentials(session.username)
+    if (credentials) searchService.ensureFresh(credentials)
+    res.json({ ok: true, index: searchService.status() })
+  } catch (err) {
+    console.error('[search] status failed:', err)
+    res.status(500).json({ error: `Could not read the index status: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
+// Admin-only: a manual rebuild pulls the provider's entire catalogue (live + VOD + series), so
+// it is not something any signed-in user should be able to trigger at will.
+app.post('/api/search/reindex', requireAuth, requireAdmin, (req, res) => {
+  void (async (): Promise<void> => {
+    const session = req.authSession as AuthSession
+    try {
+      const credentials = resolveAccountCredentials(session.username)
+      if (!credentials) {
+        res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+        return
+      }
+      const index = await searchService.rebuild(credentials)
+      res.json({ ok: true, index })
+    } catch (err) {
+      console.error('[search] reindex failed:', err)
+      res.status(500).json({ error: `Could not rebuild the index: ${err instanceof Error ? err.message : String(err)}` })
     }
   })()
 })

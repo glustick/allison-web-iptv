@@ -1,6 +1,4 @@
-import { Writable } from 'stream'
-import { promisify } from 'util'
-import { brotliDecompress, gunzip, inflate } from 'zlib'
+import { fetchTextViaUpstream } from './upstreamText.js'
 import type { ServerResponse } from 'http'
 import { createNodeUpstreamRequest } from './nodeUpstreamRequest.js'
 import type { UpstreamClientRequest } from './proxyServer.js'
@@ -137,102 +135,6 @@ export interface EpgServiceDeps {
   /** Overridable for tests; production uses nodeUpstreamRequest's own check interval. */
   guideStallCheckIntervalMs?: number
   now?: () => number
-}
-
-const brotliDecompressAsync = promisify(brotliDecompress)
-const gunzipAsync = promisify(gunzip)
-const inflateAsync = promisify(inflate)
-
-/**
- * Response body → guide text, transparently handling compression. XMLTV sources are very
- * commonly served as a pre-compressed `.xml.gz` file (7MB instead of 48MB) — GitHub raw, most
- * guide dumps — and Node's http does not decompress `content-encoding` either. Reading gzip
- * bytes as UTF-8 produced binary junk, which the XML parser turned into an endless pile of
- * unclosed nodes and reported as "Maximum nested tags exceeded" — the exact error a real user
- * hit, and one no amount of XML-parsing tolerance could fix.
- */
-async function decodeBody(buffer: Buffer): Promise<string> {
-  // Deliberately sniffed from the bytes rather than trusting content-encoding: the upstream
-  // request layer already decompresses an encoded response (nodeUpstreamRequest.ts), so acting
-  // on the header here would decompress twice. A pre-compressed `.xml.gz` *file* carries no
-  // content-encoding at all — the gzip magic bytes are the only signal it has.
-  if (buffer.length > 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
-    try {
-      return (await gunzipAsync(buffer)).toString('utf-8')
-    } catch (err) {
-      throw new Error(`Could not decompress the gzipped guide: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-  return buffer.toString('utf-8')
-}
-
-/** Fetches a URL's body as text through the Node upstream machinery (TLS-CA parity, redirect
- *  following, and the 20s mid-body stall watchdog all come along for free). */
-function fetchTextViaUpstream(
-  createUpstreamRequest: typeof createNodeUpstreamRequest,
-  url: string,
-  stallTimeoutMs: number,
-  stallCheckIntervalMs?: number
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const req: UpstreamClientRequest = createUpstreamRequest({
-      method: 'GET',
-      url,
-      stallTimeoutMs,
-      stallCheckIntervalMs
-    })
-    let redirects = 0
-    req.on('redirect', () => {
-      if (redirects >= MAX_REDIRECTS) {
-        req.abort()
-        reject(new Error(`Too many redirects fetching ${url}`))
-        return
-      }
-      redirects++
-      req.followRedirect()
-    })
-    req.on('response', (res) => {
-      if (res.statusCode >= 400) {
-        req.abort()
-        reject(new Error(`HTTP ${res.statusCode} fetching ${url}`))
-        return
-      }
-      // A real Writable sink rather than a bare {write,end} object: Node's pipe() attaches
-      // drain/error/close listeners on the destination and needs a genuine stream. 'finish' is
-      // the normal completion; the watchdog's force-destroy path surfaces as 'close' (or an
-      // 'error' on the request) without 'finish', which must reject rather than hang — a hung
-      // guide fetch would otherwise wedge /api/epg exactly the way the old proxy hung players.
-      const chunks: Buffer[] = []
-      let settled = false
-      const sink = new Writable({
-        write(chunk: Buffer, _encoding, callback) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-          callback()
-        }
-      })
-      sink.on('finish', () => {
-        if (settled) return
-        settled = true
-        decodeBody(Buffer.concat(chunks)).then(resolve, reject)
-      })
-      sink.on('close', () => {
-        if (settled) return
-        settled = true
-        reject(new Error(`Connection closed before the guide finished downloading: ${url}`))
-      })
-      sink.on('error', (err) => {
-        if (settled) return
-        settled = true
-        reject(err)
-      })
-      res.pipe(sink as unknown as ServerResponse)
-    })
-    req.on('error', (err) => reject(err instanceof Error ? err : new Error(String(err))))
-    // `end` is deliberately not part of UpstreamClientRequest's own type (see that interface's
-    // comment) even though the real object always has one — same cast nodeUpstreamRequest.test.ts
-    // uses to send the "no request body coming" signal.
-    ;(req as unknown as { end: () => void }).end()
-  })
 }
 
 /** Programmes overlapping [startMs, endMs) from a list the parser already sorted by startMs. */

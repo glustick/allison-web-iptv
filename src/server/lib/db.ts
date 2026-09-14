@@ -108,6 +108,25 @@ function createSchema(db: Database.Database): void {
       PRIMARY KEY (username, kind, stream_id)
     );
 
+    -- Search index over the provider's catalogue: one row per channel/film/series, its name
+    -- pre-tokenised with the same normalisation the matcher uses. Rebuilt on demand, so it is
+    -- disposable — which is what lets search keep working while the provider is unreachable.
+    CREATE TABLE IF NOT EXISTS search_index (
+      kind        TEXT NOT NULL,
+      stream_id   INTEGER NOT NULL,
+      name        TEXT NOT NULL,
+      category    TEXT,
+      stream_icon TEXT,
+      tokens      TEXT NOT NULL,
+      PRIMARY KEY (kind, stream_id)
+    );
+    CREATE INDEX IF NOT EXISTS search_index_tokens ON search_index (tokens);
+
+    CREATE TABLE IF NOT EXISTS search_meta (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS meta (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL

@@ -63,7 +63,18 @@ function synthesizeStream(streamId: number, name: string, category: string | nul
   }
 }
 
-export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpenEpgSettings?: () => void }): JSX.Element {
+export function LiveTv({
+  session,
+  onOpenEpgSettings,
+  playRequest,
+  onPlayHandled
+}: {
+  session: Session
+  onOpenEpgSettings?: () => void
+  /** A search hit for this view to open (see App.tsx). */
+  playRequest?: { kind: string; streamId: number; name: string; nonce: number } | null
+  onPlayHandled?: () => void
+}): JSX.Element {
   const [categories, setCategories] = useState<Category[]>([])
   // Favourites is the landing view: it is what someone checks first after signing in, and an
   // empty one explains itself (see the grid's emptyMessage) rather than showing nothing useful.
@@ -127,6 +138,15 @@ export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpe
     reportNowPlaying(nowPlaying?.name ?? null, 'live')
   }, [nowPlaying])
   useEffect(() => () => reportNowPlaying(null), [])
+
+  // A search result: switch the view to All so the channel is in context, and start it.
+  useEffect(() => {
+    if (!playRequest || playRequest.kind !== 'live') return
+    setSelection({ type: 'all' })
+    selectChannel(synthesizeStream(playRequest.streamId, playRequest.name, null))
+    onPlayHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playRequest?.nonce])
 
   const liveFavourites = useMemo(() => prefs.favourites.filter((f) => f.kind === 'live'), [prefs.favourites])
 

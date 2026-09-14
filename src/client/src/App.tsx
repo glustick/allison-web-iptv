@@ -4,6 +4,10 @@ import { SetupScreen } from './components/SetupScreen'
 import { IptvConfigScreen } from './components/IptvConfigScreen'
 import { AdminConsole } from './components/AdminConsole'
 import { EpgSettings } from './components/EpgSettings'
+import { SystemPanel } from './components/SystemPanel'
+import { SearchBar } from './components/SearchBar'
+import type { MediaKind } from './lib/prefs'
+import type { SearchHit } from './lib/system'
 import { LiveTv } from './components/LiveTv'
 import { Movies } from './components/Movies'
 import { Series } from './components/Series'
@@ -19,7 +23,7 @@ import {
   type Session
 } from './lib/appAuth'
 
-type Tab = 'live' | 'movies' | 'series' | 'epg' | 'admin'
+type Tab = 'live' | 'movies' | 'series' | 'epg' | 'admin' | 'system'
 
 // The post-login IPTV check has three outcomes: no config yet (ask for it), config present
 // (auto-connect), or config present but broken (ask for it again, pre-filled, with the
@@ -34,6 +38,9 @@ export default function App(): JSX.Element {
   const [autoConnectError, setAutoConnectError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('live')
   const [updateMessage, setUpdateMessage] = useState<string | null>(null)
+  // A search hit is played by the view that owns that kind, so the request carries a nonce:
+  // picking the same result twice must still switch tab and start playback.
+  const [playRequest, setPlayRequest] = useState<{ kind: MediaKind; streamId: number; name: string; nonce: number } | null>(null)
   const [authError, setAuthError] = useState<string | null>(null)
   // An admin whose own account has no IPTV provider configured would otherwise be stuck on
   // the IPTV setup screen, unable to manage users or watch sessions at all — the admin console
@@ -233,7 +240,18 @@ export default function App(): JSX.Element {
               Admin
             </button>
           )}
+          {appUser.role === 'admin' && (
+            <button className={tab === 'system' ? 'tab active' : 'tab'} onClick={() => setTab('system')}>
+              System
+            </button>
+          )}
         </div>
+        <SearchBar
+          onPlay={(hit: SearchHit) => {
+            setPlayRequest({ kind: hit.kind, streamId: hit.streamId, name: hit.name, nonce: Date.now() })
+            setTab(hit.kind === 'live' ? 'live' : hit.kind === 'movie' ? 'movies' : 'series')
+          }}
+        />
         <div className="top-bar-right">
           {updateMessage && <span className="version-badge">{updateMessage}</span>}
           <span className="user-chip">
@@ -254,11 +272,23 @@ export default function App(): JSX.Element {
           .
         </div>
       )}
-      {session && tab === 'live' && <LiveTv session={session} onOpenEpgSettings={() => setTab('epg')} />}
-      {session && tab === 'movies' && <Movies session={session} />}
-      {session && tab === 'series' && <Series session={session} />}
+      {session && tab === 'live' && (
+        <LiveTv
+          session={session}
+          onOpenEpgSettings={() => setTab('epg')}
+          playRequest={playRequest}
+          onPlayHandled={() => setPlayRequest(null)}
+        />
+      )}
+      {session && tab === 'movies' && (
+        <Movies session={session} playRequest={playRequest} onPlayHandled={() => setPlayRequest(null)} />
+      )}
+      {session && tab === 'series' && (
+        <Series session={session} playRequest={playRequest} onPlayHandled={() => setPlayRequest(null)} />
+      )}
       {session && tab === 'epg' && <EpgSettings session={session} />}
       {tab === 'admin' && appUser.role === 'admin' && <AdminConsole appUser={appUser} />}
+      {tab === 'system' && appUser.role === 'admin' && <SystemPanel />}
     </div>
   )
 }

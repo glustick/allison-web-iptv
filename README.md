@@ -256,6 +256,34 @@ Roles are `admin` and `user`. Admins get an extra **Admin** tab with:
 Logins expire after 24 hours without any request (`AUTH_IDLE_TTL_HOURS`); actively watching
 keeps the session alive automatically. Removing a user immediately terminates their sessions.
 
+## Global search
+
+A search field in the top bar covers the provider's whole catalogue — live channels, films and
+series — with the same fuzzy matching the guide uses: number words fold (`sky sports one` finds
+`Sky Sports 1 HD`), and every word you type must appear in the name (so `f1 news` doesn't
+silently return the F1 channel). Results show the artwork, category and kind, and picking one
+switches to the right tab and starts playback.
+
+Results come from a **SQLite index**, not a live query: it is built on demand — automatically when
+it is more than a day old, or from **System → Search index** — so search still answers instantly
+when the provider is slow or entirely down. (Search tokenises differently from the guide matcher
+on purpose: the matcher drops packaging words like `HD`/`Channel` because it is deciding identity,
+whereas search keeps them, because people type the words they can see.)
+
+## Backup, restore and system health (admin → **System** tab)
+
+- **Health**: version, uptime, memory, database size and row counts, provider reachability with
+  **connection usage** (`1 in use of 2`), guide-source status, active transcodes, and the last few
+  server errors — the "is it them or us?" page.
+- **Backup**: download the whole database with one click (a consistent copy taken with SQLite's
+  own backup API, safe while the app is running). A snapshot is also written to `/appdata/backups`
+  automatically once a day, keeping the last handful.
+- **Restore**: upload a backup; it is verified (must be a real Allison database) and applied on
+  the next restart, with the database it replaces kept in `/appdata/backups` — so a restore is
+  itself undoable. Swapping the file under a live process is how SQLite databases get corrupted,
+  hence restart-time application.
+- **Search index** controls and stats.
+
 ## Your library: favourites, history and custom categories
 
 All three live in the sidebar and are stored per account in the database:

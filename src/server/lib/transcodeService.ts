@@ -95,6 +95,8 @@ export interface AudioTrackInfo {
 export interface TranscodeSession {
   proc: ChildProcessWithoutNullStreams
   dir: string
+  /** When the session started, so the health page can show how long it has been running. */
+  startedAt: number
   stderrTail: string[]
   subtitleTracks: SubtitleTrackInfo[]
   // ffmpeg logs the *output* file's own stream list right after the input's, in a nearly
@@ -119,6 +121,8 @@ export interface TranscodeServiceDeps {
 }
 
 export interface TranscodeService {
+  /** Live transcode sessions — used by the health page, not by playback. */
+  stats(): Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean }>
   startTranscode(
     sourceUrl: string,
     isVod: boolean,
@@ -313,7 +317,14 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       await rm(dir, { recursive: true, force: true }).catch(() => {})
       throw new Error('Transcode cancelled')
     }
-    const session: TranscodeSession = { proc, dir, stderrTail: [], subtitleTracks: [], inputStreamListEnded: false }
+    const session: TranscodeSession = {
+      proc,
+      dir,
+      startedAt: Date.now(),
+      stderrTail: [],
+      subtitleTracks: [],
+      inputStreamListEnded: false
+    }
     transcodeSessions.set(sessionId, session)
 
     // A stall-detection scheme keyed on "time since ffmpeg last wrote to stderr" was tried here
@@ -587,5 +598,16 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     })
   }
 
-  return { startTranscode, stopTranscode, serveTranscodeFile, stopAll, probeTracks }
+  /** What the health page shows: which transcode sessions are live and how long they've run. */
+  function stats(): Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean }> {
+    const now = Date.now()
+    return [...transcodeSessions.entries()].map(([sessionId, session]) => ({
+      sessionId,
+      startedAt: new Date(session.startedAt).toISOString(),
+      runningSeconds: Math.round((now - session.startedAt) / 1000),
+      hasPlaylist: existsSync(join(session.dir, 'playlist.m3u8')) || existsSync(join(session.dir, 'master.m3u8'))
+    }))
+  }
+
+  return { startTranscode, stopTranscode, serveTranscodeFile, stopAll, probeTracks, stats }
 }

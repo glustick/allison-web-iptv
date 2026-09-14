@@ -114,7 +114,15 @@ function EpisodeList({
   )
 }
 
-export function Series({ session }: { session: Session }): JSX.Element {
+export function Series({
+  session,
+  playRequest,
+  onPlayHandled
+}: {
+  session: Session
+  playRequest?: { kind: string; streamId: number; name: string; nonce: number } | null
+  onPlayHandled?: () => void
+}): JSX.Element {
   const [categories, setCategories] = useState<Category[]>([])
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null)
   const [seriesList, setSeriesList] = useState<SeriesItem[]>([])
@@ -151,6 +159,18 @@ export function Series({ session }: { session: Session }): JSX.Element {
     reportNowPlaying(nowPlaying?.episode?.title ?? null, 'series')
   }, [nowPlaying])
   useEffect(() => () => reportNowPlaying(null), [])
+
+  // A series search hit is an episode id (that is what the provider's catalogue gives us), so it
+  // plays directly rather than trying to browse to its season.
+  useEffect(() => {
+    if (!playRequest || playRequest.kind !== 'series') return
+    playEpisode(
+      { id: String(playRequest.streamId), episode_num: 0, title: playRequest.name, container_extension: 'mkv', info: {}, season: 0 } as unknown as SeriesEpisode,
+      0
+    )
+    onPlayHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playRequest?.nonce])
 
   const resumeFor = useCallback(
     (episodeId: number): ResumePosition | undefined =>
