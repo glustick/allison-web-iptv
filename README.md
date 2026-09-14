@@ -6,7 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.6.1 — resilient startup and readable storage errors)
+## Current state (v0.6.3 — every storage failure names itself)
+
+**v0.6.3** finishes the hardening started in v0.6.1: `/api/session/save`, `/api/session/clear`,
+`/api/session` (load), `/api/connect` and the transcode routes now return readable JSON errors
+(they were the last paths that could answer with an opaque HTML 500 — badly timed, since
+`/api/session/save` runs the moment you submit IPTV credentials), the transcode routes report
+"No IPTV server configured" instead of throwing, and boot warns loudly when `SESSION_SECRET` is
+missing or under 16 characters. **v0.6.2** made the first-run admin setup route report the real
+cause too. Found live against a real provider (27,807 channels + a 304k-programme guide through
+the app's own proxy).
 
 **v0.6.1** hardens the account store's failure paths found during real deployments: a broken
 or unreadable `users.json` no longer crashes the server at boot (it now starts, logs the exact
@@ -287,6 +296,60 @@ Or with the provided `docker-compose.yml` (set a real `SESSION_SECRET` first —
 ```bash
 docker compose up -d
 ```
+
+### Stack deployment (Dockhand, Portainer, Synology Container Manager, …)
+
+The complete stack, copy-paste ready. **The only line that must be edited is `SESSION_SECRET`:**
+
+```yaml
+services:
+  allison-web-iptv:
+    image: ghcr.io/glustick/allison-web-iptv:v0.6.3
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      - PORT=8085
+      # REQUIRED. Must be 16+ characters. Generate one:  openssl rand -hex 24
+      # Replace the value below with that output. It encrypts your stored IPTV credentials —
+      # set it once and keep it stable across updates.
+      - SESSION_SECRET=REPLACE_WITH_YOUR_OWN_SECRET
+      # All variable/persistent state (accounts, hashed passwords, encrypted IPTV config)
+      # lives under /appdata in the container.
+      - DATA_DIR=/appdata
+    volumes:
+      # Persistent, read-write — keeps accounts and IPTV config across image/stack updates.
+      - ./appdata:/appdata:rw
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||8085)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+```
+
+Apply it by pasting the above into your stack manager and deploying, or from a CLI:
+
+```bash
+docker compose up -d --force-recreate
+```
+
+Notes on the three environment variables and the parts that matter:
+
+- **`SESSION_SECRET`** — required, 16+ characters, generate with `openssl rand -hex 24`.
+  It encrypts every account's stored IPTV provider credentials (AES-256-GCM) and **must stay
+  the same across updates**; if it changes, the app treats the stored IPTV config as unset and
+  you re-enter it (account logins are unaffected — those are scrypt-hashed, not key-dependent).
+  A missing or too-short value is reported at startup and whenever IPTV config is saved.
+- **`DATA_DIR=/appdata`** — where `users.json` (accounts, hashed passwords, encrypted IPTV
+  config) lives inside the container.
+- **`./appdata:/appdata:rw`** — the persistent volume mapping. This is what makes a Docker or
+  stack update keep your accounts and IPTV config; without it, every update would land you back
+  on the first-run admin setup screen. Keep it read-write.
+- **`healthcheck`** — polls the app's own `/api/health`; stack UIs (Dockhand included) surface
+  this as the container's health status.
+- **`image:`** — pinned to `v0.6.3` here for reproducibility; use
+  `ghcr.io/glustick/allison-web-iptv:latest` if you'd rather your update flow track new releases.
 
 If your network does TLS inspection (see `NODE_EXTRA_CA_CERTS` above), mount your CA bundle
 into the container and set that same environment variable to point at it — `docker-compose.yml`
