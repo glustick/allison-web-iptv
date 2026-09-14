@@ -527,6 +527,90 @@ app.get('/api/version-check', (_req, res) => {
   })()
 })
 
+// -- EPG settings (the EPG section): which guides are configured, how healthy they are, and how
+// much of the channel list they actually cover. The status read is deliberately non-blocking —
+// it reports what's cached and starts missing downloads in the background, so the screen can
+// poll and show sources coming online instead of hanging on a 98MB guide fetch.
+
+/** Reads this account's stored IPTV credentials (needed by every EPG route). */
+function resolveAccountCredentials(username: string): SessionCredentials | null {
+  const stored = usersStore.getIptvCredentials(username)
+  if (!stored) return null
+  try {
+    return decryptSessionCredentials(stored)
+  } catch {
+    return null
+  }
+}
+
+app.get('/api/epg/config', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    const credentials = resolveAccountCredentials(session.username)
+    if (!credentials) {
+      res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+      return
+    }
+    const epgUrls = credentials.epgUrls ?? []
+    const sources = epgService.peekStatus({ credentials, epgUrls })
+    const summary = epgService.peekMatchSummary({ credentials })
+    if (!summary) {
+      // Warm the stats in the background — the client polls and picks them up.
+      void epgService.getMatchSummary({ credentials, epgUrls }).catch(() => {})
+    }
+    res.json({ ok: true, epgUrls, sources, summary })
+  } catch (err) {
+    console.error('[epg] config failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
+app.post('/api/epg/sources', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const raw = req.body?.epgUrls
+  if (!Array.isArray(raw)) {
+    res.status(400).json({ error: 'epgUrls must be an array of URLs' })
+    return
+  }
+  const invalid = raw.find((url: unknown) => typeof url !== 'string' || !/^https?:\/\//i.test(url.trim()))
+  if (invalid !== undefined) {
+    res.status(400).json({ error: 'Each EPG URL must start with http:// or https://' })
+    return
+  }
+  try {
+    const credentials = resolveAccountCredentials(session.username)
+    if (!credentials) {
+      res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+      return
+    }
+    const epgUrls = sanitizeEpgUrls(raw) ?? []
+    const next: SessionCredentials = { ...credentials, epgUrls: epgUrls.length > 0 ? epgUrls : undefined }
+    usersStore.setIptvCredentials(session.username, encryptSessionCredentials(next))
+    // Kick off any newly-added sources so the screen shows them loading immediately.
+    epgService.refresh({ credentials: next, epgUrls })
+    res.json({ ok: true, epgUrls })
+  } catch (err) {
+    console.error('[epg] save sources failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
+app.post('/api/epg/refresh', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    const credentials = resolveAccountCredentials(session.username)
+    if (!credentials) {
+      res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+      return
+    }
+    epgService.refresh({ credentials, epgUrls: credentials.epgUrls ?? [] })
+    res.json({ ok: true, started: true })
+  } catch (err) {
+    console.error('[epg] refresh failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
 // Windowed, aggregated programme listings for the EPG grid — provider guide first, extra
 // user-configured XMLTV sources filling channels the provider has nothing for (epgService.ts).
 // Clients refetch per time-window navigation; guides themselves are cached server-side per TTL.

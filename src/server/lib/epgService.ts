@@ -2,16 +2,28 @@ import { Writable } from 'stream'
 import type { ServerResponse } from 'http'
 import { createNodeUpstreamRequest } from './nodeUpstreamRequest.js'
 import type { UpstreamClientRequest } from './proxyServer.js'
-import { buildGuideIndexes, matchStreamToGuideChannel, type GuideIndexes, type StreamForMatching } from './epgMatching.js'
-import { parseXmltv, type XmltvGuide } from './xmltv.js'
+import {
+  buildGuideIndexes,
+  matchStreamToGuideChannelDetailed,
+  type GuideIndexes,
+  type MatchStrategy,
+  type StreamForMatching
+} from './epgMatching.js'
+import { parseXmltv, type XmltvGuide, type XmltvProgramme } from './xmltv.js'
 
 // Server-side EPG aggregation. The EPG used to be assembled entirely in the browser: one bulk
 // ~98MB xmltv.php download per session (repeated per tab remount), joined to channels by exact
 // epg_channel_id string only, with a per-channel get_short_epg fallback that this provider
 // serves empty. This module moves aggregation behind /api/epg so it can merge the provider's
-// guide with user-supplied external XMLTV sources (per-profile epgUrls), apply the wider
+// guide with user-supplied external XMLTV sources (per-account epgUrls), apply the wider
 // matching layer from epgMatching.ts, and cache guides in server memory shared by every browser
 // session — one fetch per source per TTL instead of one per tab.
+//
+// v0.6.6 adds the caches that make thousands of channels practical: guide indexes are built once
+// per fetched guide (not per request), programme counts are computed once, the stream→guide
+// mapping is memoised per (account, guide version) so grid navigation only re-runs the cheap
+// window filter, and window filtering binary-searches the parser's already-sorted programme
+// lists instead of scanning every programme of every matched channel.
 
 const GUIDE_TTL_MS = 6 * 3_600_000
 const CHANNEL_LIST_TTL_MS = 3_600_000
@@ -23,14 +35,25 @@ export interface EpgServiceCredentials {
   password: string
 }
 
+export type EpgSourceState = 'ok' | 'error' | 'loading'
+
 export interface EpgSourceStatus {
   kind: 'provider' | 'external'
   url: string
-  status: 'ok' | 'error'
+  status: EpgSourceState
   channelCount: number
   programmeCount: number
   fetchedAt: number | null
   error?: string
+}
+
+export interface EpgMatchSummary {
+  streams: number
+  matched: number
+  unmatched: number
+  byStrategy: Record<MatchStrategy, number>
+  buildMs: number
+  builtAt: number
 }
 
 export interface EpgWindowProgramme {
@@ -52,11 +75,28 @@ interface GuideCacheEntry {
   error?: string
   fetchedAt: number
   fetchPromise: Promise<XmltvGuide | null> | null
+  /** Built lazily once per guide (see buildGuideIndexes) and reused by every request. */
+  index?: GuideIndexes | null
+  channelCount?: number
+  programmeCount?: number
 }
 
 interface ChannelListCacheEntry {
   streams: StreamForMatching[]
   fetchedAt: number
+}
+
+interface StreamMatch {
+  guideUrl: string
+  channelId: string
+  strategy: MatchStrategy
+  score?: number
+}
+
+interface MappingCacheEntry {
+  mapping: Map<number, StreamMatch>
+  stats: EpgMatchSummary
+  key: string
 }
 
 export interface EpgServiceDeps {
@@ -128,6 +168,27 @@ function fetchTextViaUpstream(
   })
 }
 
+/** Programmes overlapping [startMs, endMs) from a list the parser already sorted by startMs. */
+function programmesInWindow(sorted: XmltvProgramme[], startMs?: number, endMs?: number): XmltvProgramme[] {
+  if (startMs === undefined || endMs === undefined) return sorted
+  // First index whose programme starts at/after the window — then step back over any earlier
+  // programme that still overlaps the window (normally zero or one step).
+  let lo = 0
+  let hi = sorted.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (sorted[mid].startMs < startMs) lo = mid + 1
+    else hi = mid
+  }
+  let start = lo
+  while (start > 0 && sorted[start - 1].stopMs > startMs) start--
+  const out: XmltvProgramme[] = []
+  for (let i = start; i < sorted.length && sorted[i].startMs < endMs; i++) {
+    if (sorted[i].stopMs > startMs) out.push(sorted[i])
+  }
+  return out
+}
+
 export function createEpgService(deps: EpgServiceDeps = {}) {
   const createUpstreamRequest = deps.createUpstreamRequest ?? createNodeUpstreamRequest
   const guideTtlMs = deps.guideTtlMs ?? GUIDE_TTL_MS
@@ -136,6 +197,25 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
 
   const guideCache = new Map<string, GuideCacheEntry>()
   const channelListCache = new Map<string, ChannelListCacheEntry>()
+  const mappingCache = new Map<string, MappingCacheEntry>()
+  /** Last computed match summary per account — lets the EPG screen show coverage stats that
+   *  were produced by a normal grid load, without recomputing them on every settings poll. */
+  const lastSummary = new Map<string, EpgMatchSummary>()
+
+  function ensureGuideStats(entry: GuideCacheEntry): void {
+    if (entry.programmeCount !== undefined) return
+    entry.channelCount = entry.guide?.channels.size ?? 0
+    entry.programmeCount = entry.guide
+      ? Array.from(entry.guide.programmesByChannel.values()).reduce((n, list) => n + list.length, 0)
+      : 0
+  }
+
+  /** The guide's channel indexes — built once per fetched guide, not per request. */
+  function ensureIndex(entry: GuideCacheEntry): GuideIndexes | null {
+    if (entry.index !== undefined) return entry.index
+    entry.index = entry.guide ? buildGuideIndexes(entry.guide) : null
+    return entry.index
+  }
 
   function fetchGuideOnce(url: string): Promise<XmltvGuide | null> {
     return fetchTextViaUpstream(createUpstreamRequest, url).then((xml) => parseXmltv(xml, { now: now() }))
@@ -153,7 +233,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
             guideCache.set(url, { guide, status: 'ok', fetchedAt: now(), fetchPromise: null })
             return guide
           })
-          .catch((err) => {
+          .catch(() => {
             // A failed refresh keeps serving the last good guide — a temporarily unreachable
             // external source shouldn't blank rows it had already filled.
             existing.fetchPromise = null
@@ -182,6 +262,31 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       guideCache.set(url, entry)
       return entry
     }
+  }
+
+  /** Non-blocking status for the EPG settings screen: reports what is cached, and for anything
+   *  missing/re-fetchable starts the download in the background so the UI can poll for it. */
+  function peekStatus(urls: string[]): EpgSourceStatus[] {
+    return urls.map((url, i) => {
+      const kind: 'provider' | 'external' = i === 0 ? 'provider' : 'external'
+      const entry = guideCache.get(url)
+      if (!entry) {
+        void getGuideOrError(url)
+        return { kind, url, status: 'loading' as EpgSourceState, channelCount: 0, programmeCount: 0, fetchedAt: null }
+      }
+      ensureGuideStats(entry)
+      const stale = now() - entry.fetchedAt >= guideTtlMs
+      if (stale && !entry.fetchPromise) void getGuideOrError(url)
+      return {
+        kind,
+        url,
+        status: stale || entry.fetchPromise ? 'loading' : entry.status,
+        channelCount: entry.channelCount ?? 0,
+        programmeCount: entry.programmeCount ?? 0,
+        fetchedAt: entry.fetchedAt,
+        error: entry.error
+      }
+    })
   }
 
   async function getChannelList(credentials: EpgServiceCredentials): Promise<StreamForMatching[]> {
@@ -213,15 +318,103 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
   }
 
   function describeSource(kind: 'provider' | 'external', url: string, entry: GuideCacheEntry): EpgSourceStatus {
+    ensureGuideStats(entry)
     return {
       kind,
       url,
       status: entry.status,
-      channelCount: entry.guide?.channels.size ?? 0,
-      programmeCount: entry.guide ? Array.from(entry.guide.programmesByChannel.values()).reduce((n, list) => n + list.length, 0) : 0,
+      channelCount: entry.channelCount ?? 0,
+      programmeCount: entry.programmeCount ?? 0,
       fetchedAt: entry.fetchedAt,
       error: entry.error
     }
+  }
+
+  function mappingCacheKey(
+    credentials: EpgServiceCredentials,
+    sources: string[],
+    entries: GuideCacheEntry[]
+  ): string {
+    const versions = entries.map((entry) => `${entry.fetchedAt}:${entry.status}`).join(',')
+    return `${credentials.server}|${credentials.username}|${sources.join('\u0000')}|${versions}`
+  }
+
+  /** Stream → guide-channel mapping, memoised per (account, source set, guide versions): this is
+   *  the expensive part (thousands of streams × scoring), so it runs once per guide refresh
+   *  rather than per grid navigation. */
+  function getMapping(
+    credentials: EpgServiceCredentials,
+    sources: string[],
+    entries: GuideCacheEntry[],
+    streams: StreamForMatching[]
+  ): MappingCacheEntry {
+    const key = mappingCacheKey(credentials, sources, entries)
+    const cached = mappingCache.get(key)
+    if (cached) return cached
+
+    const startedAt = now()
+    const candidates: Array<{ url: string; index: GuideIndexes }> = []
+    entries.forEach((entry, i) => {
+      const index = ensureIndex(entry)
+      if (entry.guide && index) candidates.push({ url: sources[i], index })
+    })
+
+    const mapping = new Map<number, StreamMatch>()
+    const byStrategy: Record<MatchStrategy, number> = {
+      'exact-id': 0,
+      'normalized-id': 0,
+      'exact-name': 0,
+      'fuzzy-name': 0
+    }
+    for (const stream of streams) {
+      for (const candidate of candidates) {
+        const result = matchStreamToGuideChannelDetailed(stream, candidate.index)
+        if (!result.channelId || !result.strategy) continue
+        mapping.set(stream.stream_id, {
+          guideUrl: candidate.url,
+          channelId: result.channelId,
+          strategy: result.strategy,
+          score: result.score
+        })
+        byStrategy[result.strategy]++
+        break
+      }
+    }
+
+    const entry: MappingCacheEntry = {
+      mapping,
+      key,
+      stats: {
+        streams: streams.length,
+        matched: mapping.size,
+        unmatched: streams.length - mapping.size,
+        byStrategy,
+        buildMs: Math.max(0, now() - startedAt),
+        builtAt: now()
+      }
+    }
+    // One mapping per account in practice; keep the map small.
+    if (mappingCache.size > 8) mappingCache.clear()
+    mappingCache.set(key, entry)
+    lastSummary.set(`${credentials.server}|${credentials.username}`, entry.stats)
+    return entry
+  }
+
+  async function resolveEverything(params: { credentials: EpgServiceCredentials; epgUrls: string[] }): Promise<{
+    streams: StreamForMatching[]
+    sources: string[]
+    entries: GuideCacheEntry[]
+    mapping: MappingCacheEntry
+  }> {
+    const sources = [providerGuideUrl(params.credentials), ...params.epgUrls]
+    const [streams, ...entries] = await Promise.all([
+      getChannelList(params.credentials).catch((err: unknown) => {
+        throw new Error(`Could not load the channel list: ${err instanceof Error ? err.message : String(err)}`)
+      }),
+      ...sources.map((url) => getGuideOrError(url))
+    ])
+    const mapping = getMapping(params.credentials, sources, entries, streams)
+    return { streams, sources, entries, mapping }
   }
 
   async function aggregate(params: {
@@ -230,47 +423,30 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     startMs?: number
     endMs?: number
   }): Promise<EpgWindow> {
-    const { credentials, epgUrls } = params
-    const sources = [providerGuideUrl(credentials), ...epgUrls]
-
-    const [channelList, ...guideEntries] = await Promise.all([
-      getChannelList(credentials).catch((err: unknown) => {
-        throw new Error(`Could not load the channel list: ${err instanceof Error ? err.message : String(err)}`)
-      }),
-      ...sources.map((url) => getGuideOrError(url))
-    ])
-
-    // The provider guide wins per channel; external guides fill channels the provider has
-    // nothing for, in the order they're configured.
-    const providerEntry = guideEntries[0]
-    const externalEntries = guideEntries.slice(1)
-    const providerIndexes = providerEntry.guide ? buildGuideIndexes(providerEntry.guide) : null
-    const externalIndexes = externalEntries.map((entry) => (entry.guide ? buildGuideIndexes(entry.guide) : null))
-    const candidates: Array<{ guide: XmltvGuide; indexes: GuideIndexes }> = []
-    if (providerEntry.guide && providerIndexes) candidates.push({ guide: providerEntry.guide, indexes: providerIndexes })
-    externalEntries.forEach((entry, i) => {
-      if (entry.guide && externalIndexes[i]) candidates.push({ guide: entry.guide, indexes: externalIndexes[i] as GuideIndexes })
+    const { sources, entries, mapping } = await resolveEverything(params)
+    const guidesByUrl = new Map<string, XmltvGuide>()
+    entries.forEach((entry, i) => {
+      if (entry.guide) guidesByUrl.set(sources[i], entry.guide)
     })
 
     const listings: Record<string, EpgWindowProgramme[]> = {}
-    for (const stream of channelList) {
-      for (const candidate of candidates) {
-        const guideChannelId = matchStreamToGuideChannel(stream, candidate.indexes)
-        if (!guideChannelId) continue
-        const programmes = candidate.guide.programmesByChannel.get(guideChannelId)
-        if (!programmes) continue
-        const inWindow = programmes
-          .filter((p) => params.startMs === undefined || params.endMs === undefined || (p.stopMs > params.startMs && p.startMs < params.endMs))
-          .map((p) => ({ startMs: p.startMs, stopMs: p.stopMs, title: p.title, description: p.description }))
-        if (inWindow.length > 0) listings[String(stream.stream_id)] = inWindow
-        break
-      }
+    for (const [streamId, match] of mapping.mapping) {
+      const guide = guidesByUrl.get(match.guideUrl)
+      if (!guide) continue
+      const programmes = guide.programmesByChannel.get(match.channelId)
+      if (!programmes || programmes.length === 0) continue
+      const inWindow = programmesInWindow(programmes, params.startMs, params.endMs)
+      if (inWindow.length === 0) continue
+      listings[String(streamId)] = inWindow.map((p) => ({
+        startMs: p.startMs,
+        stopMs: p.stopMs,
+        title: p.title,
+        description: p.description
+      }))
     }
 
     return {
-      sources: sources.map((url, i) =>
-        describeSource(i === 0 ? 'provider' : 'external', url, guideEntries[i])
-      ),
+      sources: sources.map((url, i) => describeSource(i === 0 ? 'provider' : 'external', url, entries[i])),
       listings
     }
   }
@@ -284,9 +460,32 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
         getGuideOrError(url).then((entry) => describeSource(i === 0 ? 'provider' : 'external', url, entry))
       ))
     },
+    /** Non-blocking status used by the EPG settings screen (starts missing fetches in the
+     *  background, reports 'loading' meanwhile). */
+    peekStatus(params: { credentials: EpgServiceCredentials; epgUrls: string[] }): EpgSourceStatus[] {
+      return peekStatus([providerGuideUrl(params.credentials), ...params.epgUrls])
+    },
+    /** How many channels the guides actually cover, and by which matching step. */
+    getMatchSummary(params: { credentials: EpgServiceCredentials; epgUrls: string[] }): Promise<EpgMatchSummary> {
+      return resolveEverything(params).then((resolved) => resolved.mapping.stats)
+    },
+    /** The last computed summary for this account, if any (no fetch, no recompute). */
+    peekMatchSummary(params: { credentials: EpgServiceCredentials }): EpgMatchSummary | null {
+      return lastSummary.get(`${params.credentials.server}|${params.credentials.username}`) ?? null
+    },
+    /** Drops cached guides (and the mappings derived from them) so the next request refetches,
+     *  then starts those fetches in the background. Used by the EPG screen's "Refresh" action. */
+    refresh(params: { credentials: EpgServiceCredentials; epgUrls: string[] }): void {
+      const sources = [providerGuideUrl(params.credentials), ...params.epgUrls]
+      for (const url of sources) guideCache.delete(url)
+      mappingCache.clear()
+      lastSummary.delete(`${params.credentials.server}|${params.credentials.username}`)
+      for (const url of sources) void getGuideOrError(url)
+    },
     /** Test/ops hook: drop cached guides (channel-list cache keyed to its own shorter TTL). */
     clearGuideCache(): void {
       guideCache.clear()
+      mappingCache.clear()
     }
   }
 }

@@ -763,3 +763,91 @@ body.resizing-row {
   opacity: 0.4;
   cursor: default;
 }
+
+/* --- EPG settings section ---------------------------------------------------------------- */
+
+.epg-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.epg-section-head h2 {
+  margin: 0;
+}
+
+.epg-note {
+  padding: 10px 14px;
+  background: rgba(79, 124, 255, 0.1);
+  border: 1px solid rgba(79, 124, 255, 0.3);
+  border-radius: 8px;
+  font-size: 13px;
+  color: #cfe0ff;
+}
+
+.epg-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.epg-stat {
+  flex: 1 1 180px;
+  background: #12151c;
+  border: 1px solid #232733;
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.epg-stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: #e7e9ee;
+}
+
+.epg-stat-label {
+  font-size: 12px;
+  color: #9aa1ad;
+}
+
+.epg-source-name {
+  display: block;
+  color: #c8cdd6;
+}
+
+.epg-source-url {
+  display: block;
+  font-size: 11px;
+  color: #5b6270;
+  word-break: break-all;
+}
+
+.epg-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.epg-status-ok {
+  background: rgba(125, 224, 141, 0.15);
+  color: #7de08d;
+}
+
+.epg-status-loading {
+  background: rgba(255, 176, 32, 0.15);
+  color: #ffd27d;
+}
+
+.epg-status-error {
+  background: rgba(255, 107, 107, 0.15);
+  color: #ff6b6b;
+}

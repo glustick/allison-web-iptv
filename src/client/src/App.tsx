@@ -3,6 +3,7 @@ import { LoginScreen } from './components/LoginScreen'
 import { SetupScreen } from './components/SetupScreen'
 import { IptvConfigScreen } from './components/IptvConfigScreen'
 import { AdminConsole } from './components/AdminConsole'
+import { EpgSettings } from './components/EpgSettings'
 import { LiveTv } from './components/LiveTv'
 import { Movies } from './components/Movies'
 import { Series } from './components/Series'
@@ -18,7 +19,7 @@ import {
   type Session
 } from './lib/appAuth'
 
-type Tab = 'live' | 'movies' | 'series' | 'admin'
+type Tab = 'live' | 'movies' | 'series' | 'epg' | 'admin'
 
 // The post-login IPTV check has three outcomes: no config yet (ask for it), config present
 // (auto-connect), or config present but broken (ask for it again, pre-filled, with the
@@ -224,6 +225,9 @@ export default function App(): JSX.Element {
           <button className={tab === 'series' ? 'tab active' : 'tab'} onClick={() => setTab('series')} disabled={!session}>
             Series
           </button>
+          <button className={tab === 'epg' ? 'tab active' : 'tab'} onClick={() => setTab('epg')} disabled={!session}>
+            EPG
+          </button>
           {appUser.role === 'admin' && (
             <button className={tab === 'admin' ? 'tab active' : 'tab'} onClick={() => setTab('admin')}>
               Admin
@@ -253,6 +257,7 @@ export default function App(): JSX.Element {
       {session && tab === 'live' && <LiveTv session={session} />}
       {session && tab === 'movies' && <Movies session={session} />}
       {session && tab === 'series' && <Series session={session} />}
+      {session && tab === 'epg' && <EpgSettings session={session} />}
       {tab === 'admin' && appUser.role === 'admin' && <AdminConsole appUser={appUser} />}
     </div>
   )

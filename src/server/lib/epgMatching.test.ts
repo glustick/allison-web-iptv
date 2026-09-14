@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildGuideIndexes, matchStreamToGuideChannel, normalizeChannelName, normalizeName } from './epgMatching.js'
+import { buildGuideIndexes, channelTokens, matchStreamToGuideChannel, matchStreamToGuideChannelDetailed, normalizeChannelName, normalizeName } from './epgMatching.js'
 import { parseXmltv } from './xmltv.js'
 
 const NOW = Date.parse('2026-01-15T12:00:00Z')
@@ -78,5 +78,88 @@ describe('matchStreamToGuideChannel', () => {
     )
     const indexes = buildGuideIndexes(withProgrammeless)
     expect(matchStreamToGuideChannel({ stream_id: 1, name: 'BBC One', epg_channel_id: null }, indexes)).toBe('c1')
+  })
+})
+
+describe('fuzzy name matching (v0.6.6)', () => {
+  it('folds number words and quality/package noise into one token set', () => {
+    expect(channelTokens('Sky Sports 1 HD')).toEqual(channelTokens('Sky Sports One'))
+    expect(channelTokens('Discovery Channel HD')).toEqual(['discovery'])
+    expect(channelTokens('MTV Hits TV')).toEqual(['mtv', 'hits'])
+  })
+
+  it('matches a stream whose name differs from the guide only by number words or packaging', () => {
+    const indexes = guideFrom([{ id: 'g1', displayName: 'Sky Sports One HD' }])
+    const match = matchStreamToGuideChannelDetailed({ stream_id: 1, name: 'Sky Sports 1', epg_channel_id: null }, indexes)
+    expect(match).toMatchObject({ channelId: 'g1', strategy: 'fuzzy-name' })
+    expect(match.score).toBeGreaterThanOrEqual(0.82)
+  })
+
+  it('still resolves pure quality-marker differences as an exact name match, not fuzzy', () => {
+    const indexes = guideFrom([{ id: 'g1', displayName: 'Sky News' }])
+    expect(matchStreamToGuideChannelDetailed({ stream_id: 1, name: 'Sky News HD', epg_channel_id: null }, indexes)).toMatchObject({
+      channelId: 'g1',
+      strategy: 'exact-name'
+    })
+  })
+
+  it('recovers a regional suffix difference', () => {
+    const indexes = guideFrom([{ id: 'g1', displayName: 'BBC One London' }])
+    expect(matchStreamToGuideChannel({ stream_id: 1, name: 'BBC ONE Lon', epg_channel_id: null }, indexes)).toBe('g1')
+  })
+
+  it('refuses an ambiguous fuzzy match rather than guessing between siblings', () => {
+    const indexes = guideFrom([
+      { id: 'g1', displayName: 'Sky Sports 1' },
+      { id: 'g2', displayName: 'Sky Sports 2' }
+    ])
+    expect(matchStreamToGuideChannel({ stream_id: 1, name: 'Sky Sports', epg_channel_id: null }, indexes)).toBeNull()
+  })
+
+  it('never fuzzes two genuinely different channels together', () => {
+    const indexes = guideFrom([
+      { id: 'g1', displayName: 'BBC One' },
+      { id: 'g2', displayName: 'BBC Two' }
+    ])
+    expect(matchStreamToGuideChannel({ stream_id: 1, name: 'ITV1', epg_channel_id: null }, indexes)).toBeNull()
+  })
+
+  it('keeps exact epg_channel_id matches ahead of any fuzzy candidate', () => {
+    const indexes = guideFrom([
+      { id: 'exact-id', displayName: 'Something Else Entirely' },
+      { id: 'g2', displayName: 'Sky News' }
+    ])
+    expect(matchStreamToGuideChannelDetailed({ stream_id: 1, name: 'Sky News HD', epg_channel_id: 'exact-id' }, indexes)).toMatchObject({
+      channelId: 'exact-id',
+      strategy: 'exact-id'
+    })
+  })
+
+  it('stays fast across thousands of channels (3,200 streams vs a 6,000-channel guide)', () => {
+    const channels: Array<{ id: string; displayName: string }> = []
+    for (let i = 0; i < 6000; i++) channels.push({ id: `c${i}`, displayName: `Network ${i} Channel HD` })
+    // A realistic subset of guide names that differ from the stream names being matched below.
+    channels[100] = { id: 'c100', displayName: 'Sky Sports One HD' }
+    channels[101] = { id: 'c101', displayName: 'BBC One London' }
+    const indexes = guideFrom(channels)
+
+    const streams = Array.from({ length: 3200 }, (_, i) => ({
+      stream_id: i,
+      // Deliberately mostly non-matching names, so the fuzzy scorer does real work.
+      name: `US: Some Provider Feed ${i}`,
+      epg_channel_id: null
+    }))
+    streams[0] = { stream_id: 0, name: 'Sky Sports 1', epg_channel_id: null }
+    streams[1] = { stream_id: 1, name: 'BBC ONE Lon', epg_channel_id: null }
+
+    const startedAt = Date.now()
+    const matched = streams.map((stream) => matchStreamToGuideChannel(stream, indexes))
+    const elapsed = Date.now() - startedAt
+
+    expect(matched[0]).toBe('c100')
+    expect(matched[1]).toBe('c101')
+    // The index makes this a bounded candidate scan per stream; anything near a full
+    // cross-product (19M comparisons) would take orders of magnitude longer.
+    expect(elapsed).toBeLessThan(2000)
   })
 })

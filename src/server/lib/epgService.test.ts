@@ -224,4 +224,54 @@ describe('createEpgService', () => {
     // The failed refresh was still attempted in the background (and keeps the old guide live).
     await until(() => guideHits === 2)
   })
+
+  it('reports fuzzy matches, and reuses the memoised mapping across window requests', async () => {
+    const provider = await listen((req, res) => {
+      if (req.url?.startsWith('/xmltv.php')) {
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(
+          guideXml([
+            { id: 'prov-sky', displayName: 'Sky Sports One HD', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'Fuzzy match programme' }] }
+          ])
+        )
+        return
+      }
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(
+          JSON.stringify([
+            // No epg_channel_id at all and a name that only matches after number-word folding —
+            // exactly the case the fuzzy layer exists for.
+            { stream_id: 1, name: 'Sky Sports 1', epg_channel_id: null },
+            { stream_id: 2, name: 'Some Unrelated Feed', epg_channel_id: null }
+          ])
+        )
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+
+    const service = createEpgService({ createUpstreamRequest: createNodeUpstreamRequest, now: fakeClock().now })
+    const credentials = { server: provider, username: 'user', password: 'pass' }
+
+    const summary = await service.getMatchSummary({ credentials, epgUrls: [] })
+    expect(summary.streams).toBe(2)
+    expect(summary.matched).toBe(1)
+    expect(summary.unmatched).toBe(1)
+    expect(summary.byStrategy['fuzzy-name']).toBe(1)
+
+    const first = await service.aggregate({ credentials, epgUrls: [], startMs: NOW, endMs: NOW + HOUR })
+    expect(first.listings['1']?.[0]?.title).toBe('Fuzzy match programme')
+    expect(first.listings['2']).toBeUndefined()
+
+    // Second window request must reuse the memoised mapping (same result, no refetch).
+    const second = await service.aggregate({ credentials, epgUrls: [], startMs: NOW, endMs: NOW + HOUR })
+    expect(second.listings).toEqual(first.listings)
+
+    // A refresh drops the caches so the next request refetches.
+    service.refresh({ credentials, epgUrls: [] })
+    const third = await service.aggregate({ credentials, epgUrls: [], startMs: NOW, endMs: NOW + HOUR })
+    expect(third.listings).toEqual(first.listings)
+  })
 })
