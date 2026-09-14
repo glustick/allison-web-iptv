@@ -25,7 +25,20 @@ interface ChromiumVideoElement extends HTMLVideoElement {
 // the desktop app's own Player.tsx does for the same reason, and only runs the silent-audio
 // polling detection against the *original*, non-hls.js source — once the fallback is active,
 // hls.js's own ERROR event covers it instead, and there's nothing left needing the poll.
-export function NativeVideoPlayer({ url, titleKey }: { url: string; titleKey: string }): JSX.Element {
+export function NativeVideoPlayer({
+  url,
+  titleKey,
+  initialPositionSeconds,
+  onProgress
+}: {
+  url: string
+  titleKey: string
+  /** Where to resume from. Applied once, only if it is safely inside the title. */
+  initialPositionSeconds?: number
+  /** Called with the current position/duration as playback proceeds, on pause, on seek and at
+   *  the end — the caller persists it; the player decides nothing about storage. */
+  onProgress?: (positionSeconds: number, durationSeconds: number | null) => void
+}): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
@@ -40,11 +53,47 @@ export function NativeVideoPlayer({ url, titleKey }: { url: string; titleKey: st
     reset()
   }, [titleKey, reset])
 
+  // Kept in a ref so the reporting interval always calls the current callback without the
+  // effect (and therefore the player) being rebuilt when a parent re-renders.
+  const onProgressRef = useRef(onProgress)
+  onProgressRef.current = onProgress
+
   useEffect(() => {
     const video = videoRef.current as ChromiumVideoElement | null
     if (!video) return
     setError(null)
     beginRun()
+
+    // Resume: applied once per source, and only when the position is comfortably inside the
+    // title — resuming into the last few seconds is worse than starting over.
+    let resumeApplied = false
+    const applyResume = (): void => {
+      if (resumeApplied) return
+      const target = initialPositionSeconds ?? 0
+      resumeApplied = true
+      if (target <= 5) return
+      const duration = video.duration
+      if (Number.isFinite(duration) && duration > 0 && target > duration - 15) return
+      try {
+        video.currentTime = target
+      } catch {
+        // A stream that isn't seekable yet simply plays from the start.
+      }
+    }
+    video.addEventListener('loadedmetadata', applyResume)
+
+    const report = (): void => {
+      const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null
+      onProgressRef.current?.(video.currentTime, duration)
+    }
+    const reportIfPlaying = (): void => {
+      if (!video.paused) report()
+    }
+    const progressTimer = setInterval(reportIfPlaying, 10_000)
+    video.addEventListener('pause', report)
+    video.addEventListener('seeked', report)
+    video.addEventListener('ended', report)
+    window.addEventListener('pagehide', report)
     const sourceUrl = getSourceUrl(url)
     const isM3u8 = sourceUrl.endsWith('.m3u8')
 
@@ -69,6 +118,13 @@ export function NativeVideoPlayer({ url, titleKey }: { url: string; titleKey: st
       })
       video.play().catch(() => {})
       return () => {
+        report()
+        clearInterval(progressTimer)
+        video.removeEventListener('loadedmetadata', applyResume)
+        video.removeEventListener('pause', report)
+        video.removeEventListener('seeked', report)
+        video.removeEventListener('ended', report)
+        window.removeEventListener('pagehide', report)
         hls.destroy()
         hlsRef.current = null
         setAudioTracks([])
@@ -121,12 +177,19 @@ export function NativeVideoPlayer({ url, titleKey }: { url: string; titleKey: st
     }, SILENT_AUDIO_CHECK_INTERVAL_MS)
 
     return () => {
+      report()
       clearInterval(pollTimer)
+      clearInterval(progressTimer)
+      video.removeEventListener('loadedmetadata', applyResume)
+      video.removeEventListener('pause', report)
+      video.removeEventListener('seeked', report)
+      video.removeEventListener('ended', report)
+      window.removeEventListener('pagehide', report)
       if (releaseTimer) clearTimeout(releaseTimer)
       video.removeAttribute('src')
       video.load()
     }
-  }, [titleKey, reloadTick])
+  }, [titleKey, reloadTick, initialPositionSeconds])
 
   return (
     <div className="player-wrap">

@@ -203,6 +203,7 @@ export function createUsersStore({ dataDir }: { dataDir: string }): UsersStore {
         db.prepare('DELETE FROM custom_categories WHERE username = ?').run(username)
         db.prepare('DELETE FROM favourites WHERE username = ?').run(username)
         db.prepare('DELETE FROM history WHERE username = ?').run(username)
+        db.prepare('DELETE FROM resume_positions WHERE username = ?').run(username)
         db.prepare('DELETE FROM users WHERE username = ?').run(username)
       })()
       return toPublic(row)

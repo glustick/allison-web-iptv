@@ -37,10 +37,21 @@ export interface CustomCategory {
   channels: CustomCategoryChannel[]
 }
 
+export interface ResumePosition {
+  kind: MediaKind
+  streamId: number
+  name: string
+  category: string | null
+  positionSeconds: number
+  durationSeconds: number | null
+  updatedAt: string
+}
+
 export interface PrefsState {
   favourites: Favourite[]
   categories: CustomCategory[]
   history: HistoryEntry[]
+  resume: ResumePosition[]
 }
 
 export interface ChannelRef {
@@ -50,7 +61,7 @@ export interface ChannelRef {
   category?: string | null
 }
 
-const EMPTY: PrefsState = { favourites: [], categories: [], history: [] }
+const EMPTY: PrefsState = { favourites: [], categories: [], history: [], resume: [] }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -87,6 +98,27 @@ export async function fetchHistory(limit = 100): Promise<HistoryEntry[]> {
 export async function clearHistory(): Promise<HistoryEntry[]> {
   const data = await request<{ history: HistoryEntry[] }>('/api/prefs/history', { method: 'DELETE' })
   return data.history ?? []
+}
+
+/** Records where playback got to. The server ignores live TV, too-early positions and
+ *  anything inside the final seconds of a title (those clear the entry instead). */
+export async function setResumePosition(
+  channel: ChannelRef,
+  positionSeconds: number,
+  durationSeconds: number | null
+): Promise<ResumePosition[]> {
+  const data = await request<{ resumePositions: ResumePosition[] }>(
+    '/api/prefs/resume',
+    jsonPost({ ...channel, positionSeconds, durationSeconds })
+  )
+  return data.resumePositions ?? []
+}
+
+export async function clearResumePosition(kind: MediaKind, streamId: number): Promise<ResumePosition[]> {
+  const data = await request<{ resumePositions: ResumePosition[] }>(`/api/prefs/resume/${kind}/${streamId}`, {
+    method: 'DELETE'
+  })
+  return data.resumePositions ?? []
 }
 
 export async function createCategory(name: string): Promise<CustomCategory[]> {

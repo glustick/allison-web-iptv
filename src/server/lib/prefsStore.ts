@@ -11,6 +11,15 @@ import { openDatabase } from './db.js'
 export type MediaKind = 'live' | 'movie' | 'series'
 
 const KINDS: readonly MediaKind[] = ['live', 'movie', 'series']
+
+// Resume applies to on-demand titles only: a live channel has no position to return to, so the
+// API rejects it outright rather than storing something meaningless.
+const RESUMABLE_KINDS: readonly MediaKind[] = ['movie', 'series']
+
+// A resume point closer to the start than this is treated as "not started" (nobody wants to be
+// offered 8 seconds in), and one this close to the end means the title is finished.
+const MIN_RESUME_SECONDS = 15
+const FINISHED_TAIL_SECONDS = 30
 const MAX_NAME_LENGTH = 200
 const MAX_CATEGORY_NAME_LENGTH = 40
 const HISTORY_LIMIT_PER_USER = 500
@@ -45,6 +54,16 @@ export interface CustomCategory {
   name: string
   position: number
   channels: CustomCategoryChannel[]
+}
+
+export interface ResumePosition {
+  kind: MediaKind
+  streamId: number
+  name: string
+  category: string | null
+  positionSeconds: number
+  durationSeconds: number | null
+  updatedAt: string
 }
 
 export class PrefsError extends Error {
@@ -94,6 +113,14 @@ export interface PrefsStore {
   deleteCategory(username: string, id: number): void
   addChannelToCategory(username: string, id: number, channel: ChannelRef): void
   removeChannelFromCategory(username: string, id: number, kind: MediaKind, streamId: number): void
+  listResumePositions(username: string, kind?: MediaKind): ResumePosition[]
+  setResumePosition(
+    username: string,
+    channel: ChannelRef,
+    positionSeconds: number,
+    durationSeconds?: number | null
+  ): ResumePosition | null
+  clearResumePosition(username: string, kind: MediaKind, streamId: number): void
 }
 
 export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
@@ -108,6 +135,10 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
   function requireDb(): Database {
     if (!handle) throw new PrefsError(`Preference database is not usable: ${openError ?? 'unknown error'}`)
     return handle.db
+  }
+
+  function clearResume(db: Database, username: string, kind: MediaKind, streamId: number): void {
+    db.prepare('DELETE FROM resume_positions WHERE username = ? AND kind = ? AND stream_id = ?').run(username, kind, streamId)
   }
 
   function categoryById(db: Database, username: string, id: number): { id: number; name: string } | undefined {
@@ -264,6 +295,98 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
          ON CONFLICT (category_id, kind, stream_id)
          DO UPDATE SET name = excluded.name, source_category = excluded.source_category`
       ).run(id, kind, streamId, name, channel.category ?? null, position)
+    },
+
+    listResumePositions(username: string, kind?: MediaKind): ResumePosition[] {
+      const db = requireDb()
+      const rows = (
+        kind
+          ? db
+              .prepare(
+                'SELECT kind, stream_id, name, category, position_seconds, duration_seconds, updated_at FROM resume_positions WHERE username = ? AND kind = ? ORDER BY updated_at DESC'
+              )
+              .all(username, validateKind(kind))
+          : db
+              .prepare(
+                'SELECT kind, stream_id, name, category, position_seconds, duration_seconds, updated_at FROM resume_positions WHERE username = ? ORDER BY updated_at DESC'
+              )
+              .all(username)
+      ) as Array<{
+        kind: string
+        stream_id: number
+        name: string
+        category: string | null
+        position_seconds: number
+        duration_seconds: number | null
+        updated_at: string
+      }>
+      return rows.map((row) => ({
+        kind: validateKind(row.kind),
+        streamId: row.stream_id,
+        name: row.name,
+        category: row.category,
+        positionSeconds: row.position_seconds,
+        durationSeconds: row.duration_seconds,
+        updatedAt: row.updated_at
+      }))
+    },
+
+    /**
+     * Records where playback got to. Returns the stored position, or null when nothing was kept:
+     * live TV is rejected, a position in the first few seconds counts as "not started", and one
+     * at the tail counts as finished — both of those also clear any earlier point so the history
+     * list never offers to resume something from the wrong end.
+     */
+    setResumePosition(
+      username: string,
+      channel: ChannelRef,
+      positionSeconds: number,
+      durationSeconds?: number | null
+    ): ResumePosition | null {
+      const db = requireDb()
+      const kind = validateKind(channel.kind)
+      if (!RESUMABLE_KINDS.includes(kind)) {
+        throw new PrefsError('Resume only applies to movies and series')
+      }
+      const streamId = validateStreamId(channel.streamId)
+      const position = Number(positionSeconds)
+      if (!Number.isFinite(position) || position < 0) throw new PrefsError('positionSeconds must be zero or more')
+      const duration = durationSeconds === null || durationSeconds === undefined ? null : Number(durationSeconds)
+      if (duration !== null && (!Number.isFinite(duration) || duration <= 0)) {
+        throw new PrefsError('durationSeconds must be a positive number when provided')
+      }
+
+      const finished = duration !== null && position >= duration - FINISHED_TAIL_SECONDS
+      if (position < MIN_RESUME_SECONDS || finished) {
+        clearResume(db, username, kind, streamId)
+        return null
+      }
+
+      const name = cleanName(channel.name, 'name', MAX_NAME_LENGTH)
+      db.prepare(
+        `INSERT INTO resume_positions (username, kind, stream_id, name, category, position_seconds, duration_seconds, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (username, kind, stream_id)
+         DO UPDATE SET position_seconds = excluded.position_seconds,
+                       duration_seconds = excluded.duration_seconds,
+                       name = excluded.name,
+                       category = excluded.category,
+                       updated_at = excluded.updated_at`
+      ).run(username, kind, streamId, name, channel.category ?? null, position, duration, new Date().toISOString())
+
+      return {
+        kind,
+        streamId,
+        name,
+        category: channel.category ?? null,
+        positionSeconds: position,
+        durationSeconds: duration,
+        updatedAt: new Date().toISOString()
+      }
+    },
+
+    clearResumePosition(username: string, kind: MediaKind, streamId: number): void {
+      clearResume(requireDb(), username, validateKind(kind), validateStreamId(streamId))
     },
 
     removeChannelFromCategory(username: string, id: number, kind: MediaKind, streamId: number): void {

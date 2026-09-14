@@ -1,18 +1,61 @@
-import { useEffect, useState, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
 import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
+import { formatClock } from './Movies'
+import {
+  clearResumePosition,
+  fetchPrefs,
+  recordHistory,
+  setResumePosition,
+  type PrefsState,
+  type ResumePosition
+} from '../lib/prefs'
 import type { Category, SeriesItem, SeriesInfo, SeriesEpisode } from '../lib/types'
+
+const EMPTY_PREFS: PrefsState = { favourites: [], categories: [], history: [], resume: [] }
+
+type Selection = { type: 'all' } | { type: 'provider'; id: string } | { type: 'history' }
+
+/** Resuming an episode is the whole point of tracking series progress: the position is keyed by
+ *  episode id, so each episode in a season keeps its own place. */
+function ResumeControls({
+  resume,
+  onResume,
+  onStartOver
+}: {
+  resume: ResumePosition
+  onResume: () => void
+  onStartOver: () => void
+}): JSX.Element {
+  const percent = resume.durationSeconds ? Math.min(100, Math.round((resume.positionSeconds / resume.durationSeconds) * 100)) : null
+  return (
+    <>
+      <span className="resume-badge">
+        {percent !== null ? `${percent}% · ` : ''}
+        {formatClock(resume.positionSeconds)}
+      </span>
+      <button type="button" className="admin-small-btn" onClick={onResume}>
+        Resume
+      </button>
+      <button type="button" className="admin-small-btn" onClick={onStartOver}>
+        Start over
+      </button>
+    </>
+  )
+}
 
 function EpisodeList({
   session,
   seriesId,
+  resumeFor,
   onPlay
 }: {
   session: Session
   seriesId: number
-  onPlay: (episode: SeriesEpisode) => void
+  resumeFor: (episodeId: number) => ResumePosition | undefined
+  onPlay: (episode: SeriesEpisode, resumeFrom: number) => void
 }): JSX.Element {
   const [info, setInfo] = useState<SeriesInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -46,11 +89,25 @@ function EpisodeList({
           <div className="now-playing-bar">
             {info.seasons.find((s) => s.season_number === seasonNumber)?.name || `Season ${seasonNumber}`}
           </div>
-          {(info.episodes[String(seasonNumber)] ?? []).map((episode) => (
-            <button key={episode.id} className="channel-row" onClick={() => onPlay(episode)}>
-              {episode.episode_num}. {episode.title}
-            </button>
-          ))}
+          {(info.episodes[String(seasonNumber)] ?? []).map((episode) => {
+            const resume = resumeFor(Number(episode.id))
+            return (
+              <div key={episode.id} className="channel-row-wrap">
+                <button className="channel-row" onClick={() => onPlay(episode, resume?.positionSeconds ?? 0)}>
+                  <span>
+                    {episode.episode_num}. {episode.title}
+                  </span>
+                </button>
+                {resume && (
+                  <ResumeControls
+                    resume={resume}
+                    onResume={() => onPlay(episode, resume.positionSeconds)}
+                    onStartOver={() => onPlay(episode, 0)}
+                  />
+                )}
+              </div>
+            )
+          })}
         </div>
       ))}
     </div>
@@ -63,8 +120,17 @@ export function Series({ session }: { session: Session }): JSX.Element {
   const [seriesList, setSeriesList] = useState<SeriesItem[]>([])
   const [openSeries, setOpenSeries] = useState<SeriesItem | null>(null)
   const [nowPlaying, setNowPlaying] = useState<{ episode: SeriesEpisode } | null>(null)
+  const [startAt, setStartAt] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [selection, setSelection] = useState<Selection>({ type: 'all' })
+  const [prefs, setPrefs] = useState<PrefsState>(EMPTY_PREFS)
   const { sidebarWidth, startSidebarDrag } = useSidebarWidth()
+
+  useEffect(() => {
+    fetchPrefs()
+      .then(setPrefs)
+      .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load your library'))
+  }, [])
 
   useEffect(() => {
     session.client
@@ -74,16 +140,59 @@ export function Series({ session }: { session: Session }): JSX.Element {
   }, [session])
 
   useEffect(() => {
+    if (selection.type === 'history') return
     session.client
-      .getSeries(selectedCategoryId ?? undefined)
+      .getSeries(selection.type === 'provider' ? selection.id : undefined)
       .then(setSeriesList)
       .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load series'))
-  }, [session, selectedCategoryId])
+  }, [session, selection])
 
   useEffect(() => {
     reportNowPlaying(nowPlaying?.episode?.title ?? null, 'series')
   }, [nowPlaying])
   useEffect(() => () => reportNowPlaying(null), [])
+
+  const resumeFor = useCallback(
+    (episodeId: number): ResumePosition | undefined =>
+      prefs.resume.find((entry) => entry.kind === 'series' && entry.streamId === episodeId),
+    [prefs.resume]
+  )
+
+  const historyEpisodes = useMemo(() => {
+    const seen = new Set<number>()
+    const rows: Array<{ id: number; title: string; containerExtension: string }> = []
+    for (const entry of prefs.history) {
+      if (entry.kind !== 'series' || seen.has(entry.streamId)) continue
+      seen.add(entry.streamId)
+      rows.push({ id: entry.streamId, title: entry.name, containerExtension: 'mkv' })
+    }
+    return rows
+  }, [prefs.history])
+
+  const playEpisode = useCallback(
+    (episode: SeriesEpisode, resumeFrom: number): void => {
+      setStartAt(resumeFrom)
+      setNowPlaying({ episode })
+      void recordHistory({ kind: 'series', streamId: Number(episode.id), name: episode.title })
+        .then(() => fetchPrefs().then(setPrefs))
+        .catch(() => {})
+    },
+    []
+  )
+
+  const handleProgress = useCallback(
+    (positionSeconds: number, durationSeconds: number | null): void => {
+      if (!nowPlaying) return
+      void setResumePosition(
+        { kind: 'series', streamId: Number(nowPlaying.episode.id), name: nowPlaying.episode.title },
+        positionSeconds,
+        durationSeconds
+      )
+        .then((resume) => setPrefs((current) => ({ ...current, resume })))
+        .catch(() => {})
+    },
+    [nowPlaying]
+  )
 
   const streamUrl = nowPlaying
     ? session.client.getStreamUrl('series', Number(nowPlaying.episode.id), nowPlaying.episode.container_extension)
@@ -93,9 +202,18 @@ export function Series({ session }: { session: Session }): JSX.Element {
     <div className="app-body">
       <nav className="sidebar" style={{ width: sidebarWidth }}>
         <button
-          className={selectedCategoryId === null ? 'category-btn active' : 'category-btn'}
+          className={selection.type === 'history' ? 'category-btn active' : 'category-btn'}
           onClick={() => {
-            setSelectedCategoryId(null)
+            setSelection({ type: 'history' })
+            setOpenSeries(null)
+          }}
+        >
+          🕘 Continue watching
+        </button>
+        <button
+          className={selection.type === 'all' ? 'category-btn active' : 'category-btn'}
+          onClick={() => {
+            setSelection({ type: 'all' })
             setOpenSeries(null)
           }}
         >
@@ -104,9 +222,9 @@ export function Series({ session }: { session: Session }): JSX.Element {
         {categories.map((cat) => (
           <button
             key={cat.category_id}
-            className={selectedCategoryId === cat.category_id ? 'category-btn active' : 'category-btn'}
+            className={selection.type === 'provider' && selection.id === cat.category_id ? 'category-btn active' : 'category-btn'}
             onClick={() => {
-              setSelectedCategoryId(cat.category_id)
+              setSelection({ type: 'provider', id: cat.category_id })
               setOpenSeries(null)
             }}
           >
@@ -121,20 +239,67 @@ export function Series({ session }: { session: Session }): JSX.Element {
       </nav>
       <div className="content">
         {streamUrl && nowPlaying && (
-          <NativeVideoPlayer url={streamUrl} titleKey={`series:${nowPlaying.episode.id}`} />
+          <NativeVideoPlayer
+            url={streamUrl}
+            titleKey={`series:${nowPlaying.episode.id}`}
+            initialPositionSeconds={startAt}
+            onProgress={handleProgress}
+          />
         )}
-        {nowPlaying && <div className="now-playing-bar">Now playing: {nowPlaying.episode.title}</div>}
+        {nowPlaying && (
+          <div className="now-playing-bar">
+            Now playing: {nowPlaying.episode.title}
+            {startAt > 0 && <span className="resume-note"> · resumed at {formatClock(startAt)}</span>}
+          </div>
+        )}
         {loadError && (
           <div className="login-error" style={{ padding: '8px 16px' }}>
             {loadError}
           </div>
         )}
-        {openSeries ? (
+        {selection.type === 'history' ? (
+          <div className="channel-list">
+            <div className="list-toolbar">
+              <span className="list-toolbar-title">Continue watching</span>
+            </div>
+            {historyEpisodes.length === 0 && <p className="list-hint">Nothing watched yet.</p>}
+            {historyEpisodes.map((row) => {
+              const resume = resumeFor(row.id)
+              const episode = {
+                id: String(row.id),
+                episode_num: 0,
+                title: row.title,
+                container_extension: row.containerExtension,
+                info: {},
+                season: 0
+              } as unknown as SeriesEpisode
+              return (
+                <div key={row.id} className="channel-row-wrap">
+                  <button className="channel-row" onClick={() => playEpisode(episode, resume?.positionSeconds ?? 0)}>
+                    <span>{row.title}</span>
+                  </button>
+                  {resume && (
+                    <ResumeControls
+                      resume={resume}
+                      onResume={() => playEpisode(episode, resume.positionSeconds)}
+                      onStartOver={() => {
+                        void clearResumePosition('series', row.id)
+                          .then((resumePositions) => setPrefs((current) => ({ ...current, resume: resumePositions })))
+                          .catch(() => {})
+                        playEpisode(episode, 0)
+                      }}
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        ) : openSeries ? (
           <>
             <button className="category-btn" onClick={() => setOpenSeries(null)}>
               ← Back to {openSeries.name ? 'series list' : 'list'}
             </button>
-            <EpisodeList session={session} seriesId={openSeries.series_id} onPlay={(episode) => setNowPlaying({ episode })} />
+            <EpisodeList session={session} seriesId={openSeries.series_id} resumeFor={resumeFor} onPlay={playEpisode} />
           </>
         ) : (
           <div className="channel-list">

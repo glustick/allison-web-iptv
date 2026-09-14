@@ -591,7 +591,8 @@ app.get('/api/prefs', requireAuth, (req, res) => {
       ok: true,
       favourites: prefsStore.listFavourites(session.username),
       categories: prefsStore.listCategories(session.username),
-      history: prefsStore.listHistory(session.username, 50)
+      history: prefsStore.listHistory(session.username, 50),
+      resume: prefsStore.listResumePositions(session.username)
     })
   } catch (err) {
     handlePrefsError(res, err, 'load')
@@ -635,6 +636,46 @@ app.delete('/api/prefs/history', requireAuth, (req, res) => {
     res.json({ ok: true, history: [] })
   } catch (err) {
     handlePrefsError(res, err, 'clear history')
+  }
+})
+
+// Resume points for movies and series (never live — the store rejects it).
+app.get('/api/prefs/resume', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    const kind = typeof req.query.kind === 'string' ? (req.query.kind as 'movie' | 'series') : undefined
+    res.json({ ok: true, resume: prefsStore.listResumePositions(session.username, kind) })
+  } catch (err) {
+    handlePrefsError(res, err, 'resume positions')
+  }
+})
+
+app.post('/api/prefs/resume', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    const position = prefsStore.setResumePosition(
+      session.username,
+      req.body ?? {},
+      Number(req.body?.positionSeconds),
+      req.body?.durationSeconds === undefined || req.body?.durationSeconds === null ? null : Number(req.body.durationSeconds)
+    )
+    res.json({ ok: true, resume: position, resumePositions: prefsStore.listResumePositions(session.username) })
+  } catch (err) {
+    handlePrefsError(res, err, 'save resume position')
+  }
+})
+
+app.delete('/api/prefs/resume/:kind/:streamId', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.clearResumePosition(
+      session.username,
+      String(req.params.kind) as 'movie' | 'series',
+      Number(req.params.streamId)
+    )
+    res.json({ ok: true, resumePositions: prefsStore.listResumePositions(session.username) })
+  } catch (err) {
+    handlePrefsError(res, err, 'clear resume position')
   }
 })
 

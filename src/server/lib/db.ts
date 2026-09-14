@@ -86,6 +86,20 @@ function createSchema(db: Database.Database): void {
       PRIMARY KEY (category_id, kind, stream_id)
     );
 
+    -- Resume points, movies and series only (live TV has nothing to resume). Kept per item so
+    -- the history list can offer "continue from 42:15" rather than starting over.
+    CREATE TABLE IF NOT EXISTS resume_positions (
+      username         TEXT NOT NULL,
+      kind             TEXT NOT NULL,
+      stream_id        INTEGER NOT NULL,
+      name             TEXT NOT NULL,
+      category         TEXT,
+      position_seconds REAL NOT NULL,
+      duration_seconds REAL,
+      updated_at       TEXT NOT NULL,
+      PRIMARY KEY (username, kind, stream_id)
+    );
+
     CREATE TABLE IF NOT EXISTS meta (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL

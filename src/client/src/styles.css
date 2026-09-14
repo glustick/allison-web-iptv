@@ -1121,3 +1121,31 @@ body.resizing-col {
   font-size: 11px;
   color: #5b6270;
 }
+
+/* --- Resume (movies & series) ------------------------------------------------------------- */
+
+.channel-row-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 10px;
+}
+
+.channel-row-wrap .channel-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.resume-badge {
+  font-size: 11px;
+  color: #ffd27d;
+  white-space: nowrap;
+}
+
+.resume-note {
+  color: #7de08d;
+}

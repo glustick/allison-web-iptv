@@ -29,7 +29,7 @@ const PLAYER_MIN_HEIGHT = 120
 const PLAYER_DEFAULT_MAX_HEIGHT = (): number => Math.round(window.innerHeight * 0.45)
 const PLAYER_MAX_HEIGHT_CEILING = (): number => Math.round(window.innerHeight * 0.8)
 
-const EMPTY_PREFS: PrefsState = { favourites: [], categories: [], history: [] }
+const EMPTY_PREFS: PrefsState = { favourites: [], categories: [], history: [], resume: [] }
 
 // What the sidebar is currently showing. Favourites/History/custom categories are library views
 // over the same channel data, not provider categories — hence one union rather than the single

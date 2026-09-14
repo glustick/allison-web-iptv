@@ -6,7 +6,7 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.7.0 — SQLite storage, favourites, history, custom categories)
+## Current state (v0.7.1 — resume playback for movies and series)
 
 **v0.7.0** moves everything the app persists into a single **SQLite database** (`allison.db`)
 and builds a proper per-user library on top of it: **★ Favourites** and **🕘 History** in the
@@ -269,6 +269,13 @@ All three live in the sidebar and are stored per account in the database:
   where you filter by any provider category and tick the channels you want. Channels can sit in
   as many custom categories as you like; **Rename**/**Delete** are in the same toolbar, and
   deleting a category never removes the underlying channel.
+
+**Resume where you left off (movies and series).** Playback position is tracked per title — and
+per *episode* for series — and stored with the account. **Movies → 🕘 History** and
+**Series → 🕘 Continue watching** list what you were watching with its position (`42% · 1:02:03`)
+and offer **Resume** or **Start over**. Positions are stored once you're more than 15 seconds in;
+reaching the end (or seeking back to the start) clears it, so nothing is offered that shouldn't
+be. Live TV has no resume by design — there's nothing to return to.
 
 Everything here is per user: two accounts on the same server keep separate favourites, history
 and categories.

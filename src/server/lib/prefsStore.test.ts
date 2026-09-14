@@ -140,4 +140,69 @@ describe('persistence', () => {
     expect(store.listHistory('goner')).toEqual([])
     expect(store.listCategories('goner')).toEqual([])
   })
+
+describe('resume positions', () => {
+  const movie = (streamId: number, name: string) => ({ kind: 'movie' as const, streamId, name, category: 'Movies' })
+
+  it('stores and updates where playback got to', () => {
+    store.setResumePosition('alice', movie(7, 'Dune'), 600, 9000)
+    expect(store.listResumePositions('alice')).toHaveLength(1)
+    expect(store.listResumePositions('alice')[0]).toMatchObject({ kind: 'movie', streamId: 7, positionSeconds: 600, durationSeconds: 9000 })
+
+    store.setResumePosition('alice', movie(7, 'Dune'), 1200, 9000)
+    const [entry] = store.listResumePositions('alice')
+    expect(entry.positionSeconds).toBe(1200)
+    expect(store.listResumePositions('alice')).toHaveLength(1)
+  })
+
+  it('refuses live TV — there is nothing to resume', () => {
+    expect(() => store.setResumePosition('alice', live(1, 'Sky News'), 300, null)).toThrow(/movies and series/)
+    expect(store.listResumePositions('alice')).toEqual([])
+  })
+
+  it('treats a few seconds in as not started, and the tail as finished', () => {
+    store.setResumePosition('alice', movie(8, 'Alien'), 400, 6000)
+    expect(store.listResumePositions('alice')).toHaveLength(1)
+
+    // Seeking back to the start drops the stale entry rather than offering a bogus resume.
+    expect(store.setResumePosition('alice', movie(8, 'Alien'), 3, 6000)).toBeNull()
+    expect(store.listResumePositions('alice')).toEqual([])
+
+    // Watching to the end does the same (inside the 30s tail of a 5100s title).
+    store.setResumePosition('alice', movie(9, 'Se7en'), 5090, 5100)
+    expect(store.listResumePositions('alice')).toEqual([])
+  })
+
+  it('keeps positions per user and per kind, and survives a reopen', () => {
+    store.setResumePosition('alice', movie(1, 'A'), 300, 3000)
+    store.setResumePosition('alice', { kind: 'series', streamId: 2, name: 'B Episode 1' }, 300, 3000)
+    store.setResumePosition('bob', movie(3, 'C'), 300, 3000)
+
+    expect(store.listResumePositions('alice')).toHaveLength(2)
+    expect(store.listResumePositions('alice', 'series').map((r) => r.name)).toEqual(['B Episode 1'])
+    expect(store.listResumePositions('bob').map((r) => r.name)).toEqual(['C'])
+
+    const reopened = createPrefsStore({ dataDir: dir })
+    expect(reopened.listResumePositions('alice')).toHaveLength(2)
+    expect(reopened.listResumePositions('alice').find((r) => r.kind === 'movie')?.positionSeconds).toBe(300)
+  })
+
+  it('validates its input and can be cleared explicitly', () => {
+    expect(() => store.setResumePosition('alice', movie(4, 'D'), -1, 100)).toThrow(/zero or more/)
+    expect(() => store.setResumePosition('alice', movie(4, 'D'), Number.NaN, 100)).toThrow(/zero or more/)
+    expect(() => store.setResumePosition('alice', movie(4, 'D'), 300, 0)).toThrow(/positive/)
+
+    store.setResumePosition('alice', movie(4, 'D'), 300, 3000)
+    store.clearResumePosition('alice', 'movie', 4)
+    expect(store.listResumePositions('alice')).toEqual([])
+  })
+
+  it('goes with the user when they are deleted', () => {
+    const users = createUsersStore({ dataDir: dir })
+    users.createUser({ username: 'temp', password: 'password1', role: 'user' })
+    store.setResumePosition('temp', movie(5, 'E'), 300, 3000)
+    users.deleteUser('temp')
+    expect(store.listResumePositions('temp')).toEqual([])
+  })
+})
 })
