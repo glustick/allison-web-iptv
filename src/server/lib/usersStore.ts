@@ -1,20 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
-import { dirname } from 'path'
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
+import type { Database } from 'better-sqlite3'
+import { openDatabase } from './db.js'
 
-// Persistent account store for the web app's own login system — the replacement for the old
-// single shared ACCESS_PASSWORD gate. Users live in a small JSON file on disk (hashed
-// passwords only; the IPTV provider credentials are stored encrypted per user via
-// sessionStore.ts, never in plaintext). Deliberately dependency-free: scrypt from node:crypto
-// covers password hashing, and atomic write-then-rename keeps the file from being truncated by
-// a crash mid-save.
+// Persistent account store, now SQLite-backed (see db.ts for why the flat file was replaced).
+// The public interface is deliberately unchanged from the JSON-file version, so nothing else in
+// the server had to learn a new shape — the container changed, not the contract.
 
 export type UserRole = 'admin' | 'user'
 
 export const USER_ROLES: readonly UserRole[] = ['admin', 'user']
 
-// Usernames double as URL path segments on the admin API, so keep them URL-safe by
-// construction rather than encoding after the fact.
 const USERNAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$/
 const MIN_PASSWORD_LENGTH = 6
 
@@ -24,7 +19,6 @@ export interface StoredUser {
   createdAt: string
   lastLoginAt: string | null
   password: { salt: string; hash: string }
-  // Opaque encrypted blob (see sessionStore.ts) — created/decrypted above this layer.
   iptvCredentials: string | null
 }
 
@@ -41,12 +35,15 @@ export interface NewUserInput {
   role: UserRole
 }
 
-interface UsersFile {
-  version: 1
-  users: StoredUser[]
+interface UserRow {
+  username: string
+  role: string
+  created_at: string
+  last_login_at: string | null
+  password_salt: string
+  password_hash: string
+  iptv_credentials: string | null
 }
-
-const USERS_FILE_VERSION = 1
 
 function hashPassword(password: string): { salt: string; hash: string } {
   const salt = randomBytes(16).toString('hex')
@@ -84,9 +81,8 @@ export interface UsersStore {
   recordLogin(username: string): void
   getIptvCredentials(username: string): string | null
   setIptvCredentials(username: string, encrypted: string | null): void
-  // Boot-time diagnostic: verifies the users file parses (if present) and the data directory
-  // is actually writable — surfaces mount/permission mistakes in `docker logs` instead of as
-  // runtime 500s (or a crash loop) once real requests arrive.
+  // Boot-time diagnostic: verifies the database parses and the data directory is writable —
+  // surfaces mount/permission mistakes in `docker logs` instead of as runtime 500s.
   healthCheck(): { ok: true } | { ok: false; error: string }
 }
 
@@ -111,129 +107,144 @@ export function validateRole(role: unknown): UserRole {
   return role
 }
 
-export function createUsersStore({ filePath }: { filePath: string }): UsersStore {
-  function load(): UsersFile {
-    if (!existsSync(filePath)) return { version: USERS_FILE_VERSION, users: [] }
-    try {
-      const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as UsersFile
-      if (!parsed || parsed.version !== USERS_FILE_VERSION || !Array.isArray(parsed.users)) {
-        throw new Error('unexpected shape')
-      }
-      return parsed
-    } catch (err) {
-      throw new Error(`Users file at ${filePath} is corrupted; fix or remove it and restart: ${err instanceof Error ? err.message : String(err)}`)
-    }
+function toPublic(row: UserRow): PublicUser {
+  return {
+    username: row.username,
+    role: row.role === 'admin' ? 'admin' : 'user',
+    createdAt: row.created_at,
+    lastLoginAt: row.last_login_at
+  }
+}
+
+export function createUsersStore({ dataDir }: { dataDir: string }): UsersStore {
+  // Opening can fail (corrupt file, unwritable volume). That must not stop the server from
+  // booting — every method reports a readable error instead, the same posture the rest of the
+  // app's storage handling takes.
+  let handle: { db: Database; close: () => void } | null = null
+  let openError: string | null = null
+  try {
+    handle = openDatabase(dataDir)
+  } catch (err) {
+    openError = err instanceof Error ? err.message : String(err)
   }
 
-  function save(file: UsersFile): void {
-    mkdirSync(dirname(filePath), { recursive: true })
-    const tempPath = `${filePath}.tmp`
-    writeFileSync(tempPath, JSON.stringify(file, null, 2))
-    renameSync(tempPath, filePath)
+  function requireDb(): Database {
+    if (!handle) throw new UserStoreError(`Account database is not usable: ${openError ?? 'unknown error'}`)
+    return handle.db
   }
 
-  function findStored(file: UsersFile, username: string): StoredUser | undefined {
-    return file.users.find((user) => user.username === username)
-  }
-
-  function toPublic(user: StoredUser): PublicUser {
-    return { username: user.username, role: user.role, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt }
+  function findRow(db: Database, username: string): UserRow | undefined {
+    return db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined
   }
 
   return {
     hasUsers(): boolean {
-      return load().users.length > 0
+      const db = requireDb()
+      return (db.prepare('SELECT COUNT(*) AS count FROM users').get() as { count: number }).count > 0
     },
 
     listUsers(): PublicUser[] {
-      return load()
-        .users.map(toPublic)
-        .sort((a, b) => a.username.localeCompare(b.username))
+      const db = requireDb()
+      const rows = db.prepare('SELECT * FROM users ORDER BY username COLLATE NOCASE').all() as UserRow[]
+      return rows.map(toPublic)
     },
 
     findUser(username: string): PublicUser | null {
-      const found = findStored(load(), username)
-      return found ? toPublic(found) : null
+      const row = findRow(requireDb(), username)
+      return row ? toPublic(row) : null
     },
 
     verifyCredentials(username: string, password: string): StoredUser | null {
-      const user = findStored(load(), username)
-      if (!user) return null
-      if (!verifyPassword(password, user.password)) return null
-      return user
+      const row = findRow(requireDb(), username)
+      if (!row) return null
+      if (!verifyPassword(password, { salt: row.password_salt, hash: row.password_hash })) return null
+      return {
+        username: row.username,
+        role: row.role === 'admin' ? 'admin' : 'user',
+        createdAt: row.created_at,
+        lastLoginAt: row.last_login_at,
+        password: { salt: row.password_salt, hash: row.password_hash },
+        iptvCredentials: row.iptv_credentials
+      }
     },
 
     createUser(input: NewUserInput): PublicUser {
+      const db = requireDb()
       const username = validateUsername(input.username)
       const password = validatePassword(input.password)
       const role = validateRole(input.role)
-      const file = load()
-      if (findStored(file, username)) throw new UserStoreError(`User "${username}" already exists`)
-      const user: StoredUser = {
+      if (findRow(db, username)) throw new UserStoreError(`User "${username}" already exists`)
+      const { salt, hash } = hashPassword(password)
+      const row: UserRow = {
         username,
         role,
-        createdAt: new Date().toISOString(),
-        lastLoginAt: null,
-        password: hashPassword(password),
-        iptvCredentials: null
+        created_at: new Date().toISOString(),
+        last_login_at: null,
+        password_salt: salt,
+        password_hash: hash,
+        iptv_credentials: null
       }
-      file.users.push(user)
-      save(file)
-      return toPublic(user)
+      db.prepare(
+        `INSERT INTO users (username, role, created_at, last_login_at, password_salt, password_hash, iptv_credentials)
+         VALUES (@username, @role, @created_at, @last_login_at, @password_salt, @password_hash, @iptv_credentials)`
+      ).run(row)
+      return toPublic(row)
     },
 
     deleteUser(username: string): PublicUser {
-      const file = load()
-      const user = findStored(file, username)
-      if (!user) throw new UserStoreError(`User "${username}" does not exist`)
-      if (user.role === 'admin' && file.users.filter((entry) => entry.role === 'admin').length === 1) {
-        throw new UserStoreError('Cannot delete the last remaining admin')
-      }
-      file.users = file.users.filter((entry) => entry.username !== username)
-      save(file)
-      return toPublic(user)
+      const db = requireDb()
+      const row = findRow(db, username)
+      if (!row) throw new UserStoreError(`User "${username}" does not exist`)
+      const admins = (db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'").get() as { count: number }).count
+      if (row.role === 'admin' && admins <= 1) throw new UserStoreError('Cannot delete the last remaining admin')
+      // Custom categories cascade to their channels (see the schema's ON DELETE CASCADE); the
+      // user's favourites and history go with them.
+      db.transaction(() => {
+        db.prepare('DELETE FROM custom_categories WHERE username = ?').run(username)
+        db.prepare('DELETE FROM favourites WHERE username = ?').run(username)
+        db.prepare('DELETE FROM history WHERE username = ?').run(username)
+        db.prepare('DELETE FROM users WHERE username = ?').run(username)
+      })()
+      return toPublic(row)
     },
 
     setPassword(username: string, password: string): void {
+      const db = requireDb()
       const validated = validatePassword(password)
-      const file = load()
-      const user = findStored(file, username)
-      if (!user) throw new UserStoreError(`User "${username}" does not exist`)
-      user.password = hashPassword(validated)
-      save(file)
+      if (!findRow(db, username)) throw new UserStoreError(`User "${username}" does not exist`)
+      const { salt, hash } = hashPassword(validated)
+      db.prepare('UPDATE users SET password_salt = ?, password_hash = ? WHERE username = ?').run(salt, hash, username)
     },
 
     countAdmins(): number {
-      return load().users.filter((user) => user.role === 'admin').length
+      const db = requireDb()
+      return (db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'").get() as { count: number }).count
     },
 
     recordLogin(username: string): void {
-      const file = load()
-      const user = findStored(file, username)
-      if (!user) return
-      user.lastLoginAt = new Date().toISOString()
-      save(file)
+      const db = requireDb()
+      db.prepare('UPDATE users SET last_login_at = ? WHERE username = ?').run(new Date().toISOString(), username)
     },
 
     getIptvCredentials(username: string): string | null {
-      return findStored(load(), username)?.iptvCredentials ?? null
+      return findRow(requireDb(), username)?.iptv_credentials ?? null
     },
 
     setIptvCredentials(username: string, encrypted: string | null): void {
-      const file = load()
-      const user = findStored(file, username)
-      if (!user) throw new UserStoreError(`User "${username}" does not exist`)
-      user.iptvCredentials = encrypted
-      save(file)
+      const db = requireDb()
+      if (!findRow(db, username)) throw new UserStoreError(`User "${username}" does not exist`)
+      db.prepare('UPDATE users SET iptv_credentials = ? WHERE username = ?').run(encrypted, username)
     },
 
     healthCheck(): { ok: true } | { ok: false; error: string } {
+      if (!handle) return { ok: false, error: openError ?? 'database could not be opened' }
       try {
-        load()
-        mkdirSync(dirname(filePath), { recursive: true })
-        const probe = `${filePath}.probe`
-        writeFileSync(probe, 'ok')
-        rmSync(probe, { force: true })
+        const db = handle.db
+        db.prepare('SELECT COUNT(*) AS count FROM users').get()
+        // Prove the file is actually writable, not merely readable.
+        db.transaction(() => {
+          db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('health_check', new Date().toISOString())
+        })()
         return { ok: true }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }

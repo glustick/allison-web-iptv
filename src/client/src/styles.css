@@ -981,3 +981,143 @@ body.resizing-col {
   color: #e7e9ee;
   font-size: 12px;
 }
+
+/* --- Library: favourites, history, custom categories ------------------------------------- */
+
+.sidebar-section-label {
+  padding: 14px 14px 6px;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: #5b6270;
+}
+
+.sidebar-add-category {
+  color: #7ea2ff;
+}
+
+.sidebar-new-category {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+}
+
+.sidebar-new-category input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  background: #0b0d12;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #e7e9ee;
+  font-size: 12px;
+}
+
+.now-playing-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.prefs-action {
+  background: none;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #c8cdd6;
+  font-size: 15px;
+  line-height: 1;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.prefs-action.active {
+  color: #ffd27d;
+  border-color: rgba(255, 176, 32, 0.5);
+}
+
+.prefs-select {
+  padding: 4px 6px;
+  background: #1a1e28;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #c8cdd6;
+  font-size: 12px;
+}
+
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #1a1e28;
+}
+
+.list-toolbar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e7e9ee;
+  margin-right: auto;
+}
+
+.list-hint {
+  padding: 10px 16px;
+  font-size: 13px;
+  color: #9aa1ad;
+}
+
+.epg-empty {
+  padding: 24px 16px;
+  font-size: 13px;
+  color: #9aa1ad;
+}
+
+.channel-picker {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.channel-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-bottom: 1px solid #1a1e28;
+  font-size: 13px;
+  color: #c8cdd6;
+}
+
+.channel-picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.channel-picker-list li {
+  border-bottom: 1px solid #14171f;
+}
+
+.channel-picker-list label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  font-size: 13px;
+  color: #c8cdd6;
+  cursor: pointer;
+}
+
+.channel-picker-list label:hover {
+  background: #12151c;
+}
+
+.channel-picker-list span:last-child {
+  margin-left: auto;
+  font-size: 11px;
+  color: #5b6270;
+}

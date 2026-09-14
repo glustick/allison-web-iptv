@@ -158,14 +158,17 @@ export function EpgGrid({
   channels,
   activeStreamId,
   onSelectChannel,
-  onOpenEpgSettings
+  onOpenEpgSettings,
+  emptyMessage
 }: {
   session: Session
   channels: LiveStream[]
   activeStreamId?: number
-  onSelectChannel: (channel: LiveStream) => void
+  onSelectChannel: (channel: LiveStream | null) => void
   /** Jumps to the EPG section — the place external guide sources are added/removed. */
   onOpenEpgSettings?: () => void
+  /** Shown when there are no rows (library views explain themselves this way). */
+  emptyMessage?: string
 }): JSX.Element {
   const [now, setNow] = useState(() => Date.now())
   const [windowOffsetMs, setWindowOffsetMs] = useState(0)
@@ -242,7 +245,7 @@ export function EpgGrid({
       </div>
       <div className="epg-grid-body">
         {channels.length === 0 ? (
-          <p className="now-playing-bar">No channels to show.</p>
+          <p className="now-playing-bar">{emptyMessage ?? 'No channels to show.'}</p>
         ) : (
           <List<RowProps>
             listRef={listRef}

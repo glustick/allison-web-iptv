@@ -15,6 +15,7 @@ import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseC
 import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './lib/sessionStore.js'
 import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UserRole } from './lib/usersStore.js'
 import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
+import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
 import { compareVersions } from './lib/versionCheck.js'
 
 // ffmpeg-static is a plain CommonJS package with no "exports" map — TypeScript's NodeNext
@@ -47,7 +48,7 @@ const PROXY_INTERNAL_PORT = Number(process.env.PROXY_INTERNAL_PORT ?? 4001)
 // are NOT asked at login anymore — each account carries its own encrypted IPTV config which is
 // checked/applied right after the security check (see the /api/session routes).
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, '..', '..', 'data')
-const usersStore = createUsersStore({ filePath: path.join(DATA_DIR, 'users.json') })
+const usersStore = createUsersStore({ dataDir: DATA_DIR })
 
 export interface NowPlayingInfo {
   title: string
@@ -565,6 +566,133 @@ app.get('/api/version-check', (_req, res) => {
   })()
 })
 
+// -- Per-user library: favourites, watch history, custom categories --------------------------
+// Same SQLite database as the accounts (see db.ts), which is what makes all of it survive an
+// image update: it lives under DATA_DIR (/appdata in Docker) alongside everything else.
+
+const prefsStore = createPrefsStore({ dataDir: DATA_DIR })
+
+/** Shared error shape for the prefs routes: validation problems are the client's fault (400),
+ *  anything else is storage (500) and carries its real message. */
+function handlePrefsError(res: Response, err: unknown, what: string): void {
+  if (err instanceof PrefsError) {
+    res.status(400).json({ error: err.message })
+    return
+  }
+  console.error(`[prefs] ${what} failed:`, err)
+  res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+}
+
+// Everything the sidebar needs in one request: favourites, custom categories and recent history.
+app.get('/api/prefs', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    res.json({
+      ok: true,
+      favourites: prefsStore.listFavourites(session.username),
+      categories: prefsStore.listCategories(session.username),
+      history: prefsStore.listHistory(session.username, 50)
+    })
+  } catch (err) {
+    handlePrefsError(res, err, 'load')
+  }
+})
+
+app.post('/api/prefs/favourites', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.setFavourite(session.username, req.body ?? {}, Boolean(req.body?.favourite))
+    res.json({ ok: true, favourites: prefsStore.listFavourites(session.username) })
+  } catch (err) {
+    handlePrefsError(res, err, 'set favourite')
+  }
+})
+
+app.get('/api/prefs/history', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    const limit = Number(req.query.limit ?? 100)
+    res.json({ ok: true, history: prefsStore.listHistory(session.username, Number.isFinite(limit) ? limit : 100) })
+  } catch (err) {
+    handlePrefsError(res, err, 'history')
+  }
+})
+
+app.post('/api/prefs/history', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.recordHistory(session.username, req.body ?? {})
+    res.json({ ok: true })
+  } catch (err) {
+    handlePrefsError(res, err, 'record history')
+  }
+})
+
+app.delete('/api/prefs/history', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.clearHistory(session.username)
+    res.json({ ok: true, history: [] })
+  } catch (err) {
+    handlePrefsError(res, err, 'clear history')
+  }
+})
+
+app.post('/api/prefs/categories', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    const category = prefsStore.createCategory(session.username, req.body?.name)
+    res.json({ ok: true, category, categories: prefsStore.listCategories(session.username) })
+  } catch (err) {
+    handlePrefsError(res, err, 'create category')
+  }
+})
+
+app.post('/api/prefs/categories/:id/rename', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.renameCategory(session.username, Number(req.params.id), req.body?.name)
+    res.json({ ok: true, categories: prefsStore.listCategories(session.username) })
+  } catch (err) {
+    handlePrefsError(res, err, 'rename category')
+  }
+})
+
+app.delete('/api/prefs/categories/:id', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.deleteCategory(session.username, Number(req.params.id))
+    res.json({ ok: true, categories: prefsStore.listCategories(session.username) })
+  } catch (err) {
+    handlePrefsError(res, err, 'delete category')
+  }
+})
+
+app.post('/api/prefs/categories/:id/channels', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.addChannelToCategory(session.username, Number(req.params.id), req.body ?? {})
+    res.json({ ok: true, categories: prefsStore.listCategories(session.username) })
+  } catch (err) {
+    handlePrefsError(res, err, 'add channel')
+  }
+})
+
+app.delete('/api/prefs/categories/:id/channels/:kind/:streamId', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.removeChannelFromCategory(
+      session.username,
+      Number(req.params.id),
+      String(req.params.kind) as 'live' | 'movie' | 'series',
+      Number(req.params.streamId)
+    )
+    res.json({ ok: true, categories: prefsStore.listCategories(session.username) })
+  } catch (err) {
+    handlePrefsError(res, err, 'remove channel')
+  }
+})
+
 // -- EPG settings (the EPG section): which guides are configured, how healthy they are, and how
 // much of the channel list they actually cover. The status read is deliberately non-blocking —
 // it reports what's cached and starts missing downloads in the background, so the screen can
@@ -837,7 +965,7 @@ app.get('*', (_req, res) => {
 
 createHttpServer(app).listen(PUBLIC_PORT, () => {
   console.log(`[server] Allison Web IPTV v${pkg.version} listening on http://localhost:${PUBLIC_PORT}`)
-  console.log(`[setup] Accounts file: ${path.join(DATA_DIR, 'users.json')} (DATA_DIR=${DATA_DIR})`)
+  console.log(`[setup] Database: ${path.join(DATA_DIR, 'allison.db')} (DATA_DIR=${DATA_DIR})`)
   // Diagnostics must never take the server down: an unreadable users file still lets the API
   // answer with a real, visible error instead of exiting into a restart loop.
   // Report which ffmpeg transcoding will use: a bundled static build cannot resolve

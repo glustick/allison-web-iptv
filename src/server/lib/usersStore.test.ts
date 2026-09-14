@@ -1,5 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
+import { scryptSync } from 'crypto'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UsersStore } from './usersStore.js'
@@ -9,7 +10,7 @@ let store: UsersStore
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'allison-users-'))
-  store = createUsersStore({ filePath: join(dir, 'users.json') })
+  store = createUsersStore({ dataDir: dir })
 })
 
 afterEach(() => {
@@ -31,14 +32,14 @@ describe('usersStore', () => {
     expect(store.verifyCredentials('owner', 'wrong-password')).toBeNull()
     expect(store.verifyCredentials('nobody', 'supersecret')).toBeNull()
 
-    const persisted = readFileSync(join(dir, 'users.json'), 'utf8')
+    const persisted = readFileSync(join(dir, 'allison.db'), 'latin1')
     expect(persisted).not.toContain('supersecret')
     expect(JSON.stringify(store.listUsers())).not.toContain('hash')
   })
 
   it('survives a reload from disk (accounts persist across restarts)', () => {
     store.createUser({ username: 'alice', password: 'alicepass', role: 'user' })
-    const reloaded = createUsersStore({ filePath: join(dir, 'users.json') })
+    const reloaded = createUsersStore({ dataDir: dir })
 
     expect(reloaded.hasUsers()).toBe(true)
     expect(reloaded.verifyCredentials('alice', 'alicepass')?.role).toBe('user')
@@ -78,12 +79,19 @@ describe('usersStore', () => {
     expect(store.getIptvCredentials('alice')).toBeNull()
   })
 
-  it('fails loudly but diagnostically when the users file is corrupted, and healthCheck reports it', () => {
-    writeFileSync(join(dir, 'users.json'), '')
-    expect(() => store.hasUsers()).toThrow(/corrupted/)
-    const health = store.healthCheck()
+  it('reports an unusable database instead of crashing, and healthCheck says so', () => {
+    // Same posture as before the SQLite move: a damaged store yields a readable error from every
+    // method (and a failed healthCheck) rather than taking the server down at boot. Uses its own
+    // directory — writing garbage over a database that a live connection still has open in WAL
+    // mode is recoverable, so it would not exercise this path.
+    const brokenDir = mkdtempSync(join(tmpdir(), 'allison-broken-'))
+    writeFileSync(join(brokenDir, 'allison.db'), 'this is not a database')
+    const broken = createUsersStore({ dataDir: brokenDir })
+    expect(() => broken.hasUsers()).toThrow(/not usable/i)
+    const health = broken.healthCheck()
     expect(health.ok).toBe(false)
-    if (!health.ok) expect(health.error).toMatch(/corrupted/i)
+    if (!health.ok) expect(health.error.length).toBeGreaterThan(0)
+    rmSync(brokenDir, { recursive: true, force: true })
   })
 
   it('healthCheck is ok on a clean store', () => {
@@ -111,12 +119,47 @@ describe('usersStore', () => {
     store.createUser({ username: 'alice', password: 'alicepass', role: 'user' })
     store.setPassword('alice', 'newpassword1')
 
-    const reloaded = createUsersStore({ filePath: join(dir, 'users.json') })
+    const reloaded = createUsersStore({ dataDir: dir })
     expect(reloaded.verifyCredentials('alice', 'newpassword1')?.username).toBe('alice')
 
     expect(() => store.setPassword('alice', 'short')).toThrow(/at least 6 characters/)
     expect(() => store.setPassword('nobody', 'longenough')).toThrow(/does not exist/)
     // A rejected change must leave the previous password working.
     expect(store.verifyCredentials('alice', 'newpassword1')?.username).toBe('alice')
+  })
+
+  it('imports accounts from a pre-SQLite users.json, keeping the original file', () => {
+    const flatDir = mkdtempSync(join(tmpdir(), 'allison-flat-'))
+    const salt = 'aabbccdd'
+    const hash = scryptSync('legacypass', salt, 64).toString('hex')
+    writeFileSync(
+      join(flatDir, 'users.json'),
+      JSON.stringify({
+        version: 1,
+        users: [
+          {
+            username: 'legacy',
+            role: 'admin',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            lastLoginAt: null,
+            password: { salt, hash },
+            iptvCredentials: '{"version":1,"payload":"opaque"}'
+          }
+        ]
+      })
+    )
+
+    const migrated = createUsersStore({ dataDir: flatDir })
+    expect(migrated.hasUsers()).toBe(true)
+    expect(migrated.verifyCredentials('legacy', 'legacypass')?.username).toBe('legacy')
+    expect(migrated.findUser('legacy')?.role).toBe('admin')
+    // The encrypted credentials blob and the original file both survive the move.
+    expect(migrated.getIptvCredentials('legacy')).toBe('{"version":1,"payload":"opaque"}')
+    expect(existsSync(join(flatDir, 'users.json.imported'))).toBe(true)
+
+    // Re-opening must not import twice or lose anything.
+    const reopened = createUsersStore({ dataDir: flatDir })
+    expect(reopened.listUsers()).toHaveLength(1)
+    rmSync(flatDir, { recursive: true, force: true })
   })
 })

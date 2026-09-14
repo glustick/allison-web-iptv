@@ -7,6 +7,13 @@
 
 FROM node:20-bookworm-slim AS build
 WORKDIR /app
+# Build tools for better-sqlite3 (the SQLite driver): it ships prebuilt binaries for many
+# platforms but not reliably for every Node/arch combination, and without a compiler here
+# `npm ci` fails outright with a node-gyp error — the whole image build dies on a dependency
+# that the runtime never sees. Build-stage only, so none of this reaches the final image.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .

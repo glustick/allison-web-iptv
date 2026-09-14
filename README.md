@@ -6,9 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.6.6 — EPG section, fuzzy matching, matching at scale)
+## Current state (v0.7.0 — SQLite storage, favourites, history, custom categories)
 
-**v0.6.6** adds an **EPG section** (view every guide in use — the provider's own plus each
+**v0.7.0** moves everything the app persists into a single **SQLite database** (`allison.db`)
+and builds a proper per-user library on top of it: **★ Favourites** and **🕘 History** in the
+sidebar, plus **custom categories** you can fill with channels picked from any provider category
+(and which live alongside the provider's own categories). All of it is stored server-side under
+`/appdata`, so it survives image updates and follows the account rather than the browser. An
+existing `users.json` is imported automatically on first start, keeping the original as
+`users.json.imported`. **v0.6.6** adds an **EPG section** (view every guide in use — the provider's own plus each
 external XMLTV source — with status, channel/programme counts and coverage stats; add/remove
 sources; force a refresh) and a **fuzzy matching layer** for the channel→guide join, backed by
 caches that keep tens of thousands of channels fast: guide indexes and programme counts are
@@ -47,9 +53,10 @@ and a first-run setup screen that creates the initial admin the first time the s
 with zero accounts. Admins get an in-app console with two panels: **active sessions** (who is
 logged in, what they're streaming, login time, session duration, last activity, with a
 one-click force sign-out) and **user management** (add/remove users, assign roles). Accounts
-persist to a single `users.json` under the data directory — `./data/` for a bare `npm start`,
-`/appdata/` in Docker (passwords scrypt-hashed, provider credentials AES-256-GCM encrypted
-under `SESSION_SECRET`); sessions expire after 24h of inactivity, kept alive by the player's
+persist to a single SQLite database (`allison.db`) under the data directory — `./data/` for a bare
+`npm start`, `/appdata/` in Docker (passwords scrypt-hashed, provider credentials AES-256-GCM
+encrypted under `SESSION_SECRET`); an existing `users.json` is imported automatically on first
+start and kept as `users.json.imported`; sessions expire after 24h of inactivity, kept alive by the player's
 activity heartbeat. The old browser-side "saved profiles" system is gone — accounts
 replaced it.
 
@@ -249,6 +256,23 @@ Roles are `admin` and `user`. Admins get an extra **Admin** tab with:
 Logins expire after 24 hours without any request (`AUTH_IDLE_TTL_HOURS`); actively watching
 keeps the session alive automatically. Removing a user immediately terminates their sessions.
 
+## Your library: favourites, history and custom categories
+
+All three live in the sidebar and are stored per account in the database:
+
+- **★ Favourites** — the star in the now-playing bar toggles the channel you're watching; the
+  entry shows up instantly at the top of the sidebar.
+- **🕘 History** — every channel you start watching is recorded (name and category are stored
+  with it, so history still makes sense if the provider renumbers). Bounded at 500 entries per
+  account, with a Clear button.
+- **Custom categories** — **＋ New category** creates one, then **Add channels** opens a picker
+  where you filter by any provider category and tick the channels you want. Channels can sit in
+  as many custom categories as you like; **Rename**/**Delete** are in the same toolbar, and
+  deleting a category never removes the underlying channel.
+
+Everything here is per user: two accounts on the same server keep separate favourites, history
+and categories.
+
 ## EPG & guide matching
 
 The **EPG** tab shows every guide an account uses and how well they cover its channel list:
@@ -300,9 +324,10 @@ Environment variables:
 - `PORT` (default `8085`) — the public port.
 - `PROXY_INTERNAL_PORT` (default `4001`) — internal-only, do not expose this one.
 - `SESSION_SECRET` — required; encrypts the per-account IPTV credentials at rest. Use a 16+ character random secret, ideally from a secret manager or `.env` file.
-- `DATA_DIR` (default `./data`; `/appdata` in the Docker image) — where `users.json` (accounts,
-  hashed passwords, encrypted per-user IPTV credentials) lives. In Docker this must sit on the
-  persistent `./appdata:/appdata:rw` volume so image updates don't wipe accounts.
+- `DATA_DIR` (default `./data`; `/appdata` in the Docker image) — where `allison.db` lives:
+  accounts, the per-user library (favourites, watch history, custom categories), and encrypted
+  per-user IPTV credentials. In Docker this must sit on the persistent `./appdata:/appdata:rw`
+  volume so image updates don't wipe it.
 - `AUTH_IDLE_TTL_HOURS` (default `24`) — how long a login survives with no requests; active streaming keeps it alive via the client's activity heartbeat.
 - `NODE_EXTRA_CA_CERTS` — only needed on a network with a TLS-inspecting corporate proxy, but
   confirmed live to matter in exactly two separate places on one such network during this
