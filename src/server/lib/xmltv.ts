@@ -98,27 +98,56 @@ export function parseXmltvDate(value: string): number {
 const PRUNE_PAST_MS = 24 * 3_600_000
 const PRUNE_FUTURE_MS = 72 * 3_600_000
 
+// A guide's free-text leaves are kept raw rather than parsed: external sources routinely embed
+// raw, unCDATA'd HTML there, which is what produced "Maximum nested tags exceeded" on real
+// guides (140 levels of <div> inside one description failed an entire source — reproduced live).
+// Keeping them raw also avoids building a deep object tree per programme, which on a
+// 300k-programme guide is the difference between hundreds of MB of garbage and none.
+//
+// Matched by leaf name (*.) rather than exact tv.programme.desc paths: a real source still
+// failed after the first fix because its markup did not sit under the exact paths that list
+// named, so the guard fired anyway. Leaf matching covers unknown document shapes.
+const MAX_NESTED_TAGS = 10_000
+const PARSER_OPTIONS = {
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  stopNodes: ['*.display-name', '*.title', '*.sub-title', '*.desc', '*.category'],
+  // fast-xml-parser defaults this to 100, which real guides exceed. Raised far past anything
+  // markuppy content produces at depth, but kept finite: this parser's job is a TV guide, and a
+  // document nesting thousands deep is malformed input worth refusing with a clear message.
+  maxNestedTags: MAX_NESTED_TAGS
+}
+
 export function parseXmltv(xml: string, opts?: { now?: number }): XmltvGuide {
   const now = opts?.now ?? Date.now()
-  // Free-text <desc> content is kept raw (stopNodes) rather than parsed: external guides
-  // routinely embed raw HTML there, and without this the parser's nesting guard throws
-  // "Maximum nested tags exceeded" on such a source — reproduced live from a user's external
-  // guide, where 140 levels of <div> in one description failed the whole source. Keeping it raw
-  // also avoids building a deep object tree per programme, which for a 300k-programme guide is
-  // the difference between a few hundred MB of garbage and none.
-  //
-  // maxNestedTags is raised as a backstop for anything else unusual: real XMLTV is depth 3-4,
-  // so this only ever absorbs markup smuggled into other fields.
-  const parser = new XMLParser({
-    ignoreAttributes: false,
-    attributeNamePrefix: '@_',
-    // Free-text leaves are kept raw and cleaned by textOf/cleanText: markup mixed with text
-    // ("Sky Sports <b>One</b>") would otherwise come back as a partial '#text' fragment.
-    stopNodes: ['tv.channel.display-name', 'tv.programme.title', 'tv.programme.sub-title', 'tv.programme.desc', 'tv.programme.category'],
-    maxNestedTags: 500
-  })
-  const doc = parser.parse(xml) as { tv?: { channel?: unknown; programme?: unknown } }
-  const tv = doc.tv ?? {}
+  const parsed = parseDocument(xml)
+  return buildGuide(parsed, now)
+}
+
+/** Parses the XML, turning the parser's nesting guard into a self-describing error. */
+function parseDocument(xml: string): { tv?: { channel?: unknown; programme?: unknown } } {
+  const parser = new XMLParser(PARSER_OPTIONS)
+  try {
+    return parser.parse(xml) as { tv?: { channel?: unknown; programme?: unknown } }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/nested tags/i.test(message)) {
+      throw new Error(
+        `Guide XML nests more than ${MAX_NESTED_TAGS} levels — this source is malformed or is not an XMLTV guide`
+      )
+    }
+    throw err instanceof Error ? err : new Error(message)
+  }
+}
+
+function buildGuide(doc: { tv?: { channel?: unknown; programme?: unknown } }, now: number): XmltvGuide {
+  if (!doc.tv || typeof doc.tv !== 'object') {
+    // A source that parses as XML but has no <tv> root isn't an XMLTV guide (an HTML page, a
+    // JSON payload, an error document). Saying so beats reporting a healthy source with zero
+    // channels, which is what an "ok, 0 guide channels" row would have implied.
+    throw new Error('Not an XMLTV guide: no <tv> root element found in the response')
+  }
+  const tv = doc.tv
 
   const channels = new Map<string, XmltvChannel>()
   for (const raw of asArray(tv.channel as any)) {

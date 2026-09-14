@@ -135,4 +135,29 @@ describe('parseXmltv', () => {
     const description = (guide.programmesByChannel.get('c1') ?? [])[0].description ?? ''
     expect(description.length).toBeLessThanOrEqual(600)
   })
+
+  it('tolerates deep markup that is NOT under the usual tv.programme leaves', () => {
+    // The shape that still failed after the first fix: the stop-node list named exact paths, so
+    // deep nesting elsewhere (a wrapper element, a differently shaped document region) tripped
+    // the nesting guard anyway. Leaf-name matching plus the raised ceiling covers it.
+    const deep = `${'<x>'.repeat(600)}junk${'</x>'.repeat(600)}`
+    const xml =
+      `<?xml version="1.0"?><tv>` +
+      `<channel id="c1"><display-name>Channel One</display-name></channel>` +
+      `<wrapper>${deep}</wrapper>` +
+      `<programme channel="c1" start="${xmltvDate(now + HOUR)}" stop="${xmltvDate(now + 2 * HOUR)}"><title>Still Parses</title></programme></tv>`
+
+    const guide = parseXmltv(xml, { now })
+    expect(guide.channels.get('c1')?.displayName).toBe('Channel One')
+    expect((guide.programmesByChannel.get('c1') ?? [])[0].title).toBe('Still Parses')
+  })
+
+  it('reports a document that is not an XMLTV guide instead of pretending it is empty', () => {
+    expect(() => parseXmltv('<html><body>Not a guide</body></html>', { now })).toThrow(/not an xmltv guide/i)
+  })
+
+  it('refuses absurdly nested input with a message naming the limit', () => {
+    const absurd = `${'<x>'.repeat(10_100)}deep${'</x>'.repeat(10_100)}`
+    expect(() => parseXmltv(`<?xml version="1.0"?><tv>${absurd}</tv>`, { now })).toThrow(/nests more than/i)
+  })
 })

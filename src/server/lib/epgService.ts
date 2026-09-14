@@ -27,6 +27,10 @@ import { parseXmltv, type XmltvGuide, type XmltvProgramme } from './xmltv.js'
 
 const GUIDE_TTL_MS = 6 * 3_600_000
 const CHANNEL_LIST_TTL_MS = 3_600_000
+// A source that failed is retried on the next status poll after this long, rather than sitting
+// in the error state until its 6h TTL expires: a provider that hiccuped, a URL that was fixed,
+// or a parser bug that got shipped all recover on their own within a minute.
+const ERROR_RETRY_MS = 60_000
 const MAX_REDIRECTS = 5
 
 export interface EpgServiceCredentials {
@@ -275,12 +279,14 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
         return { kind, url, status: 'loading' as EpgSourceState, channelCount: 0, programmeCount: 0, fetchedAt: null }
       }
       ensureGuideStats(entry)
-      const stale = now() - entry.fetchedAt >= guideTtlMs
-      if (stale && !entry.fetchPromise) void getGuideOrError(url)
+      const age = now() - entry.fetchedAt
+      const stale = age >= guideTtlMs
+      const failedLongEnoughToRetry = entry.status === 'error' && age >= ERROR_RETRY_MS
+      if ((stale || failedLongEnoughToRetry) && !entry.fetchPromise) void getGuideOrError(url)
       return {
         kind,
         url,
-        status: stale || entry.fetchPromise ? 'loading' : entry.status,
+        status: stale || failedLongEnoughToRetry || entry.fetchPromise ? 'loading' : entry.status,
         channelCount: entry.channelCount ?? 0,
         programmeCount: entry.programmeCount ?? 0,
         fetchedAt: entry.fetchedAt,
