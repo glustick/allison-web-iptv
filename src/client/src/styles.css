@@ -1324,3 +1324,13 @@ body.resizing-col {
 .restore-label input[type='file'] {
   display: none;
 }
+
+/* Shown while a title is being converted for playback (see NativeVideoPlayer) — without it the
+   wait looked like a frozen player rather than work in progress. */
+.player-notice {
+  padding: 6px 16px;
+  font-size: 13px;
+  color: #cbd5e1;
+  background: #1e293b;
+  border-top: 1px solid #334155;
+}
