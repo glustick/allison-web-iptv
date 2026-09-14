@@ -15,7 +15,7 @@ const PLAYER_MIN_HEIGHT = 120
 const PLAYER_DEFAULT_MAX_HEIGHT = (): number => Math.round(window.innerHeight * 0.45)
 const PLAYER_MAX_HEIGHT_CEILING = (): number => Math.round(window.innerHeight * 0.8)
 
-export function LiveTv({ session }: { session: Session }): JSX.Element {
+export function LiveTv({ session, onOpenEpgSettings }: { session: Session; onOpenEpgSettings?: () => void }): JSX.Element {
   const [categories, setCategories] = useState<Category[]>([])
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null)
   const [channels, setChannels] = useState<LiveStream[]>([])
@@ -93,7 +93,13 @@ export function LiveTv({ session }: { session: Session }): JSX.Element {
             {loadError}
           </div>
         )}
-        <EpgGrid session={session} channels={channels} activeStreamId={nowPlaying?.stream_id} onSelectChannel={setNowPlaying} />
+        <EpgGrid
+          session={session}
+          channels={channels}
+          activeStreamId={nowPlaying?.stream_id}
+          onSelectChannel={setNowPlaying}
+          onOpenEpgSettings={onOpenEpgSettings}
+        />
       </div>
     </div>
   )

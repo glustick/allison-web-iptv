@@ -157,12 +157,15 @@ export function EpgGrid({
   session,
   channels,
   activeStreamId,
-  onSelectChannel
+  onSelectChannel,
+  onOpenEpgSettings
 }: {
   session: Session
   channels: LiveStream[]
   activeStreamId?: number
   onSelectChannel: (channel: LiveStream) => void
+  /** Jumps to the EPG section — the place external guide sources are added/removed. */
+  onOpenEpgSettings?: () => void
 }): JSX.Element {
   const [now, setNow] = useState(() => Date.now())
   const [windowOffsetMs, setWindowOffsetMs] = useState(0)
@@ -225,6 +228,16 @@ export function EpgGrid({
         </div>
         {aggregated.status === 'loading' && aggregated.data === null && (
           <div className="epg-time-header-controls">Loading guide…</div>
+        )}
+        {onOpenEpgSettings && (
+          <button
+            type="button"
+            className="epg-sources-link"
+            onClick={onOpenEpgSettings}
+            title="Missing guide data? Add or remove external EPG (XMLTV) sources"
+          >
+            EPG sources
+          </button>
         )}
       </div>
       <div className="epg-grid-body">

@@ -851,3 +851,21 @@ body.resizing-row {
   background: rgba(255, 107, 107, 0.15);
   color: #ff6b6b;
 }
+
+.epg-sources-link {
+  margin-left: auto;
+  margin-right: 8px;
+  padding: 4px 10px;
+  background: #1a1e28;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #c8cdd6;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.epg-sources-link:hover {
+  border-color: #3a4154;
+  color: #ffffff;
+}

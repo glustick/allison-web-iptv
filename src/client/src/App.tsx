@@ -254,7 +254,7 @@ export default function App(): JSX.Element {
           .
         </div>
       )}
-      {session && tab === 'live' && <LiveTv session={session} />}
+      {session && tab === 'live' && <LiveTv session={session} onOpenEpgSettings={() => setTab('epg')} />}
       {session && tab === 'movies' && <Movies session={session} />}
       {session && tab === 'series' && <Series session={session} />}
       {session && tab === 'epg' && <EpgSettings session={session} />}
