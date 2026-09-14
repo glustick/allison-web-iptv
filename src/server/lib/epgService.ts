@@ -99,7 +99,7 @@ interface GuideCacheEntry {
   status: 'ok' | 'error'
   error?: string
   fetchedAt: number
-  fetchPromise: Promise<XmltvGuide | null> | null
+  fetchPromise: Promise<GuideCacheEntry> | null
   /** Consecutive failures, for the retry backoff. */
   failures?: number
   /** Earliest time this URL may be retried. */
@@ -292,51 +292,87 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     )
   }
 
-  /** Cached guide fetch with stale-while-revalidate: a stale entry is served immediately while
-   *  a refresh runs in the background; parallel callers share one refresh. */
+  /**
+   * Runs a fetch and records its outcome (success, or an error with the retry backoff).
+   * Concurrent callers share one in-flight fetch.
+   */
+  function runFetch(url: string): Promise<GuideCacheEntry> {
+    const inFlight = guideCache.get(url)?.fetchPromise
+    if (inFlight) return inFlight.then(() => guideCache.get(url) as GuideCacheEntry)
+
+    const promise = fetchGuideOnce(url)
+      .then((guide) => {
+        const success: GuideCacheEntry = { guide, status: 'ok', fetchedAt: now(), fetchPromise: null, failures: 0 }
+        guideCache.set(url, success)
+        return success
+      })
+      .catch((err) => {
+        const failures = (guideCache.get(url)?.failures ?? 0) + 1
+        const failed: GuideCacheEntry = {
+          guide: null,
+          status: 'error',
+          error: err instanceof Error ? err.message : String(err),
+          fetchedAt: now(),
+          fetchPromise: null,
+          failures,
+          nextRetryAt: now() + epgRetryDelayMs(failures)
+        }
+        guideCache.set(url, failed)
+        return failed
+      })
+
+    const current: GuideCacheEntry = guideCache.get(url) ?? {
+      guide: null,
+      status: 'error',
+      error: 'not fetched yet',
+      fetchedAt: now(),
+      fetchPromise: null
+    }
+    current.fetchPromise = promise
+    guideCache.set(url, current)
+    return promise
+  }
+
+  /**
+   * Cached guide entry, refreshing when due.
+   *
+   * Error entries are retried once their backoff has elapsed — and *only* then, in the
+   * background. Previously a cached entry younger than its 6h TTL was returned as-is whatever
+   * its status, so a single failure parked the source in a frozen error/"loading" state for six
+   * hours with no retry at all (the reported stuck provider guide, whose last attempt was hours
+   * old). Background, because the retry may be another ~97MB download and a grid request must
+   * not wait on it.
+   */
   async function getGuide(url: string): Promise<GuideCacheEntry> {
     const existing = guideCache.get(url)
-    if (existing) {
-      if (now() - existing.fetchedAt < guideTtlMs) return existing
-      if (!existing.fetchPromise) {
-        existing.fetchPromise = fetchGuideOnce(url)
-          .then((guide) => {
-            guideCache.set(url, { guide, status: 'ok', fetchedAt: now(), fetchPromise: null, failures: 0 })
-            return guide
-          })
-          .catch(() => {
-            // A failed refresh keeps serving the last good guide — a temporarily unreachable
-            // external source shouldn't blank rows it had already filled.
-            existing.fetchPromise = null
-            return existing.guide
-          })
-      }
+    // Nothing cached: load it now — the caller is asking for data.
+    if (!existing) return runFetch(url)
+
+    if (existing.status === 'ok' && now() - existing.fetchedAt < guideTtlMs) return existing
+
+    const retryDue = existing.status === 'error' && now() >= (existing.nextRetryAt ?? 0)
+
+    // A fetch is already running and there is nothing usable to serve yet: wait for it rather
+    // than handing back an empty placeholder (this is the path a cold load takes when the
+    // settings screen has already kicked the same fetch off).
+    if (existing.fetchPromise && existing.guide === null) return existing.fetchPromise
+
+    if (existing.status === 'ok') {
+      // Stale but servable: serve it and revalidate in the background.
+      if (!existing.fetchPromise) void runFetch(url)
       return existing
     }
-    const fetched = await fetchGuideOnce(url)
-    const entry: GuideCacheEntry = { guide: fetched, status: 'ok', fetchedAt: now(), fetchPromise: null, failures: 0 }
-    guideCache.set(url, entry)
-    return entry
+
+    // Failed source: retry only once the backoff has elapsed, and never make a grid request wait
+    // on what may be another ~97MB download.
+    if (retryDue && !existing.fetchPromise) void runFetch(url)
+    return existing
   }
 
   async function getGuideOrError(url: string): Promise<GuideCacheEntry> {
-    try {
-      return await getGuide(url)
-    } catch (err) {
-      const previous = guideCache.get(url)
-      const failures = (previous?.failures ?? 0) + 1
-      const entry: GuideCacheEntry = {
-        guide: null,
-        status: 'error',
-        error: err instanceof Error ? err.message : String(err),
-        fetchedAt: now(),
-        fetchPromise: null,
-        failures,
-        nextRetryAt: now() + epgRetryDelayMs(failures)
-      }
-      guideCache.set(url, entry)
-      return entry
-    }
+    // Outcomes (including failures) are recorded in the cache rather than thrown, so callers
+    // always get an entry describing the source's state.
+    return getGuide(url)
   }
 
   /** Non-blocking status for the EPG settings screen: reports what is cached, and for anything
@@ -350,15 +386,17 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
         return { kind, url, status: 'loading' as EpgSourceState, channelCount: 0, programmeCount: 0, fetchedAt: null }
       }
       ensureGuideStats(entry)
-      const age = now() - entry.fetchedAt
-      const stale = age >= guideTtlMs
-      const failedLongEnoughToRetry =
-        entry.status === 'error' && now() >= (entry.nextRetryAt ?? entry.fetchedAt + EPG_ERROR_RETRY_BASE_MS)
-      if ((stale || failedLongEnoughToRetry) && !entry.fetchPromise) void getGuideOrError(url)
+      const stale = now() - entry.fetchedAt >= guideTtlMs
+      const retryDue = entry.status === 'error' && now() >= (entry.nextRetryAt ?? entry.fetchedAt + EPG_ERROR_RETRY_BASE_MS)
+      // Trigger the (background) refresh through the same path everything else uses.
+      if ((stale || retryDue) && !entry.fetchPromise) void getGuideOrError(url)
+      const refreshing = Boolean(entry.fetchPromise)
       return {
         kind,
         url,
-        status: stale || failedLongEnoughToRetry || entry.fetchPromise ? 'loading' : entry.status,
+        // An errored source that is merely waiting out its backoff reports 'error' with its real
+        // message, not a 'loading' that never resolves — which is how it looked before.
+        status: refreshing || stale ? 'loading' : entry.status,
         channelCount: entry.channelCount ?? 0,
         programmeCount: entry.programmeCount ?? 0,
         fetchedAt: entry.fetchedAt,

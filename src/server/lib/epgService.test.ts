@@ -428,4 +428,60 @@ describe('epgRetryDelayMs', () => {
     expect(epgRetryDelayMs(-3)).toBe(EPG_ERROR_RETRY_BASE_MS)
     expect(epgRetryDelayMs(Number.NaN)).toBe(EPG_ERROR_RETRY_BASE_MS)
   })
+
+  it('retries a failed source after its backoff, reports it honestly while waiting, and recovers', async () => {
+    // The reported "stuck provider guide": a cached error entry was served for its whole 6h TTL,
+    // so a single failure meant no retry ever happened (its last attempt was hours old) and the
+    // screen showed a 'loading' that never resolved.
+    const xml = guideXml([{ id: 'r1', displayName: 'Recovered Channel', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'Back at last' }] }])
+    let failing = true
+    let hits = 0
+    const flaky = await listen((_req, res) => {
+      hits++
+      if (failing) {
+        res.writeHead(500)
+        res.end('temporarily unavailable')
+        return
+      }
+      res.writeHead(200, { 'content-type': 'application/xml' })
+      res.end(xml)
+    })
+    const provider = await listen((req, res) => {
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ stream_id: 1, name: 'Recovered Channel', epg_channel_id: null }]))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+
+    const clock = fakeClock()
+    const service = createEpgService({ createUpstreamRequest: createNodeUpstreamRequest, now: clock.now })
+    const params = { credentials: { server: provider, username: 'u', password: 'p' }, epgUrls: [flaky] }
+
+    service.peekStatus(params)
+    await until(() => service.peekStatus(params)[1].status === 'error')
+    const failureStatus = service.peekStatus(params)[1]
+    expect(failureStatus.status).toBe('error')
+    expect(failureStatus.error).toContain('500')
+    const hitsAfterFailure = hits
+
+    // Still within the backoff: polls must neither refetch nor pretend to be loading.
+    clock.advance(5_000)
+    const duringBackoff = service.peekStatus(params)[1]
+    expect(duringBackoff.status).toBe('error')
+    expect(hits).toBe(hitsAfterFailure)
+
+    // Backoff elapsed and the source is healthy again: the next poll retries and it recovers.
+    failing = false
+    clock.advance(EPG_ERROR_RETRY_BASE_MS + 1_000)
+    service.peekStatus(params)
+    await until(() => service.peekStatus(params)[1].status === 'ok')
+    expect(hits).toBeGreaterThan(hitsAfterFailure)
+    expect(service.peekStatus(params)[1].channelCount).toBe(1)
+
+    const result = await service.aggregate({ ...params, startMs: NOW, endMs: NOW + HOUR })
+    expect(result.listings['1']?.[0]?.title).toBe('Back at last')
+  })
 })
