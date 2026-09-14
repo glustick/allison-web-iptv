@@ -128,6 +128,17 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref()
 
+// SESSION_SECRET encrypts every account's stored IPTV credentials; a missing or too-short
+// value is a deployment mistake worth shouting about at boot (it used to surface only as an
+// opaque 500 the first time someone saved their IPTV config).
+function checkSessionSecret(): string | null {
+  const secret = process.env.SESSION_SECRET
+  if (!secret || secret.trim().length < 16) {
+    return 'SESSION_SECRET is missing or shorter than 16 characters.'
+  }
+  return null
+}
+
 function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const session = getAuthSession(req)
   if (!session) {
@@ -423,16 +434,24 @@ function resolveEpgCredentials(req: IncomingMessage): (EpgServiceCredentials & {
 // the UI asks for it.
 app.get('/api/session', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
-  const stored = usersStore.getIptvCredentials(session.username)
-  if (!stored) {
-    res.json({ ok: true, configured: false, server: null, username: null, password: null, epgUrls: [] })
-    return
-  }
   try {
+    const stored = usersStore.getIptvCredentials(session.username)
+    if (!stored) {
+      res.json({ ok: true, configured: false, server: null, username: null, password: null, epgUrls: [] })
+      return
+    }
     const credentials = decryptSessionCredentials(stored)
     res.json({ ok: true, configured: true, ...credentials })
-  } catch {
-    usersStore.setIptvCredentials(session.username, null)
+  } catch (err) {
+    // A stored config that no longer decrypts (SESSION_SECRET changed) or an unreadable
+    // store is treated as "not configured" so the user can re-enter it — but the reason is
+    // still logged rather than swallowed.
+    console.error('[session] load failed:', err)
+    try {
+      usersStore.setIptvCredentials(session.username, null)
+    } catch {
+      // Store itself unreadable — the response below still lets the client continue.
+    }
     res.json({ ok: true, configured: false, server: null, username: null, password: null, epgUrls: [] })
   }
 })
@@ -444,26 +463,38 @@ app.post('/api/session/save', requireAuth, (req, res) => {
     res.status(400).json({ error: 'Missing IPTV server, username or password' })
     return
   }
-  const credentials: SessionCredentials = {
-    server: server.trim(),
-    username: username.trim(),
-    password,
-    epgUrls: sanitizeEpgUrls(epgUrls)
-  }
-  usersStore.setIptvCredentials(session.username, encryptSessionCredentials(credentials))
+  try {
+    const credentials: SessionCredentials = {
+      server: server.trim(),
+      username: username.trim(),
+      password,
+      epgUrls: sanitizeEpgUrls(epgUrls)
+    }
+    usersStore.setIptvCredentials(session.username, encryptSessionCredentials(credentials))
 
-  // Point the proxy at the provider right away so the client's first Xtream request works
-  // without a separate /api/connect round trip.
-  const normalizedServer = normalizeProxyTargetBase(credentials.server)
-  sessionProxyTargets.set(session.token, normalizedServer)
-  defaultProxyTargetBase = normalizedServer
-  res.json({ ok: true })
+    // Point the proxy at the provider right away so the client's first Xtream request works
+    // without a separate /api/connect round trip.
+    const normalizedServer = normalizeProxyTargetBase(credentials.server)
+    sessionProxyTargets.set(session.token, normalizedServer)
+    defaultProxyTargetBase = normalizedServer
+    res.json({ ok: true })
+  } catch (err) {
+    // Encryption needs a valid SESSION_SECRET and the account store needs a writable data
+    // volume — both failures must name themselves here rather than becoming an HTML 500.
+    console.error('[session] save failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
 })
 
 app.post('/api/session/clear', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
-  usersStore.setIptvCredentials(session.username, null)
-  res.json({ ok: true })
+  try {
+    usersStore.setIptvCredentials(session.username, null)
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[session] clear failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
 })
 
 app.get('/api/health', (_req, res) => {
@@ -550,11 +581,16 @@ app.post('/api/connect', requireAuth, (req, res) => {
     return
   }
 
-  const session = req.authSession as AuthSession
-  const normalizedServer = normalizeProxyTargetBase(server)
-  sessionProxyTargets.set(session.token, normalizedServer)
-  defaultProxyTargetBase = normalizedServer
-  res.json({ ok: true })
+  try {
+    const session = req.authSession as AuthSession
+    const normalizedServer = normalizeProxyTargetBase(server)
+    sessionProxyTargets.set(session.token, normalizedServer)
+    defaultProxyTargetBase = normalizedServer
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[connect] failed:', err)
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Could not set the IPTV target' })
+  }
 })
 
 // Resolves a client-relative stream path (e.g. /live/user/pass/123.m3u8, exactly what
@@ -575,8 +611,15 @@ app.post('/api/transcode/start', requireAuth, (req, res) => {
     res.status(400).json({ error: 'Missing sourceUrl/sessionId' })
     return
   }
+  let upstreamUrl: string
+  try {
+    upstreamUrl = resolveUpstreamUrl(sourceUrl, req)
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'No IPTV server configured' })
+    return
+  }
   transcodeService
-    .startTranscode(resolveUpstreamUrl(sourceUrl, req), Boolean(isVod), sessionId, subtitleStreamIndex, audioStreamIndex)
+    .startTranscode(upstreamUrl, Boolean(isVod), sessionId, subtitleStreamIndex, audioStreamIndex)
     .then(({ playlistPath, subtitleTracks }) => {
       // Same reasoning as the desktop app's own transcode:start handler: the filename varies
       // (playlist.m3u8 normally, master.m3u8 when a subtitle rendition got included), so
@@ -612,8 +655,15 @@ app.post('/api/transcode/probeTracks', requireAuth, (req, res) => {
     res.status(400).json({ error: 'Missing sourceUrl' })
     return
   }
+  let upstreamUrl: string
+  try {
+    upstreamUrl = resolveUpstreamUrl(sourceUrl, req)
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'No IPTV server configured' })
+    return
+  }
   transcodeService
-    .probeTracks(resolveUpstreamUrl(sourceUrl, req))
+    .probeTracks(upstreamUrl)
     .then((tracks) => res.json(tracks))
     .catch((err) => {
       console.error('[transcode] probe failed:', err)
@@ -667,6 +717,11 @@ createHttpServer(app).listen(PUBLIC_PORT, () => {
   console.log(`[setup] Accounts file: ${path.join(DATA_DIR, 'users.json')} (DATA_DIR=${DATA_DIR})`)
   // Diagnostics must never take the server down: an unreadable users file still lets the API
   // answer with a real, visible error instead of exiting into a restart loop.
+  const secretProblem = checkSessionSecret()
+  if (secretProblem) {
+    console.error(`[setup] ${secretProblem}`)
+    console.error('[setup] IPTV configuration cannot be saved until this is fixed (it is stored encrypted).')
+  }
   const health = usersStore.healthCheck()
   if (!health.ok) {
     console.error(`[setup] Data directory is NOT usable: ${health.error}`)
