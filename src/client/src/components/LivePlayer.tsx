@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
+import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
 // Matches the desktop app's own Player.tsx recovery tuning (see its ROADMAP): a fatal
@@ -20,11 +21,30 @@ const ERROR_RESET_AFTER_MS = 15000
 // page becomes active again, not during suspension (see lib/liveStreamRecovery.ts).
 const RECOVERY_CHECK_INTERVAL_MS = 15_000
 
+// Live TV's own silent-audio detection (see the effect below). A Dolby (E-AC-3/AC-3) audio
+// track isn't decodable by most browsers, and unlike VOD nothing guarantees hls.js raises an
+// error for it: the fragment can append with the audio silently dropped, leaving a perfectly
+// smooth picture with no sound and no event to react to — the reported "Sky News FHD has no
+// audio". Polling the element's own decoded-byte counters catches that shape.
+const SILENT_AUDIO_CHECK_INTERVAL_MS = 1000
+const SILENT_AUDIO_SILENT_TICKS = 3
+// Two concurrent requests for one stream (this one, plus ffmpeg about to open it) can trip a
+// single-connection provider, so the element is detached and given a moment before transcode.
+const CONNECTION_RELEASE_DELAY_MS = 2000
+
+// Chromium's real, long-standing decoded-byte counters — absent elsewhere, which is why every
+// check below keys off them being present rather than treating a missing property as silence.
+interface ChromiumVideoElement extends HTMLVideoElement {
+  webkitVideoDecodedByteCount?: number
+  webkitAudioDecodedByteCount?: number
+}
+
 // Live TV only: this is the hls.js-attached player, matching the desktop app's own split
 // between Player.tsx's live path (always .m3u8, always hls.js) and its VOD/series path (a
 // plain native <video src>, see NativeVideoPlayer.tsx) — the two need genuinely different
-// audio-codec-fallback detection (a real hls.js ERROR event here vs. polling decoded-byte
-// counts there), so they're kept as separate components rather than one that branches.
+// audio-codec-fallback detection (an hls.js ERROR event plus the decoded-audio poll below,
+// versus a plain native element's own decoded-byte polling), so they're kept as separate
+// components rather than one that branches.
 export function LivePlayer({ url, channelKey }: { url: string; channelKey: string }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
@@ -34,7 +54,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
   const [audioTrack, setAudioTrack] = useState(-1)
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
-  const { getSourceUrl, tryFallback, reset, beginRun, hasSession, restartFallback } = useTranscodeFallback()
+  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback } = useTranscodeFallback()
   // Recovery ladder state, deliberately on the component (not in the effect): the effect is
   // torn down and rebuilt by every reload tick, and an attempt counter that reset with it
   // would loop forever instead of ever escalating.
@@ -147,6 +167,48 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
         video.play().catch(() => {})
       }
     }, RECOVERY_CHECK_INTERVAL_MS)
+    // Silent-audio watchdog: fires when the browser is playing video without ever decoding
+    // audio — either because the level carries a codec we know this browser can't decode, or
+    // (Chromium) because no audio bytes have come out after several seconds of real playback.
+    const isTypeSupported = (mimeType: string): boolean =>
+      typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mimeType)
+    let silentFallbackStarted = false
+    let releaseTimer: ReturnType<typeof setTimeout> | null = null
+    let consecutiveSilentTicks = 0
+    let everDecodedVideo = false
+    const startSilentAudioFallback = (): void => {
+      if (silentFallbackStarted || gaveUp || fatalErrorShown) return
+      silentFallbackStarted = true
+      clearInterval(silentAudioTimer)
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+      releaseTimer = setTimeout(() => {
+        tryFallbackForSilentAudio(
+          url,
+          () => setReloadTick((t) => t + 1),
+          (message) => {
+            fatalErrorShown = true
+            setError(`Audio codec not supported by this player, and automatic transcoding failed: ${message}`)
+          }
+        )
+      }, CONNECTION_RELEASE_DELAY_MS)
+    }
+    const silentAudioTimer = setInterval(() => {
+      if (silentFallbackStarted || gaveUp || fatalErrorShown) return
+      if (video.paused || video.muted || video.readyState < 2) return
+      const probe = video as ChromiumVideoElement
+      if (probe.webkitAudioDecodedByteCount === undefined) return
+      const videoBytes = probe.webkitVideoDecodedByteCount ?? 0
+      const audioBytes = probe.webkitAudioDecodedByteCount
+      if (videoBytes > 0) everDecodedVideo = true
+      consecutiveSilentTicks = videoBytes > 0 && audioBytes === 0 ? consecutiveSilentTicks + 1 : 0
+      if (consecutiveSilentTicks >= SILENT_AUDIO_SILENT_TICKS && video.currentTime > 2) {
+        console.warn('[player] playing with no decoded audio; switching to the transcode path')
+        startSilentAudioFallback()
+      }
+    }, SILENT_AUDIO_CHECK_INTERVAL_MS)
+
     const noteFragmentActivity = (): void => {
       lastFragmentAt = Date.now()
       kicksSinceLastFragment = 0
@@ -175,6 +237,18 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
       instance.loadSource(sourceUrl)
       instance.attachMedia(video)
       instance.on(Hls.Events.FRAG_BUFFERED, noteFragmentActivity)
+      instance.on(Hls.Events.MANIFEST_PARSED, () => {
+        // Proactive rather than waiting for an error that may never come: if the stream's audio
+        // is a codec this browser cannot decode, switch to the transcode path immediately
+        // instead of showing a silent picture.
+        const undecodable = (instance.levels ?? []).find(
+          (level) => level.audioCodec && !canDecodeAudioCodec(level.audioCodec, isTypeSupported)
+        )
+        if (undecodable) {
+          console.warn(`[player] stream audio is ${undecodable.audioCodec}, not decodable here; transcoding`)
+          startSilentAudioFallback()
+        }
+      })
       instance.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_event, data) => {
         setAudioTracks(data.audioTracks.map((track, index) => ({
           index,
@@ -253,6 +327,8 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
       video.removeEventListener('playing', handlePlaying)
       if (errorResetTimer) clearTimeout(errorResetTimer)
       if (networkRetryTimer) clearTimeout(networkRetryTimer)
+      clearInterval(silentAudioTimer)
+      if (releaseTimer) clearTimeout(releaseTimer)
       hls?.destroy()
       hlsRef.current = null
       setAudioTracks([])
