@@ -737,3 +737,29 @@ body.resizing-row {
   opacity: 0.6;
   cursor: default;
 }
+
+.admin-only-notice {
+  margin: 16px 24px;
+  padding: 12px 16px;
+  background: #12151c;
+  border: 1px solid #232733;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #c8cdd6;
+  line-height: 1.5;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #7ea2ff;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.tab:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

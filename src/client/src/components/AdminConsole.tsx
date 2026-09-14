@@ -143,7 +143,7 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
             <tbody>
               {sessions.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="admin-empty">No one is logged in right now</td>
+                  <td colSpan={7} className="admin-empty">No active sessions — users appear here as soon as they sign in</td>
                 </tr>
               )}
               {sessions.map((session) => (

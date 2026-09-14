@@ -9,11 +9,14 @@ export function IptvConfigScreen({
   appUser,
   initialConfig,
   initialError,
+  onOpenAdmin,
   onConnected
 }: {
   appUser: AppUser
   initialConfig: IptvConfig | null
   initialError?: string | null
+  /** Admins can reach the admin console without configuring a provider (see App.tsx). */
+  onOpenAdmin?: () => void
   onConnected: (session: Session) => void
 }): JSX.Element {
   const [server, setServer] = useState(initialConfig?.server ?? '')
@@ -92,6 +95,11 @@ export function IptvConfigScreen({
         <button type="submit" disabled={connecting}>
           {connecting ? `Connecting… ${formatElapsedTime(elapsedMs)}` : 'Save and connect'}
         </button>
+        {onOpenAdmin && (
+          <button type="button" className="forget-login-link" onClick={onOpenAdmin}>
+            Open the admin console without IPTV setup
+          </button>
+        )}
       </form>
     </div>
   )

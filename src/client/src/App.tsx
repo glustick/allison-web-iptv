@@ -34,6 +34,10 @@ export default function App(): JSX.Element {
   const [tab, setTab] = useState<Tab>('live')
   const [updateMessage, setUpdateMessage] = useState<string | null>(null)
   const [authError, setAuthError] = useState<string | null>(null)
+  // An admin whose own account has no IPTV provider configured would otherwise be stuck on
+  // the IPTV setup screen, unable to manage users or watch sessions at all — the admin console
+  // does not need a provider connection, so it stays reachable on its own.
+  const [adminMode, setAdminMode] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
   const connectStartedAtRef = useRef<number | null>(null)
 
@@ -113,6 +117,7 @@ export default function App(): JSX.Element {
   async function handleLogout(): Promise<void> {
     await logout()
     setSession(null)
+    setAdminMode(false)
     setTab('live')
     setSavedConfig(null)
     setAuthState(null)
@@ -170,7 +175,9 @@ export default function App(): JSX.Element {
 
   const appUser: AppUser = session?.appUser ?? authState.user
 
-  if (!session) {
+  const adminOnly = !session && adminMode && appUser.role === 'admin'
+
+  if (!session && !adminOnly) {
     if (iptvPhase === 'connecting' && savedConfig) {
       return (
         <div className="login-screen">
@@ -186,8 +193,17 @@ export default function App(): JSX.Element {
         appUser={appUser}
         initialConfig={savedConfig}
         initialError={iptvPhase === 'failed' ? autoConnectError : null}
+        onOpenAdmin={
+          appUser.role === 'admin'
+            ? () => {
+                setAdminMode(true)
+                setTab('admin')
+              }
+            : undefined
+        }
         onConnected={(connected) => {
           setSession(connected)
+          setAdminMode(false)
           setIptvPhase('checking')
           setAutoConnectError(null)
         }}
@@ -199,13 +215,13 @@ export default function App(): JSX.Element {
     <div className="app-shell">
       <div className="top-bar">
         <div className="tabs">
-          <button className={tab === 'live' ? 'tab active' : 'tab'} onClick={() => setTab('live')}>
+          <button className={tab === 'live' ? 'tab active' : 'tab'} onClick={() => setTab('live')} disabled={!session}>
             Live TV
           </button>
-          <button className={tab === 'movies' ? 'tab active' : 'tab'} onClick={() => setTab('movies')}>
+          <button className={tab === 'movies' ? 'tab active' : 'tab'} onClick={() => setTab('movies')} disabled={!session}>
             Movies
           </button>
-          <button className={tab === 'series' ? 'tab active' : 'tab'} onClick={() => setTab('series')}>
+          <button className={tab === 'series' ? 'tab active' : 'tab'} onClick={() => setTab('series')} disabled={!session}>
             Series
           </button>
           {appUser.role === 'admin' && (
@@ -224,9 +240,19 @@ export default function App(): JSX.Element {
           </button>
         </div>
       </div>
-      {tab === 'live' && <LiveTv session={session} />}
-      {tab === 'movies' && <Movies session={session} />}
-      {tab === 'series' && <Series session={session} />}
+      {!session && (
+        <div className="admin-only-notice">
+          No IPTV provider is configured for this account, so Live TV, Movies and Series are
+          unavailable. Use <strong>Admin</strong> to manage users and watch sessions, or{' '}
+          <button type="button" className="link-btn" onClick={() => setAdminMode(false)}>
+            set up IPTV
+          </button>
+          .
+        </div>
+      )}
+      {session && tab === 'live' && <LiveTv session={session} />}
+      {session && tab === 'movies' && <Movies session={session} />}
+      {session && tab === 'series' && <Series session={session} />}
       {tab === 'admin' && appUser.role === 'admin' && <AdminConsole appUser={appUser} />}
     </div>
   )
