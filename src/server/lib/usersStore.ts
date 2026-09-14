@@ -78,6 +78,8 @@ export interface UsersStore {
   verifyCredentials(username: string, password: string): StoredUser | null
   createUser(input: NewUserInput): PublicUser
   deleteUser(username: string): PublicUser
+  /** Replaces a user's password (admin reset / self-service change). */
+  setPassword(username: string, password: string): void
   countAdmins(): number
   recordLogin(username: string): void
   getIptvCredentials(username: string): string | null
@@ -190,6 +192,15 @@ export function createUsersStore({ filePath }: { filePath: string }): UsersStore
       file.users = file.users.filter((entry) => entry.username !== username)
       save(file)
       return toPublic(user)
+    },
+
+    setPassword(username: string, password: string): void {
+      const validated = validatePassword(password)
+      const file = load()
+      const user = findStored(file, username)
+      if (!user) throw new UserStoreError(`User "${username}" does not exist`)
+      user.password = hashPassword(validated)
+      save(file)
     },
 
     countAdmins(): number {

@@ -963,3 +963,21 @@ body.resizing-col {
   cursor: col-resize;
   user-select: none;
 }
+
+.user-actions {
+  white-space: nowrap;
+}
+
+.user-actions > * + * {
+  margin-left: 6px;
+}
+
+.inline-pass {
+  width: 130px;
+  padding: 5px 8px;
+  background: #0b0d12;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #e7e9ee;
+  font-size: 12px;
+}

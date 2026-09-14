@@ -67,6 +67,12 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
   const [newRole, setNewRole] = useState<UserRole>('user')
   const [formError, setFormError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  // Inline password reset: the app had no way to change a password after creation, so a typo
+  // locked an account out permanently with delete-and-recreate as the only remedy.
+  const [passwordTarget, setPasswordTarget] = useState<string | null>(null)
+  const [passwordValue, setPasswordValue] = useState('')
+  const [passwordBusy, setPasswordBusy] = useState(false)
 
   const sessionCols = useResizableColumns('admin-sessions', SESSION_COLUMNS)
   const userCols = useResizableColumns('admin-users', USER_COLUMNS)
@@ -135,6 +141,31 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
     }
   }
 
+  async function handleSetPassword(username: string): Promise<void> {
+    if (passwordValue.length < 6) {
+      setError('The new password must be at least 6 characters')
+      return
+    }
+    setPasswordBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(username)}/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordValue })
+      })
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'Could not set the password')
+      setPasswordTarget(null)
+      setPasswordValue('')
+      setNote(`Password updated for ${username}.`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not set the password')
+    } finally {
+      setPasswordBusy(false)
+    }
+  }
+
   async function handleRemoveUser(username: string): Promise<void> {
     try {
       const res = await fetch(`/api/admin/users/${encodeURIComponent(username)}`, { method: 'DELETE' })
@@ -149,6 +180,7 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
   return (
     <div className="admin-console">
       {error && <div className="login-error admin-error">{error}</div>}
+      {note && <div className="epg-note">{note}</div>}
 
       <section className="admin-section">
         <div className="epg-section-head">
@@ -245,11 +277,57 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
                   <td><span className={`role-badge role-${user.role}`}>{user.role}</span></td>
                   <td>{new Date(user.createdAt).toLocaleString()}</td>
                   <td>{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : <span className="admin-muted">never</span>}</td>
-                  <td>
-                    {user.username !== appUser.username && (
-                      <button type="button" className="admin-small-btn danger" onClick={() => void handleRemoveUser(user.username)}>
-                        Remove
-                      </button>
+                  <td className="user-actions">
+                    {passwordTarget === user.username ? (
+                      <>
+                        <input
+                          type="password"
+                          className="inline-pass"
+                          value={passwordValue}
+                          onChange={(e) => setPasswordValue(e.target.value)}
+                          placeholder="New password"
+                          autoComplete="new-password"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          className="admin-small-btn"
+                          onClick={() => void handleSetPassword(user.username)}
+                          disabled={passwordBusy}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-small-btn"
+                          onClick={() => {
+                            setPasswordTarget(null)
+                            setPasswordValue('')
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="admin-small-btn"
+                          onClick={() => {
+                            setPasswordTarget(user.username)
+                            setPasswordValue('')
+                            setNote(null)
+                            setError(null)
+                          }}
+                        >
+                          Set password
+                        </button>
+                        {user.username !== appUser.username && (
+                          <button type="button" className="admin-small-btn danger" onClick={() => void handleRemoveUser(user.username)}>
+                            Remove
+                          </button>
+                        )}
+                      </>
                     )}
                   </td>
                 </tr>

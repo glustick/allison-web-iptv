@@ -97,4 +97,26 @@ describe('usersStore', () => {
     expect(() => validatePassword('short')).toThrow(/at least 6 characters/)
     expect(() => validateRole('superadmin')).toThrow(/"admin" or "user"/)
   })
+
+  it('replaces a password, invalidating the old one', () => {
+    store.createUser({ username: 'alice', password: 'alicepass', role: 'user' })
+
+    store.setPassword('alice', 'brand-new-pass')
+
+    expect(store.verifyCredentials('alice', 'brand-new-pass')?.username).toBe('alice')
+    expect(store.verifyCredentials('alice', 'alicepass')).toBeNull()
+  })
+
+  it('persists a password change across a reload, and validates the new password', () => {
+    store.createUser({ username: 'alice', password: 'alicepass', role: 'user' })
+    store.setPassword('alice', 'newpassword1')
+
+    const reloaded = createUsersStore({ filePath: join(dir, 'users.json') })
+    expect(reloaded.verifyCredentials('alice', 'newpassword1')?.username).toBe('alice')
+
+    expect(() => store.setPassword('alice', 'short')).toThrow(/at least 6 characters/)
+    expect(() => store.setPassword('nobody', 'longenough')).toThrow(/does not exist/)
+    // A rejected change must leave the previous password working.
+    expect(store.verifyCredentials('alice', 'newpassword1')?.username).toBe('alice')
+  })
 })

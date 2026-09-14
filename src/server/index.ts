@@ -406,6 +406,24 @@ app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   }
 })
 
+// Admin password reset. There was previously no way to change a password after an account was
+// created — a typo (or an autocapitalised/trailing-space value captured by the browser) locked
+// that account out permanently, with delete-and-recreate as the only remedy.
+app.post('/api/admin/users/:username/password', requireAuth, requireAdmin, (req, res) => {
+  const username = typeof req.params.username === 'string' ? req.params.username : ''
+  try {
+    usersStore.setPassword(username, req.body?.password)
+    res.json({ ok: true, username })
+  } catch (err) {
+    if (err instanceof UserStoreError) {
+      res.status(400).json({ error: err.message })
+      return
+    }
+    console.error('[admin] set password failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
 app.delete('/api/admin/users/:username', requireAuth, requireAdmin, (req, res) => {
   const username = typeof req.params.username === 'string' ? req.params.username : ''
   if (username === (req.authSession as AuthSession).username) {
