@@ -268,8 +268,10 @@ app.post('/api/auth/setup', (req, res) => {
       res.status(400).json({ error: err.message })
       return
     }
+    // Usually a data-volume problem (read-only mount, permissions, full disk) — carry the
+    // real cause through so the setup screen can show it instead of a generic failure.
     console.error('[auth] setup failed:', err)
-    res.status(500).json({ error: 'Could not create the admin account' })
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
   }
 })
 
