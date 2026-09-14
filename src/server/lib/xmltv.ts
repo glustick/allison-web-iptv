@@ -34,11 +34,43 @@ function asArray<T>(value: T | T[] | undefined): T[] {
   return Array.isArray(value) ? value : [value]
 }
 
-function textOf(value: unknown): string | undefined {
+const MAX_TITLE_CHARS = 200
+const MAX_DESCRIPTION_CHARS = 600
+
+/**
+ * Guide text as displayable plain text. Providers put raw markup inside these fields (an
+ * unCDATA'd `<b>` in a title, or a whole HTML blurb in a description), so markup is stripped
+ * and whitespace collapsed, and the result is capped — a 3-hour grid window shouldn't ship
+ * hundreds of kilobytes of someone's HTML.
+ */
+function cleanText(raw: string, limit: number): string {
+  const stripped = raw
+    // CDATA wrappers first (raw stop-node content is not unwrapped by the parser), then tags.
+    .replace(/<!\[CDATA\[/g, ' ')
+    .replace(/\]\]>/g, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+  return stripped.length > limit ? `${stripped.slice(0, limit - 1)}…` : stripped
+}
+
+function textOf(value: unknown, limit = MAX_TITLE_CHARS): string | undefined {
   if (value == null) return undefined
-  if (typeof value === 'string') return value
-  if (typeof value === 'object' && '#text' in (value as Record<string, unknown>)) {
-    return String((value as Record<string, unknown>)['#text'])
+  if (typeof value === 'string') {
+    const cleaned = cleanText(value, limit)
+    return cleaned.length > 0 ? cleaned : undefined
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    if ('#text' in record) return textOf(record['#text'], limit)
+    // A stop-node-free object (markup without CDATA at shallow depth) — walk it for text.
+    return undefined
   }
   return String(value)
 }
@@ -68,7 +100,23 @@ const PRUNE_FUTURE_MS = 72 * 3_600_000
 
 export function parseXmltv(xml: string, opts?: { now?: number }): XmltvGuide {
   const now = opts?.now ?? Date.now()
-  const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
+  // Free-text <desc> content is kept raw (stopNodes) rather than parsed: external guides
+  // routinely embed raw HTML there, and without this the parser's nesting guard throws
+  // "Maximum nested tags exceeded" on such a source — reproduced live from a user's external
+  // guide, where 140 levels of <div> in one description failed the whole source. Keeping it raw
+  // also avoids building a deep object tree per programme, which for a 300k-programme guide is
+  // the difference between a few hundred MB of garbage and none.
+  //
+  // maxNestedTags is raised as a backstop for anything else unusual: real XMLTV is depth 3-4,
+  // so this only ever absorbs markup smuggled into other fields.
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '@_',
+    // Free-text leaves are kept raw and cleaned by textOf/cleanText: markup mixed with text
+    // ("Sky Sports <b>One</b>") would otherwise come back as a partial '#text' fragment.
+    stopNodes: ['tv.channel.display-name', 'tv.programme.title', 'tv.programme.sub-title', 'tv.programme.desc', 'tv.programme.category'],
+    maxNestedTags: 500
+  })
   const doc = parser.parse(xml) as { tv?: { channel?: unknown; programme?: unknown } }
   const tv = doc.tv ?? {}
 
@@ -94,7 +142,7 @@ export function parseXmltv(xml: string, opts?: { now?: number }): XmltvGuide {
       startMs,
       stopMs,
       title: textOf(raw.title) ?? 'Untitled',
-      description: textOf(raw.desc)
+      description: textOf(raw.desc, MAX_DESCRIPTION_CHARS)
     }
     const list = programmesByChannel.get(channelId)
     if (list) {

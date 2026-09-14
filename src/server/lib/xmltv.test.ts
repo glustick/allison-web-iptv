@@ -91,4 +91,48 @@ describe('parseXmltv', () => {
     expect(programme.title).toBe('Wrapped title')
     expect(programme.description).toBe('Wrapped desc')
   })
+
+  it('parses a guide whose <desc> carries raw, deeply nested HTML markup (no CDATA)', () => {
+    // Reproduced from a real external guide: 140 levels of <div> inside one description blew
+    // fast-xml-parser's nesting guard ("Maximum nested tags exceeded") and failed the whole
+    // source. Free-text desc content is kept raw, so depth no longer matters.
+    const deepHtml = `${'<div>'.repeat(140)}Pay per view boxing this Saturday${'</div>'.repeat(140)}`
+    const xml =
+      `<?xml version="1.0"?><tv>` +
+      `<channel id="c1"><display-name>Sky Sports Box Office</display-name></channel>` +
+      `<programme channel="c1" start="${xmltvDate(now + HOUR)}" stop="${xmltvDate(now + 2 * HOUR)}">` +
+      `<title>Fight Night</title><desc>${deepHtml}</desc></programme></tv>`
+
+    const guide = parseXmltv(xml, { now })
+    expect(guide.channels.get('c1')?.displayName).toBe('Sky Sports Box Office')
+    const programme = (guide.programmesByChannel.get('c1') ?? [])[0]
+    expect(programme.title).toBe('Fight Night')
+    expect(programme.description).toContain('Pay per view boxing')
+    expect(programme.description).not.toContain('<')
+  })
+
+  it('strips markup out of titles and display names', () => {
+    const xml =
+      `<?xml version="1.0"?><tv>` +
+      `<channel id="c1"><display-name>Sky Sports <b>One</b></display-name></channel>` +
+      `<programme channel="c1" start="${xmltvDate(now + HOUR)}" stop="${xmltvDate(now + 2 * HOUR)}">` +
+      `<title>Fight <i>Night</i></title></programme></tv>`
+
+    const guide = parseXmltv(xml, { now })
+    expect(guide.channels.get('c1')?.displayName).toBe('Sky Sports One')
+    expect((guide.programmesByChannel.get('c1') ?? [])[0].title).toBe('Fight Night')
+  })
+
+  it('caps very long descriptions so a grid window stays small', () => {
+    const huge = 'x'.repeat(5000)
+    const xml =
+      `<?xml version="1.0"?><tv>` +
+      `<channel id="c1"><display-name>Channel One</display-name></channel>` +
+      `<programme channel="c1" start="${xmltvDate(now + HOUR)}" stop="${xmltvDate(now + 2 * HOUR)}">` +
+      `<title>T</title><desc>${huge}</desc></programme></tv>`
+
+    const guide = parseXmltv(xml, { now })
+    const description = (guide.programmesByChannel.get('c1') ?? [])[0].description ?? ''
+    expect(description.length).toBeLessThanOrEqual(600)
+  })
 })
