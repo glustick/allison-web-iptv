@@ -878,3 +878,61 @@ body.resizing-row {
   color: #ff6b6b;
   font-size: 13px;
 }
+
+/* --- Resizable table columns (main panels) ----------------------------------------------- */
+
+.admin-table {
+  font-size: calc(13px * var(--table-font-scale, 1));
+}
+
+/* Fixed layout is what makes a dragged width stick; long values then wrap inside the column
+   instead of forcing it wider (the wrapper already scrolls horizontally if needed). */
+.admin-table--fixed {
+  table-layout: fixed;
+}
+
+.admin-table--fixed th {
+  white-space: normal;
+  position: relative;
+}
+
+.admin-table--fixed td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.col-resize::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  right: 3px;
+  width: 2px;
+  height: 60%;
+  background: #2a2f3d;
+}
+
+.col-resize:hover::after {
+  background: #4f7cff;
+}
+
+.epg-section-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+body.resizing-col {
+  cursor: col-resize;
+  user-select: none;
+}

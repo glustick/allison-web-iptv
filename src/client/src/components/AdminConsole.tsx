@@ -1,5 +1,27 @@
-import { useCallback, useEffect, useState, type JSX } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties, type JSX } from 'react'
 import type { AppUser, UserRole } from '../lib/appAuth'
+import { useResizableColumns, type ColumnSpec } from '../lib/useResizableColumns'
+
+// Column widths are draggable and persisted per table (see useResizableColumns); the tables use
+// fixed layout so a drag actually resizes the column, and the panel's text scales with the total
+// width so widening the columns makes the content more readable rather than just more spacious.
+const SESSION_COLUMNS: ColumnSpec[] = [
+  { key: 'user', label: 'User', defaultWidth: 180, min: 80, max: 500 },
+  { key: 'role', label: 'Role', defaultWidth: 110, min: 70, max: 300 },
+  { key: 'login', label: 'Login time', defaultWidth: 190, min: 120, max: 420 },
+  { key: 'duration', label: 'Duration', defaultWidth: 110, min: 70, max: 300 },
+  { key: 'playing', label: 'Now playing', defaultWidth: 200, min: 100, max: 520 },
+  { key: 'active', label: 'Last active', defaultWidth: 190, min: 120, max: 420 },
+  { key: 'actions', label: '', defaultWidth: 110, min: 90, max: 260 }
+]
+
+const USER_COLUMNS: ColumnSpec[] = [
+  { key: 'username', label: 'Username', defaultWidth: 200, min: 100, max: 520 },
+  { key: 'role', label: 'Role', defaultWidth: 160, min: 80, max: 320 },
+  { key: 'created', label: 'Created', defaultWidth: 190, min: 120, max: 420 },
+  { key: 'lastlogin', label: 'Last login', defaultWidth: 190, min: 120, max: 420 },
+  { key: 'actions', label: '', defaultWidth: 110, min: 90, max: 260 }
+]
 
 interface AdminSession {
   token: string
@@ -45,6 +67,9 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
   const [newRole, setNewRole] = useState<UserRole>('user')
   const [formError, setFormError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+
+  const sessionCols = useResizableColumns('admin-sessions', SESSION_COLUMNS)
+  const userCols = useResizableColumns('admin-users', USER_COLUMNS)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -126,18 +151,30 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
       {error && <div className="login-error admin-error">{error}</div>}
 
       <section className="admin-section">
-        <h2>Active sessions</h2>
+        <div className="epg-section-head">
+          <h2>Active sessions</h2>
+          <button type="button" className="admin-small-btn" onClick={() => sessionCols.reset()}>
+            Reset columns
+          </button>
+        </div>
         <div className="admin-table-wrap">
-          <table className="admin-table">
+          <table
+            className="admin-table admin-table--fixed"
+            style={{ '--table-font-scale': sessionCols.fontScale } as CSSProperties}
+          >
             <thead>
               <tr>
-                <th>User</th>
-                <th>Role</th>
-                <th>Login time</th>
-                <th>Duration</th>
-                <th>Now playing</th>
-                <th>Last active</th>
-                <th></th>
+                {SESSION_COLUMNS.map((column) => (
+                  <th key={column.key} style={{ width: `${sessionCols.percent[column.key]}%` }}>
+                    {column.label}
+                    <span
+                      className="col-resize"
+                      onPointerDown={sessionCols.startDrag(column.key)}
+                      onDoubleClick={() => sessionCols.reset(column.key)}
+                      title="Drag to resize · double-click to reset"
+                    />
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -175,16 +212,30 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
       </section>
 
       <section className="admin-section">
-        <h2>Users</h2>
+        <div className="epg-section-head">
+          <h2>Users</h2>
+          <button type="button" className="admin-small-btn" onClick={() => userCols.reset()}>
+            Reset columns
+          </button>
+        </div>
         <div className="admin-table-wrap">
-          <table className="admin-table">
+          <table
+            className="admin-table admin-table--fixed"
+            style={{ '--table-font-scale': userCols.fontScale } as CSSProperties}
+          >
             <thead>
               <tr>
-                <th>Username</th>
-                <th>Role</th>
-                <th>Created</th>
-                <th>Last login</th>
-                <th></th>
+                {USER_COLUMNS.map((column) => (
+                  <th key={column.key} style={{ width: `${userCols.percent[column.key]}%` }}>
+                    {column.label}
+                    <span
+                      className="col-resize"
+                      onPointerDown={userCols.startDrag(column.key)}
+                      onDoubleClick={() => userCols.reset(column.key)}
+                      title="Drag to resize · double-click to reset"
+                    />
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>

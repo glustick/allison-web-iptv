@@ -1,5 +1,15 @@
-import { useCallback, useEffect, useState, type JSX } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties, type JSX } from 'react'
 import type { Session } from '../lib/appAuth'
+import { useResizableColumns, type ColumnSpec } from '../lib/useResizableColumns'
+
+const SOURCE_COLUMNS: ColumnSpec[] = [
+  { key: 'source', label: 'Source', defaultWidth: 360, min: 160, max: 700 },
+  { key: 'status', label: 'Status', defaultWidth: 120, min: 80, max: 300 },
+  { key: 'channels', label: 'Guide channels', defaultWidth: 140, min: 90, max: 360 },
+  { key: 'programmes', label: 'Programmes', defaultWidth: 140, min: 90, max: 360 },
+  { key: 'fetched', label: 'Last fetched', defaultWidth: 140, min: 100, max: 360 },
+  { key: 'actions', label: '', defaultWidth: 110, min: 90, max: 260 }
+]
 
 // The EPG section: shows every guide the account uses (the provider's own guide plus any
 // external XMLTV sources), their health, how much of the channel list they actually cover, and
@@ -55,6 +65,8 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
+
+  const sourceCols = useResizableColumns('epg-sources', SOURCE_COLUMNS)
 
   const refresh = useCallback(async (): Promise<boolean> => {
     try {
@@ -205,20 +217,33 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
       <section className="admin-section">
         <div className="epg-section-head">
           <h2>Guide sources</h2>
-          <button type="button" className="admin-small-btn" onClick={() => void handleRefreshGuides()} disabled={busy}>
-            Refresh guides
-          </button>
+          <div className="epg-section-actions">
+            <button type="button" className="admin-small-btn" onClick={() => sourceCols.reset()}>
+              Reset columns
+            </button>
+            <button type="button" className="admin-small-btn" onClick={() => void handleRefreshGuides()} disabled={busy}>
+              Refresh guides
+            </button>
+          </div>
         </div>
         <div className="admin-table-wrap">
-          <table className="admin-table">
+          <table
+            className="admin-table admin-table--fixed"
+            style={{ '--table-font-scale': sourceCols.fontScale } as CSSProperties}
+          >
             <thead>
               <tr>
-                <th>Source</th>
-                <th>Status</th>
-                <th>Guide channels</th>
-                <th>Programmes</th>
-                <th>Last fetched</th>
-                <th></th>
+                {SOURCE_COLUMNS.map((column) => (
+                  <th key={column.key} style={{ width: `${sourceCols.percent[column.key]}%` }}>
+                    {column.label}
+                    <span
+                      className="col-resize"
+                      onPointerDown={sourceCols.startDrag(column.key)}
+                      onDoubleClick={() => sourceCols.reset(column.key)}
+                      title="Drag to resize · double-click to reset"
+                    />
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
