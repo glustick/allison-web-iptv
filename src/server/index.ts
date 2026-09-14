@@ -717,6 +717,13 @@ createHttpServer(app).listen(PUBLIC_PORT, () => {
   console.log(`[setup] Accounts file: ${path.join(DATA_DIR, 'users.json')} (DATA_DIR=${DATA_DIR})`)
   // Diagnostics must never take the server down: an unreadable users file still lets the API
   // answer with a real, visible error instead of exiting into a restart loop.
+  // Report which ffmpeg transcoding will use: a bundled static build cannot resolve
+  // hostnames (see the Dockerfile), so knowing the resolved path explains transcode failures
+  // instantly instead of leaving "it just hangs" to be rediscovered.
+  void resolveFfmpegPath()
+    .then((ffmpegPath) => console.log(`[transcode] ffmpeg: ${ffmpegPath}`))
+    .catch((err) => console.error(`[transcode] no usable ffmpeg: ${err instanceof Error ? err.message : String(err)}`))
+
   const secretProblem = checkSessionSecret()
   if (secretProblem) {
     console.error(`[setup] ${secretProblem}`)

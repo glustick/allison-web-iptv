@@ -31,6 +31,17 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public
 COPY package.json ./
 
+# Debian's own ffmpeg, installed deliberately. The bundled ffmpeg-static binary for Linux is a
+# *static glibc* build, and static glibc binaries cannot use NSS — so they fail to resolve ANY
+# hostname at runtime ("Failed to resolve hostname ... System error"), which silently breaks
+# transcoding for every network source (the fallback used when a stream's audio (E-AC-3/AC-3)
+# or video (HEVC) codec can't be played directly by the browser — confirmed live on a real
+# provider). ffmpegResolver already prefers a working system ffmpeg over the bundled copy, so
+# installing this is all that's needed. Costs ~400MB of image size.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
+
 EXPOSE 8085
 
 # Hits the server's own /api/health (public app, no auth) via Node's built-in fetch rather than
