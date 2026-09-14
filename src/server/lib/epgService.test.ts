@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { gzipSync } from 'zlib'
 import type { AddressInfo } from 'net'
-import { createEpgService } from './epgService.js'
+import { createEpgService, EPG_ERROR_RETRY_BASE_MS, EPG_ERROR_RETRY_MAX_MS, epgRetryDelayMs } from './epgService.js'
 import { createNodeUpstreamRequest } from './nodeUpstreamRequest.js'
 
 // Same discipline as nodeUpstreamRequest.test.ts / proxyServer.test.ts: exercise the real Node
@@ -352,5 +352,80 @@ describe('createEpgService', () => {
     })
     expect(result.sources.find((s) => s.kind === 'external')?.status).toBe('ok')
     expect(result.listings['1']?.[0]?.title).toBe('From an encoded body')
+  })
+
+  it('gives a paused bulk guide download the longer stall window (and fails fast without it)', async () => {
+    // The reported "provider EPG error": a ~97MB guide that pauses mid-transfer is normal on a
+    // busy provider, and the stream-oriented 20s watchdog aborted it. The guide fetcher now uses
+    // a much longer window — and this test pins that it is actually applied.
+    const xml = guideXml([{ id: 'p1', displayName: 'Paused Channel', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'Slow' }] }])
+    const slowServer = (pauseMs: number) =>
+      listen((req, res) => {
+        if (req.url?.startsWith('/xmltv.php') || req.url?.includes('action=get_live_streams')) {
+          res.writeHead(404)
+          res.end()
+          return
+        }
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        // Send half the body, go quiet well past the configured window, then finish.
+        res.write(xml.slice(0, Math.floor(xml.length / 2)))
+        setTimeout(() => res.end(xml.slice(Math.floor(xml.length / 2))), pauseMs)
+      })
+
+    const provider = await listen((req, res) => {
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ stream_id: 1, name: 'Paused Channel', epg_channel_id: null }]))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+
+    const source = await slowServer(700)
+    const strict = createEpgService({
+      createUpstreamRequest: createNodeUpstreamRequest,
+      guideStallTimeoutMs: 150,
+      guideStallCheckIntervalMs: 50,
+      now: fakeClock().now
+    })
+    const strictResult = await strict.aggregate({
+      credentials: { server: provider, username: 'u', password: 'p' },
+      epgUrls: [source],
+      startMs: NOW,
+      endMs: NOW + HOUR
+    })
+    expect(strictResult.sources.find((s) => s.kind === 'external')?.status).toBe('error')
+
+    const tolerantSource = await slowServer(700)
+    const tolerant = createEpgService({
+      createUpstreamRequest: createNodeUpstreamRequest,
+      guideStallTimeoutMs: 5000,
+      guideStallCheckIntervalMs: 50,
+      now: fakeClock().now
+    })
+    const tolerantResult = await tolerant.aggregate({
+      credentials: { server: provider, username: 'u', password: 'p' },
+      epgUrls: [tolerantSource],
+      startMs: NOW,
+      endMs: NOW + HOUR
+    })
+    expect(tolerantResult.sources.find((s) => s.kind === 'external')?.status).toBe('ok')
+    expect(tolerantResult.listings['1']?.[0]?.title).toBe('Slow')
+  })
+})
+
+describe('epgRetryDelayMs', () => {
+  it('backs off exponentially and caps out', () => {
+    expect(epgRetryDelayMs(1)).toBe(EPG_ERROR_RETRY_BASE_MS)
+    expect(epgRetryDelayMs(2)).toBe(2 * EPG_ERROR_RETRY_BASE_MS)
+    expect(epgRetryDelayMs(3)).toBe(4 * EPG_ERROR_RETRY_BASE_MS)
+    expect(epgRetryDelayMs(99)).toBe(EPG_ERROR_RETRY_MAX_MS)
+  })
+
+  it('falls back to the base delay for nonsense input', () => {
+    expect(epgRetryDelayMs(0)).toBe(EPG_ERROR_RETRY_BASE_MS)
+    expect(epgRetryDelayMs(-3)).toBe(EPG_ERROR_RETRY_BASE_MS)
+    expect(epgRetryDelayMs(Number.NaN)).toBe(EPG_ERROR_RETRY_BASE_MS)
   })
 })

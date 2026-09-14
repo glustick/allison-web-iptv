@@ -29,10 +29,29 @@ import { parseXmltv, type XmltvGuide, type XmltvProgramme } from './xmltv.js'
 
 const GUIDE_TTL_MS = 6 * 3_600_000
 const CHANNEL_LIST_TTL_MS = 3_600_000
-// A source that failed is retried on the next status poll after this long, rather than sitting
-// in the error state until its 6h TTL expires: a provider that hiccuped, a URL that was fixed,
-// or a parser bug that got shipped all recover on their own within a minute.
-const ERROR_RETRY_MS = 60_000
+// A source that failed is retried after this long rather than sitting in the error state until
+// its 6h TTL expires — but with exponential backoff, because a guide fetch is not cheap: the
+// provider's own guide is ~97MB, and retrying that every minute while it keeps failing is a good
+// way to get rate-limited (or look like an attack) while achieving nothing.
+export const EPG_ERROR_RETRY_BASE_MS = 60_000
+export const EPG_ERROR_RETRY_MAX_MS = 15 * 60_000
+
+/** 1st failure waits 60s, then 2m, 4m … capped at 15m; reset on any success. */
+export function epgRetryDelayMs(failures: number): number {
+  if (!Number.isFinite(failures) || failures <= 0) return EPG_ERROR_RETRY_BASE_MS
+  return Math.min(EPG_ERROR_RETRY_MAX_MS, EPG_ERROR_RETRY_BASE_MS * 2 ** (failures - 1))
+}
+
+// Bulk guide downloads get a far longer stall window than the stream-oriented default (20s in
+// nodeUpstreamRequest.ts): a ~97MB XMLTV transfer pausing >20s mid-body is normal on a busy
+// provider or a home link, and treating that as a failure is what surfaced as a "provider EPG
+// error" on one deployment while the provider answered fine when fetched directly.
+const GUIDE_STALL_TIMEOUT_MS = 120_000
+
+// The channel list is a smaller bulk download (~10MB) but comes from the same busy endpoint, so
+// it gets a longer-than-default window too. Both apply only to EPG work; streams keep the snappy
+// 20s default so a dead stream still fails fast for the player.
+const CHANNEL_LIST_STALL_TIMEOUT_MS = 60_000
 const MAX_REDIRECTS = 5
 
 export interface EpgServiceCredentials {
@@ -81,6 +100,10 @@ interface GuideCacheEntry {
   error?: string
   fetchedAt: number
   fetchPromise: Promise<XmltvGuide | null> | null
+  /** Consecutive failures, for the retry backoff. */
+  failures?: number
+  /** Earliest time this URL may be retried. */
+  nextRetryAt?: number
   /** Built lazily once per guide (see buildGuideIndexes) and reused by every request. */
   index?: GuideIndexes | null
   channelCount?: number
@@ -109,6 +132,10 @@ export interface EpgServiceDeps {
   createUpstreamRequest?: typeof createNodeUpstreamRequest
   guideTtlMs?: number
   channelListTtlMs?: number
+  /** Overridable for tests; production uses GUIDE_STALL_TIMEOUT_MS. */
+  guideStallTimeoutMs?: number
+  /** Overridable for tests; production uses nodeUpstreamRequest's own check interval. */
+  guideStallCheckIntervalMs?: number
   now?: () => number
 }
 
@@ -143,10 +170,17 @@ async function decodeBody(buffer: Buffer): Promise<string> {
  *  following, and the 20s mid-body stall watchdog all come along for free). */
 function fetchTextViaUpstream(
   createUpstreamRequest: typeof createNodeUpstreamRequest,
-  url: string
+  url: string,
+  stallTimeoutMs: number,
+  stallCheckIntervalMs?: number
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const req: UpstreamClientRequest = createUpstreamRequest({ method: 'GET', url })
+    const req: UpstreamClientRequest = createUpstreamRequest({
+      method: 'GET',
+      url,
+      stallTimeoutMs,
+      stallCheckIntervalMs
+    })
     let redirects = 0
     req.on('redirect', () => {
       if (redirects >= MAX_REDIRECTS) {
@@ -226,6 +260,8 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
   const createUpstreamRequest = deps.createUpstreamRequest ?? createNodeUpstreamRequest
   const guideTtlMs = deps.guideTtlMs ?? GUIDE_TTL_MS
   const channelListTtlMs = deps.channelListTtlMs ?? CHANNEL_LIST_TTL_MS
+  const guideStallTimeoutMs = deps.guideStallTimeoutMs ?? GUIDE_STALL_TIMEOUT_MS
+  const guideStallCheckIntervalMs = deps.guideStallCheckIntervalMs
   const now = deps.now ?? Date.now
 
   const guideCache = new Map<string, GuideCacheEntry>()
@@ -251,7 +287,9 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
   }
 
   function fetchGuideOnce(url: string): Promise<XmltvGuide | null> {
-    return fetchTextViaUpstream(createUpstreamRequest, url).then((xml) => parseXmltv(xml, { now: now() }))
+    return fetchTextViaUpstream(createUpstreamRequest, url, guideStallTimeoutMs, guideStallCheckIntervalMs).then((xml) =>
+      parseXmltv(xml, { now: now() })
+    )
   }
 
   /** Cached guide fetch with stale-while-revalidate: a stale entry is served immediately while
@@ -263,7 +301,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       if (!existing.fetchPromise) {
         existing.fetchPromise = fetchGuideOnce(url)
           .then((guide) => {
-            guideCache.set(url, { guide, status: 'ok', fetchedAt: now(), fetchPromise: null })
+            guideCache.set(url, { guide, status: 'ok', fetchedAt: now(), fetchPromise: null, failures: 0 })
             return guide
           })
           .catch(() => {
@@ -276,7 +314,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       return existing
     }
     const fetched = await fetchGuideOnce(url)
-    const entry: GuideCacheEntry = { guide: fetched, status: 'ok', fetchedAt: now(), fetchPromise: null }
+    const entry: GuideCacheEntry = { guide: fetched, status: 'ok', fetchedAt: now(), fetchPromise: null, failures: 0 }
     guideCache.set(url, entry)
     return entry
   }
@@ -285,12 +323,16 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     try {
       return await getGuide(url)
     } catch (err) {
+      const previous = guideCache.get(url)
+      const failures = (previous?.failures ?? 0) + 1
       const entry: GuideCacheEntry = {
         guide: null,
         status: 'error',
         error: err instanceof Error ? err.message : String(err),
         fetchedAt: now(),
-        fetchPromise: null
+        fetchPromise: null,
+        failures,
+        nextRetryAt: now() + epgRetryDelayMs(failures)
       }
       guideCache.set(url, entry)
       return entry
@@ -310,7 +352,8 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       ensureGuideStats(entry)
       const age = now() - entry.fetchedAt
       const stale = age >= guideTtlMs
-      const failedLongEnoughToRetry = entry.status === 'error' && age >= ERROR_RETRY_MS
+      const failedLongEnoughToRetry =
+        entry.status === 'error' && now() >= (entry.nextRetryAt ?? entry.fetchedAt + EPG_ERROR_RETRY_BASE_MS)
       if ((stale || failedLongEnoughToRetry) && !entry.fetchPromise) void getGuideOrError(url)
       return {
         kind,
@@ -330,7 +373,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     if (existing && now() - existing.fetchedAt < channelListTtlMs) return existing.streams
 
     const url = `${providerBase(credentials)}/player_api.php?username=${encodeURIComponent(credentials.username)}&password=${encodeURIComponent(credentials.password)}&action=get_live_streams`
-    const body = await fetchTextViaUpstream(createUpstreamRequest, url)
+    const body = await fetchTextViaUpstream(createUpstreamRequest, url, CHANNEL_LIST_STALL_TIMEOUT_MS)
     const parsed = JSON.parse(body) as Array<{ stream_id?: unknown; name?: unknown; epg_channel_id?: unknown }>
     const streams: StreamForMatching[] = (Array.isArray(parsed) ? parsed : []).map((raw) => ({
       stream_id: Number(raw.stream_id),

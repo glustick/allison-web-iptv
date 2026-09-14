@@ -55,10 +55,11 @@ const UPSTREAM_STALL_CHECK_INTERVAL_MS = 5_000
 export function createNodeUpstreamRequest(opts: {
   method: string | undefined
   url: string
-  // Test-only overrides for UPSTREAM_STALL_TIMEOUT_MS/_CHECK_INTERVAL_MS above — production
-  // code never passes these, so real callers always get the real thresholds. Lets
-  // nodeUpstreamRequest.test.ts exercise the actual stall-detection path against a real HTTP
-  // server without a test needing to wait through the real 20s window.
+  // Stall-detection overrides. Besides letting nodeUpstreamRequest.test.ts exercise the real
+  // path without waiting 20s, the EPG service passes a much longer window for bulk guide
+  // downloads: a 90MB+ XMLTV fetch can legitimately pause far longer than a stream segment, and
+  // aborting it produced a reported "provider EPG error" that was really this watchdog firing on
+  // a slow-but-alive transfer.
   stallTimeoutMs?: number
   stallCheckIntervalMs?: number
 }): UpstreamClientRequest {
