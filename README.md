@@ -6,9 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.6.4 — transcoding fixed in Docker)
+## Current state (v0.6.6 — EPG section, fuzzy matching, matching at scale)
 
-**v0.6.4** fixes transcoding in the Docker image: the bundled ffmpeg-static Linux
+**v0.6.6** adds an **EPG section** (view every guide in use — the provider's own plus each
+external XMLTV source — with status, channel/programme counts and coverage stats; add/remove
+sources; force a refresh) and a **fuzzy matching layer** for the channel→guide join, backed by
+caches that keep tens of thousands of channels fast: guide indexes and programme counts are
+built once per fetch, the stream→guide mapping is memoised per (account, sources, guide
+version), and window lookups binary-search the sorted programme lists. Measured live: 27,807
+channels matched in ~610ms (5,076 exact + 145 fuzzy) against a 5,929-channel / 298k-programme
+guide. **v0.6.4** fixes transcoding in the Docker image: the bundled ffmpeg-static Linux
 binary is a static-glibc build that cannot resolve *any* hostname, so the transcode fallback
 (used for E-AC-3/AC-3 audio and HEVC video a browser can't play directly) silently never worked
 — playback would start, hit the fallback, and hang. The image now installs Debian's ffmpeg.
@@ -241,6 +248,37 @@ Roles are `admin` and `user`. Admins get an extra **Admin** tab with:
 
 Logins expire after 24 hours without any request (`AUTH_IDLE_TTL_HOURS`); actively watching
 keeps the session alive automatically. Removing a user immediately terminates their sessions.
+
+## EPG & guide matching
+
+The **EPG** tab shows every guide an account uses and how well they cover its channel list:
+
+- the provider's own guide (built in, from the IPTV provider) and each external XMLTV source,
+  with `ready` / `loading` / `error` status, guide-channel and programme counts, and last fetch
+- add or remove external sources (validated, de-duplicated, up to 8) — saved to the account
+  without touching the provider credentials; **Refresh guides** forces a re-fetch
+- coverage stats: channels with guide data, and how many matched exactly versus fuzzily
+
+Matching runs in widening steps, each strictly weaker than the last:
+
+| Step | Example |
+| --- | --- |
+| exact `epg_channel_id` | guide id equals the stream's id |
+| normalized id | differs by case/whitespace/formatting |
+| exact display name | `Sky News HD` → `Sky News` |
+| fuzzy name (scored) | `Sky Sports 1` → `Sky Sports One`; `BBC ONE Lon` → `BBC One London` |
+
+Fuzzy matches are scored with token-set similarity (number words folded, packaging noise like
+`HD`/`TV`/`Channel` dropped, prefix abbreviations credited — never for digit tokens) and are
+accepted only above a threshold **and** by a margin over the runner-up, so an ambiguous name
+yields no match rather than a coin flip. Provider data always wins; external sources fill
+channels the provider has nothing for, in the order configured.
+
+Performance, for accounts with tens of thousands of streams: indexes are built once per fetched
+guide, programme counts computed once, the stream→guide mapping is memoised per (account,
+sources, guide version), and window lookups binary-search the parser's sorted programme lists —
+a full build of 27,807 channels takes ~0.6s, and grid navigation afterwards only re-runs the
+cheap window filter.
 
 ## Running it
 
