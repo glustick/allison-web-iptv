@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
+import { gzipSync } from 'zlib'
 import type { AddressInfo } from 'net'
 import { createEpgService } from './epgService.js'
 import { createNodeUpstreamRequest } from './nodeUpstreamRequest.js'
@@ -273,5 +274,83 @@ describe('createEpgService', () => {
     service.refresh({ credentials, epgUrls: [] })
     const third = await service.aggregate({ credentials, epgUrls: [], startMs: NOW, endMs: NOW + HOUR })
     expect(third.listings).toEqual(first.listings)
+  })
+
+  it('parses a pre-compressed .xml.gz guide served without content-encoding', async () => {
+    // The shape a real user's source had: a 7MB .gz file (48MB of XMLTV) served as
+    // application/octet-stream. Read as UTF-8, the gzip bytes became binary junk that the XML
+    // parser reported as "Maximum nested tags exceeded" — no parser tolerance could fix that.
+    const xml = guideXml([
+      { id: 'gz1', displayName: 'Gzipped Channel', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'From a .gz' }] }
+    ])
+    const gz = gzipSync(Buffer.from(xml, 'utf-8'))
+
+    const source = await listen((req, res) => {
+      if (req.url?.startsWith('/xmltv.php') || req.url?.includes('action=get_live_streams')) {
+        res.writeHead(404)
+        res.end()
+        return
+      }
+      res.writeHead(200, { 'content-type': 'application/octet-stream' })
+      res.end(gz)
+    })
+
+    const provider = await listen((req, res) => {
+      if (req.url?.startsWith('/xmltv.php')) {
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(guideXml([{ id: 'prov', displayName: 'Provider', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'Provider prog' }] }]))
+        return
+      }
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ stream_id: 1, name: 'Gzipped Channel', epg_channel_id: null }]))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+
+    const service = createEpgService({ createUpstreamRequest: createNodeUpstreamRequest, now: fakeClock().now })
+    const result = await service.aggregate({
+      credentials: { server: provider, username: 'user', password: 'pass' },
+      epgUrls: [source],
+      startMs: NOW,
+      endMs: NOW + HOUR
+    })
+    const external = result.sources.find((s) => s.kind === 'external')
+    expect(external?.status).toBe('ok')
+    expect(external?.channelCount).toBe(1)
+    expect(result.listings['1']?.[0]?.title).toBe('From a .gz')
+  })
+
+  it('does not double-decompress a response that is gzip-encoded', async () => {
+    // The upstream layer already decompresses based on content-encoding; the guide decoder must
+    // only act on the magic bytes of a .gz *file*, or this path would fail.
+    const xml = guideXml([
+      { id: 'enc1', displayName: 'Encoded Channel', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'From an encoded body' }] }
+    ])
+    const source = await listen((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/xml', 'content-encoding': 'gzip' })
+      res.end(gzipSync(Buffer.from(xml, 'utf-8')))
+    })
+    const provider = await listen((req, res) => {
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ stream_id: 1, name: 'Encoded Channel', epg_channel_id: null }]))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+
+    const service = createEpgService({ createUpstreamRequest: createNodeUpstreamRequest, now: fakeClock().now })
+    const result = await service.aggregate({
+      credentials: { server: provider, username: 'user', password: 'pass' },
+      epgUrls: [source],
+      startMs: NOW,
+      endMs: NOW + HOUR
+    })
+    expect(result.sources.find((s) => s.kind === 'external')?.status).toBe('ok')
+    expect(result.listings['1']?.[0]?.title).toBe('From an encoded body')
   })
 })

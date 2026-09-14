@@ -1,4 +1,6 @@
 import { Writable } from 'stream'
+import { promisify } from 'util'
+import { brotliDecompress, gunzip, inflate } from 'zlib'
 import type { ServerResponse } from 'http'
 import { createNodeUpstreamRequest } from './nodeUpstreamRequest.js'
 import type { UpstreamClientRequest } from './proxyServer.js'
@@ -110,6 +112,33 @@ export interface EpgServiceDeps {
   now?: () => number
 }
 
+const brotliDecompressAsync = promisify(brotliDecompress)
+const gunzipAsync = promisify(gunzip)
+const inflateAsync = promisify(inflate)
+
+/**
+ * Response body → guide text, transparently handling compression. XMLTV sources are very
+ * commonly served as a pre-compressed `.xml.gz` file (7MB instead of 48MB) — GitHub raw, most
+ * guide dumps — and Node's http does not decompress `content-encoding` either. Reading gzip
+ * bytes as UTF-8 produced binary junk, which the XML parser turned into an endless pile of
+ * unclosed nodes and reported as "Maximum nested tags exceeded" — the exact error a real user
+ * hit, and one no amount of XML-parsing tolerance could fix.
+ */
+async function decodeBody(buffer: Buffer): Promise<string> {
+  // Deliberately sniffed from the bytes rather than trusting content-encoding: the upstream
+  // request layer already decompresses an encoded response (nodeUpstreamRequest.ts), so acting
+  // on the header here would decompress twice. A pre-compressed `.xml.gz` *file* carries no
+  // content-encoding at all — the gzip magic bytes are the only signal it has.
+  if (buffer.length > 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+    try {
+      return (await gunzipAsync(buffer)).toString('utf-8')
+    } catch (err) {
+      throw new Error(`Could not decompress the gzipped guide: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  return buffer.toString('utf-8')
+}
+
 /** Fetches a URL's body as text through the Node upstream machinery (TLS-CA parity, redirect
  *  following, and the 20s mid-body stall watchdog all come along for free). */
 function fetchTextViaUpstream(
@@ -150,7 +179,7 @@ function fetchTextViaUpstream(
       sink.on('finish', () => {
         if (settled) return
         settled = true
-        resolve(Buffer.concat(chunks).toString('utf-8'))
+        decodeBody(Buffer.concat(chunks)).then(resolve, reject)
       })
       sink.on('close', () => {
         if (settled) return
