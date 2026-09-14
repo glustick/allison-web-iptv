@@ -33,11 +33,21 @@ export default function App(): JSX.Element {
   const [autoConnectError, setAutoConnectError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('live')
   const [updateMessage, setUpdateMessage] = useState<string | null>(null)
+  const [authError, setAuthError] = useState<string | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
   const connectStartedAtRef = useRef<number | null>(null)
 
   const refreshAuthState = useCallback(async (): Promise<void> => {
-    const state = await fetchAuthState()
+    let state: AuthState
+    try {
+      state = await fetchAuthState()
+      setAuthError(null)
+    } catch (err) {
+      // Keep the message on-screen: this is usually a data-volume problem (unreadable
+      // users.json, read-only mount) and the server said exactly what's wrong.
+      setAuthError(err instanceof Error ? err.message : 'Could not reach the server')
+      throw err
+    }
     setAuthState(state)
     if (state.authenticated && state.user) {
       const config = await fetchIptvConfig()
@@ -49,7 +59,10 @@ export default function App(): JSX.Element {
   }, [])
 
   useEffect(() => {
-    void refreshAuthState().catch(() => setAuthState({ usersExist: true, authenticated: false, user: null, iptvConfigured: false }))
+    void refreshAuthState().catch(() => {
+      // authError is set and rendered by the branch below — no silent fallback to a login
+      // form that could never succeed.
+    })
     void fetch('/api/version-check')
       .then((res) => res.json())
       .then((data) => {
@@ -107,14 +120,33 @@ export default function App(): JSX.Element {
     try {
       await refreshAuthState()
     } catch {
-      setAuthState({ usersExist: true, authenticated: false, user: null, iptvConfigured: false })
+      // authError is set and shown; authState cleared so the error branch renders.
+      setAuthState(null)
     }
   }
 
   function handleAuthAdvanced(): void {
     // Setup/login finished and the server cookie is set — re-read state, then let the IPTV
     // phase machine take over.
-    void refreshAuthState().catch(() => setAuthState({ usersExist: true, authenticated: false, user: null, iptvConfigured: false }))
+    void refreshAuthState().catch(() => {})
+  }
+
+  if (authError && !authState) {
+    return (
+      <div className="login-screen">
+        <div className="login-card">
+          <h1>Allison Web IPTV</h1>
+          <div className="login-error">{authError}</div>
+          <p className="setup-hint">
+            The server couldn't read its account storage. Check the container logs and that the
+            data volume is mounted read-write (`./appdata:/appdata:rw`), then retry.
+          </p>
+          <button type="button" onClick={() => void handleAuthAdvanced()}>
+            Retry
+          </button>
+        </div>
+      </div>
+    )
   }
 
   if (!authState) {

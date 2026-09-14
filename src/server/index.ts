@@ -230,15 +230,22 @@ app.use(express.json())
 // app itself. iptvConfigured tells the client whether the post-login IPTV config step can
 // auto-connect or needs to ask for provider details.
 app.get('/api/auth/state', (req, res) => {
-  const session = getAuthSession(req)
-  if (session) session.lastSeenAt = Date.now()
-  const iptvCredentials = session ? usersStore.getIptvCredentials(session.username) : null
-  res.json({
-    usersExist: usersStore.hasUsers(),
-    authenticated: Boolean(session),
-    user: session ? { username: session.username, role: session.role } : null,
-    iptvConfigured: Boolean(iptvCredentials)
-  })
+  try {
+    const session = getAuthSession(req)
+    if (session) session.lastSeenAt = Date.now()
+    const iptvCredentials = session ? usersStore.getIptvCredentials(session.username) : null
+    res.json({
+      usersExist: usersStore.hasUsers(),
+      authenticated: Boolean(session),
+      user: session ? { username: session.username, role: session.role } : null,
+      iptvConfigured: Boolean(iptvCredentials)
+    })
+  } catch (err) {
+    // Almost always a broken/unreadable users file on the data volume — say so plainly
+    // instead of vanishing behind a generic 500 (the client shows this message).
+    console.error('[auth] state failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
 })
 
 // First-run bootstrap: creates the initial admin account. Only accepted while no users exist
@@ -273,15 +280,23 @@ app.post('/api/auth/login', (req, res) => {
     res.status(400).json({ error: 'Username and password are required' })
     return
   }
-  const user = usersStore.verifyCredentials(username, password)
-  if (!user) {
-    res.status(401).json({ error: 'Incorrect username or password' })
-    return
+  try {
+    const user = usersStore.verifyCredentials(username, password)
+    if (!user) {
+      res.status(401).json({ error: 'Incorrect username or password' })
+      return
+    }
+    // recordLogin writes the users file — on a read-only or full data volume that write is
+    // what fails here, so keep the login itself inside this guard rather than letting an
+    // uncaught throw turn into an opaque HTML 500.
+    usersStore.recordLogin(user.username)
+    const session = createAuthSession(user.username, user.role)
+    setAuthCookie(res, session.token)
+    res.json({ ok: true, user: { username: user.username, role: user.role } })
+  } catch (err) {
+    console.error('[auth] login failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
   }
-  usersStore.recordLogin(user.username)
-  const session = createAuthSession(user.username, user.role)
-  setAuthCookie(res, session.token)
-  res.json({ ok: true, user: { username: user.username, role: user.role } })
 })
 
 app.post('/api/auth/logout', (req, res) => {
@@ -647,8 +662,21 @@ app.get('*', (_req, res) => {
 
 createHttpServer(app).listen(PUBLIC_PORT, () => {
   console.log(`[server] Allison Web IPTV v${pkg.version} listening on http://localhost:${PUBLIC_PORT}`)
-  if (!usersStore.hasUsers()) {
-    console.log('[setup] No user accounts yet — open the app to create the initial admin account')
+  console.log(`[setup] Accounts file: ${path.join(DATA_DIR, 'users.json')} (DATA_DIR=${DATA_DIR})`)
+  // Diagnostics must never take the server down: an unreadable users file still lets the API
+  // answer with a real, visible error instead of exiting into a restart loop.
+  const health = usersStore.healthCheck()
+  if (!health.ok) {
+    console.error(`[setup] Data directory is NOT usable: ${health.error}`)
+    console.error('[setup] Check that DATA_DIR is mounted read-write (docker-compose: ./appdata:/appdata:rw) and that users.json is valid JSON.')
+  } else {
+    try {
+      if (!usersStore.hasUsers()) {
+        console.log('[setup] No user accounts yet — open the app to create the initial admin account')
+      }
+    } catch (err) {
+      console.error(`[setup] Could not read user accounts: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 })
 

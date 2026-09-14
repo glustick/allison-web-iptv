@@ -49,7 +49,12 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 
 export async function fetchAuthState(): Promise<AuthState> {
   const res = await fetch('/api/auth/state')
-  if (!res.ok) throw new Error('Could not reach the server')
+  if (!res.ok) {
+    // The server sends a readable JSON error for storage problems (unreadable users file,
+    // read-only data volume) — surface that instead of a generic "unreachable" message.
+    const data = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(data.error ?? 'Could not reach the server')
+  }
   return res.json() as Promise<AuthState>
 }
 

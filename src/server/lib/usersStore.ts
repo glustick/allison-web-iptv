@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
 
@@ -82,6 +82,10 @@ export interface UsersStore {
   recordLogin(username: string): void
   getIptvCredentials(username: string): string | null
   setIptvCredentials(username: string, encrypted: string | null): void
+  // Boot-time diagnostic: verifies the users file parses (if present) and the data directory
+  // is actually writable — surfaces mount/permission mistakes in `docker logs` instead of as
+  // runtime 500s (or a crash loop) once real requests arrive.
+  healthCheck(): { ok: true } | { ok: false; error: string }
 }
 
 export function validateUsername(username: unknown): string {
@@ -210,6 +214,19 @@ export function createUsersStore({ filePath }: { filePath: string }): UsersStore
       if (!user) throw new UserStoreError(`User "${username}" does not exist`)
       user.iptvCredentials = encrypted
       save(file)
+    },
+
+    healthCheck(): { ok: true } | { ok: false; error: string } {
+      try {
+        load()
+        mkdirSync(dirname(filePath), { recursive: true })
+        const probe = `${filePath}.probe`
+        writeFileSync(probe, 'ok')
+        rmSync(probe, { force: true })
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
     }
   }
 }

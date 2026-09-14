@@ -6,7 +6,18 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.6.0 — real accounts, roles, and an admin console)
+## Current state (v0.6.1 — resilient startup and readable storage errors)
+
+**v0.6.1** hardens the account store's failure paths found during real deployments: a broken
+or unreadable `users.json` no longer crashes the server at boot (it now starts, logs the exact
+problem, and every auth route answers with a readable JSON error the UI displays verbatim),
+login failures on read-only/full data volumes return the real cause instead of an opaque HTML
+500, the app shows an explicit error screen with retry when account storage can't be reached,
+and the sample `SESSION_SECRET` placeholder was replaced (the old one was, embarrassingly,
+shorter than the 16-character minimum the server enforces). Same deployment shape as v0.6.0 —
+pull the new image and recreate the stack.
+
+**v0.6.0 — real accounts, roles, and an admin console**
 
 **v0.6.0** replaces the old single shared `ACCESS_PASSWORD` gate with a real account system.
 The login screen now asks only for an app username and password; the IPTV provider details

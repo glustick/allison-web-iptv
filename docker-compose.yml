@@ -6,7 +6,7 @@ services:
       - "8085:8085"
     environment:
       - PORT=8085
-      - SESSION_SECRET=***
+      - SESSION_SECRET=*** 16+ random characters>
       # All variable/persistent state (user accounts, hashed passwords, encrypted per-user
       # Xtream/IPTV credentials) lives under /appdata inside the container. The :rw mapping
       # below is what makes container/image updates keep that data — don't remove it.

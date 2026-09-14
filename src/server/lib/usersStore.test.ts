@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -76,6 +76,18 @@ describe('usersStore', () => {
 
     store.setIptvCredentials('alice', null)
     expect(store.getIptvCredentials('alice')).toBeNull()
+  })
+
+  it('fails loudly but diagnostically when the users file is corrupted, and healthCheck reports it', () => {
+    writeFileSync(join(dir, 'users.json'), '')
+    expect(() => store.hasUsers()).toThrow(/corrupted/)
+    const health = store.healthCheck()
+    expect(health.ok).toBe(false)
+    if (!health.ok) expect(health.error).toMatch(/corrupted/i)
+  })
+
+  it('healthCheck is ok on a clean store', () => {
+    expect(store.healthCheck()).toEqual({ ok: true })
   })
 
   it('validates usernames, passwords and roles up front', () => {
