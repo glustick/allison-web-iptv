@@ -328,11 +328,14 @@ app.get('/api/auth/state', (req, res) => {
 // First-run bootstrap: creates the initial admin account. Only accepted while no users exist
 // at all — afterwards account creation goes through the admin panel.
 app.post('/api/auth/setup', (req, res) => {
-  if (usersStore.hasUsers()) {
-    res.status(409).json({ error: 'Setup already completed — log in instead' })
-    return
-  }
   try {
+    // Inside the try deliberately: with an unusable database this throws, and it used to be the
+    // one call site no handler covered — so a broken deployment answered this endpoint with
+    // Express's default HTML error page instead of the JSON the rest of the API returns.
+    if (usersStore.hasUsers()) {
+      res.status(409).json({ error: 'Setup already completed — log in instead' })
+      return
+    }
     const username = validateUsername(req.body?.username)
     const password = validatePassword(req.body?.password)
     const user = usersStore.createUser({ username, password, role: validateRole('admin') })
@@ -341,7 +344,7 @@ app.post('/api/auth/setup', (req, res) => {
     setAuthCookie(res, session.token, isSecureRequest(req))
     res.json({ ok: true, user: { username: user.username, role: user.role } })
   } catch (err) {
-    if (err instanceof UserStoreError) {
+    if (err instanceof UserStoreError && !err.storageUnavailable) {
       res.status(400).json({ error: err.message })
       return
     }
@@ -458,7 +461,7 @@ app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
     })
     res.json({ ok: true, user })
   } catch (err) {
-    if (err instanceof UserStoreError) {
+    if (err instanceof UserStoreError && !err.storageUnavailable) {
       res.status(400).json({ error: err.message })
       return
     }
@@ -476,7 +479,7 @@ app.post('/api/admin/users/:username/password', requireAuth, requireAdmin, (req,
     usersStore.setPassword(username, req.body?.password)
     res.json({ ok: true, username })
   } catch (err) {
-    if (err instanceof UserStoreError) {
+    if (err instanceof UserStoreError && !err.storageUnavailable) {
       res.status(400).json({ error: err.message })
       return
     }
@@ -499,7 +502,7 @@ app.delete('/api/admin/users/:username', requireAuth, requireAdmin, (req, res) =
     }
     res.json({ ok: true, user })
   } catch (err) {
-    if (err instanceof UserStoreError) {
+    if (err instanceof UserStoreError && !err.storageUnavailable) {
       res.status(400).json({ error: err.message })
       return
     }
@@ -598,7 +601,12 @@ app.post('/api/session/clear', requireAuth, (req, res) => {
 })
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, name: 'Allison Web IPTV', version: pkg.version })
+  // `ok` stays true whenever the HTTP server is answering — this endpoint is also what the
+  // Docker HEALTHCHECK treats as liveness. `degraded` is the honest signal that the process is up
+  // but it cannot reach its own database (so sign-in and every write will fail): someone watching
+  // from outside, with no session and therefore no System tab, can still see the difference.
+  const db = usersStore.status()
+  res.json({ ok: true, name: 'Allison Web IPTV', version: pkg.version, degraded: !db.ok, database: { ok: db.ok, ...(db.error ? { error: db.error } : {}) } })
 })
 
 app.get('/api/version-check', (_req, res) => {

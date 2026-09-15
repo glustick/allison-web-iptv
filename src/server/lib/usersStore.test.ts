@@ -163,3 +163,51 @@ describe('usersStore', () => {
     rmSync(flatDir, { recursive: true, force: true })
   })
 })
+
+describe('usersStore.status', () => {
+  it('reports a healthy database without performing a write', () => {
+    expect(store.status()).toEqual({ ok: true })
+  })
+
+  it('reports the reason when the database cannot be opened at all', () => {
+    // A data directory that is actually a file: openDatabase fails and the store holds no handle,
+    // which is the state a deployment lands in when its volume is unwritable — the case where
+    // every account operation 500s while /api/health still answers.
+    const notADirectory = join(dir, 'this-is-a-file')
+    writeFileSync(notADirectory, 'not a directory')
+    const broken = createUsersStore({ dataDir: notADirectory })
+    const status = broken.status()
+    expect(status.ok).toBe(false)
+    expect(status.error).toBeTruthy()
+  })
+
+  it('reports a usable handle as ok even with no accounts yet', () => {
+    const fresh = createUsersStore({ dataDir: mkdtempSync(join(tmpdir(), 'allison-empty-')) })
+    expect(fresh.status().ok).toBe(true)
+    expect(fresh.hasUsers()).toBe(false)
+  })
+})
+
+describe('storage failures are distinguishable from bad requests', () => {
+  it('flags an unusable database so routes can answer 5xx rather than 4xx', () => {
+    const notADirectory = join(dir, 'file-not-dir')
+    writeFileSync(notADirectory, 'x')
+    const broken = createUsersStore({ dataDir: notADirectory })
+    try {
+      broken.createUser({ username: 'someone', password: 'longenough', role: 'admin' })
+      throw new Error('expected createUser to throw')
+    } catch (err) {
+      expect(err).toBeInstanceOf(UserStoreError)
+      expect((err as UserStoreError).storageUnavailable).toBe(true)
+    }
+  })
+
+  it('does not flag ordinary validation-level failures', () => {
+    try {
+      store.createUser({ username: 'nope!', password: 'longenough', role: 'admin' })
+      throw new Error('expected createUser to throw')
+    } catch (err) {
+      expect((err as UserStoreError).storageUnavailable).toBe(false)
+    }
+  })
+})

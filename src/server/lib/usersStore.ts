@@ -62,9 +62,17 @@ function verifyPassword(password: string, stored: { salt: string; hash: string }
 }
 
 export class UserStoreError extends Error {
-  constructor(message: string) {
+  /**
+   * True when the database itself is unusable rather than the request being wrong. The
+   * distinction matters beyond wording: a client mistake is a 4xx, but a storage outage is a 5xx,
+   * and that is what an uptime check or a log watcher can act on.
+   */
+  readonly storageUnavailable: boolean
+
+  constructor(message: string, storageUnavailable = false) {
     super(message)
     this.name = 'UserStoreError'
+    this.storageUnavailable = storageUnavailable
   }
 }
 
@@ -83,6 +91,9 @@ export interface UsersStore {
   setIptvCredentials(username: string, encrypted: string | null): void
   // Boot-time diagnostic: verifies the database parses and the data directory is writable —
   // surfaces mount/permission mistakes in `docker logs` instead of as runtime 500s.
+  /** Read-only: is the database open and queryable? Safe without a session. */
+  status(): { ok: boolean; error?: string }
+  /** Also proves the file is *writable* — one indexed write. Admin-facing. */
   healthCheck(): { ok: true } | { ok: false; error: string }
 }
 
@@ -128,8 +139,24 @@ export function createUsersStore({ dataDir }: { dataDir: string }): UsersStore {
     openError = err instanceof Error ? err.message : String(err)
   }
 
+  /**
+   * Cheap, read-only health. Unlike healthCheck() below this performs no write, so it is safe to
+   * call from the *unauthenticated* health endpoint — which is the only thing an outside observer
+   * (or an uptime check) can reach when the database is broken, and therefore the only way to tell
+   * an unusable deployment apart from a healthy one without credentials.
+   */
+  function status(): { ok: boolean; error?: string } {
+    if (!handle) return { ok: false, error: openError ?? 'database could not be opened' }
+    try {
+      handle.db.prepare('SELECT 1').get()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
   function requireDb(): Database {
-    if (!handle) throw new UserStoreError(`Account database is not usable: ${openError ?? 'unknown error'}`)
+    if (!handle) throw new UserStoreError(`Account database is not usable: ${openError ?? 'unknown error'}`, true)
     return handle.db
   }
 
@@ -138,6 +165,8 @@ export function createUsersStore({ dataDir }: { dataDir: string }): UsersStore {
   }
 
   return {
+    status,
+
     hasUsers(): boolean {
       const db = requireDb()
       return (db.prepare('SELECT COUNT(*) AS count FROM users').get() as { count: number }).count > 0
