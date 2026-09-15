@@ -6,7 +6,28 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.10.0 — hardened container, and transcodes that know where their disk is)
+## Current state (v0.13.0 — a credential-free browser, and transcodes that stop when you do)
+
+**v0.13.0** makes the guide drag-scrollable in both directions — left/right slides the window
+through time, up/down moves the channel list, 1:1 with the pointer — and fixes the category
+sidebar's resize handle, which had been sitting *inside* the panel's own scroll container: clipped
+by that panel's overflow and, with a non-overlay scrollbar, underneath the scrollbar, so the
+scrollbar took the pointer. The handle now lives in the content column and straddles the divider,
+where nothing can cover it.
+
+**v0.12.2** refuses to start — and stops — a transcode that would fill the disk: 8 GB free for a
+film (it keeps every segment so you can scrub), the database's own 256 MB floor for a live channel,
+and every session is stopped below 256 MB, because a full disk breaks SQLite first.
+**v0.12.1** stops a transcode when its viewer goes away: the player says goodbye on unmount and
+sends a beacon when the page hides, and the server independently stops any session whose output
+nothing has fetched for two minutes. **v0.12.0** added drag-to-pan the timeline and made the panel
+title name the category it is showing. **v0.11.1** fixed the live transcoding fallback, which had
+been dead since the credential change below. **v0.11.0** took the **provider password out of the
+browser entirely** — playback goes through the server's own session-authenticated `/api/stream/…`
+and `/api/xtream` routes, so it no longer appears in URLs, in browser history, or in a
+reverse proxy's access log.
+
+### Earlier (v0.10.0 and back)
 
 **v0.7.0** moves everything the app persists into a single **SQLite database** (`allison.db`)
 and builds a proper per-user library on top of it: **★ Favourites** and **🕘 History** in the
