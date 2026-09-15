@@ -21,7 +21,11 @@ export interface AuthState {
 export interface IptvConfig {
   server: string
   username: string
+  /** Only ever set by the settings form. Empty means "keep the stored one" — the client is no
+   *  longer told the password once it has been saved (see fetchIptvConfig). */
   password: string
+  /** Whether a password is on file for this account, so the form can say so without showing it. */
+  passwordSet?: boolean
   epgUrls?: string[]
 }
 
@@ -81,11 +85,13 @@ export async function fetchIptvConfig(): Promise<IptvConfig | null> {
     configured: boolean
     server: string | null
     username: string | null
-    password: string | null
+    passwordSet?: boolean
     epgUrls?: string[]
   }
-  if (!data.configured || !data.server || !data.username || !data.password) return null
-  return { server: data.server, username: data.username, password: data.password, epgUrls: data.epgUrls ?? [] }
+  // No password comes back any more — a stored config is identified by server + username, and
+  // `passwordSet` is what the form uses to say "one is saved".
+  if (!data.configured || !data.server || !data.username) return null
+  return { server: data.server, username: data.username, password: '', passwordSet: data.passwordSet ?? false, epgUrls: data.epgUrls ?? [] }
 }
 
 export async function saveIptvConfig(config: IptvConfig): Promise<void> {
@@ -101,7 +107,8 @@ export async function clearIptvConfig(): Promise<void> {
 export async function connectIptv(config: IptvConfig): Promise<Session> {
   await postJson('/api/connect', { server: config.server })
 
-  const client = new XtreamClient(config.username, config.password)
+  // Credential-free: the client addresses the server, which addresses the provider.
+  const client = new XtreamClient()
   const auth = await client.authenticate()
   if (auth.user_info.auth !== 1) throw new Error('Invalid IPTV credentials')
 

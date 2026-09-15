@@ -81,7 +81,13 @@ export function IptvConfigScreen({
         </label>
         <label>
           IPTV password
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder={initialConfig?.passwordSet ? '••••••••  (saved — leave blank to keep it)' : ''}
+            required={!initialConfig?.passwordSet}
+          />
         </label>
         <label>
           Additional EPG guide URLs

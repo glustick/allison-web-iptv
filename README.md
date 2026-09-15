@@ -236,7 +236,7 @@ What protects the deployment, and the knobs available:
 | Area | Behaviour |
 | --- | --- |
 | Passwords | scrypt-hashed with a per-user salt |
-| IPTV credentials | AES-256-GCM encrypted at rest under `SESSION_SECRET` (never in plaintext) |
+| IPTV credentials | AES-256-GCM encrypted at rest under `SESSION_SECRET`, and **never sent to the browser**: the server addresses the provider itself through `/api/xtream` and `/api/stream/…`, so the password appears in no URL the client makes (not in history, not in devtools, not in a reverse-proxy access log) |
 | Sessions | HttpOnly, `SameSite=Lax`, `Secure` **when the request arrived over TLS**, 24 h idle expiry, revocable per session from the admin console |
 | Sign-in throttling | per **address** and per **account**; a lockout backs off (5 min, doubling, capped at 1 h) |
 | Response headers | `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, a CSP that blocks inline script/objects/framing, and HSTS over TLS |
@@ -247,6 +247,7 @@ Environment knobs:
 
 - `TRUST_PROXY` — defaults to trusting `X-Forwarded-*` from private/loopback sources only (correct behind Docker port mapping or a reverse proxy). Set `TRUST_PROXY=false` if the app is exposed directly, so those headers can't be spoofed to evade throttling.
 - `SESSION_SECRET` — 16+ characters, and changing it makes stored IPTV credentials undecryptable (accounts are unaffected).
+- When changing the provider server or guide sources, the settings form can be saved with the password **left blank** — a blank field means "keep the stored one", since the password can no longer be read back to the browser.
 
 Worth doing outside the app: keep it off the public internet where possible (Tailscale/WireGuard, or an IP allowlist at the reverse proxy), enable HSTS and modern TLS at the proxy, and treat a downloaded database backup as sensitive — it contains every account.
 

@@ -542,11 +542,18 @@ app.get('/api/session', requireAuth, (req, res) => {
   try {
     const stored = usersStore.getIptvCredentials(session.username)
     if (!stored) {
-      res.json({ ok: true, configured: false, server: null, username: null, password: null, epgUrls: [] })
+      res.json({ ok: true, configured: false, server: null, username: null, passwordSet: false, epgUrls: [] })
       return
     }
     const credentials = decryptSessionCredentials(stored)
-    res.json({ ok: true, configured: true, ...credentials })
+    // The password is deliberately NOT sent. It used to be, and the client then embedded it in
+    // every request it made — `/player_api.php?username=…&password=…` and
+    // `/movie/<user>/<pass>/<id>.mp4` — so it ended up in the browser's history, in devtools, and
+    // in whatever access log sits in front of this app (the deployment has a reverse proxy). The
+    // server can address the provider itself: it holds the credentials encrypted, and the relay
+    // routes below inject them on the way out. `passwordSet` is what the settings screen needs to
+    // say "a password is stored" without being able to display it.
+    res.json({ ok: true, configured: true, server: credentials.server, username: credentials.username, passwordSet: true, epgUrls: credentials.epgUrls ?? [] })
   } catch (err) {
     // A stored config that no longer decrypts (SESSION_SECRET changed) or an unreadable
     // store is treated as "not configured" so the user can re-enter it — but the reason is
@@ -561,18 +568,62 @@ app.get('/api/session', requireAuth, (req, res) => {
   }
 })
 
+// Front doors that address the provider on the client's behalf, so no credential ever has to
+// appear in a URL the browser emits. Both reuse relayToProxy — the same path an authenticated
+// request already took — by rewriting req.url into the shape the internal proxy expects.
+app.get('/api/xtream', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const credentials = resolveAccountCredentials(session.username)
+  if (!credentials) {
+    res.status(409).json({ error: 'IPTV provider is not configured' })
+    return
+  }
+  const params = new URLSearchParams(req.query as Record<string, string>)
+  params.set('username', credentials.username)
+  params.set('password', credentials.password)
+  const session2 = req as IncomingMessage & { url?: string }
+  session2.url = `/player_api.php?${params.toString()}`
+  relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
+})
+
+app.get('/api/stream/:kind/:file', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const credentials = resolveAccountCredentials(session.username)
+  if (!credentials) {
+    res.status(409).json({ error: 'IPTV provider is not configured' })
+    return
+  }
+  const kind = String(req.params.kind)
+  const file = String(req.params.file)
+  if (!['live', 'movie', 'series', 'timeshift'].includes(kind) || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/.test(file)) {
+    res.status(400).json({ error: 'Unsupported stream path' })
+    return
+  }
+  const rewritten = req as unknown as IncomingMessage & { url?: string }
+  rewritten.url = `/${kind}/${encodeURIComponent(credentials.username)}/${encodeURIComponent(credentials.password)}/${file}`
+  relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
+})
+
 app.post('/api/session/save', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
   const { server, username, password, epgUrls } = req.body ?? {}
-  if (typeof server !== 'string' || typeof username !== 'string' || typeof password !== 'string' || !server.trim() || !username.trim() || !password) {
-    res.status(400).json({ error: 'Missing IPTV server, username or password' })
+  // A blank password means "leave the stored one alone". The settings screen can no longer read
+  // the password back (see /api/session), so requiring it on every save would force a retype
+  // just to change the server URL or the guide sources. Only a *first* save must supply one.
+  const existing = resolveAccountCredentials(session.username)
+  const keepsExistingPassword = typeof password !== 'string' || password.length === 0
+  const effectivePassword = keepsExistingPassword ? existing?.password : password
+  if (typeof server !== 'string' || typeof username !== 'string' || !server.trim() || !username.trim() || !effectivePassword) {
+    res.status(400).json({
+      error: keepsExistingPassword && !existing ? 'An IPTV password is required the first time' : 'Missing IPTV server, username or password'
+    })
     return
   }
   try {
     const credentials: SessionCredentials = {
       server: server.trim(),
       username: username.trim(),
-      password,
+      password: effectivePassword,
       epgUrls: sanitizeEpgUrls(epgUrls)
     }
     usersStore.setIptvCredentials(session.username, encryptSessionCredentials(credentials))

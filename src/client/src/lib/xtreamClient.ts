@@ -35,15 +35,16 @@ function decodeBase64Maybe(value: string | undefined | null): string {
  * cross-origin request at all.
  */
 export class XtreamClient {
-  constructor(
-    private readonly username: string,
-    private readonly password: string
-  ) {}
-
+  /**
+   * Deliberately credential-free. The provider password used to be handed to this class and then
+   * embedded in every URL it produced — `/player_api.php?username=…&password=…` and
+   * `/movie/<user>/<pass>/<id>.mp4` — which put it in the browser's history, in devtools, and in
+   * any access log in front of the app (this deployment sits behind a reverse proxy). The server
+   * holds the credentials encrypted and addresses the provider itself; the two methods below are
+   * thin, credential-free front doors onto that.
+   */
   private playerApiUrl(params: Record<string, string> = {}): string {
-    const url = new URL('/player_api.php', window.location.origin)
-    url.searchParams.set('username', this.username)
-    url.searchParams.set('password', this.password)
+    const url = new URL('/api/xtream', window.location.origin)
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
     return url.toString()
   }
@@ -113,6 +114,6 @@ export class XtreamClient {
   // not just a style choice.
   getStreamUrl(kind: MediaKind, streamId: number, extension: string): string {
     const path = kind === 'live' ? 'live' : kind === 'movie' ? 'movie' : 'series'
-    return `/${path}/${this.username}/${this.password}/${streamId}.${extension}`
+    return `/api/stream/${path}/${streamId}.${extension}`
   }
 }
