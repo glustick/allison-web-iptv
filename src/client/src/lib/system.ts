@@ -51,6 +51,10 @@ export async function reindexSearch(): Promise<SearchStatus> {
 export interface HealthReport {
   server: { version: string; uptimeSeconds: number; node: string; platform: string; memoryMb: number }
   database: {
+    /** Whether the database can actually be *written* — see the boot check's own comment. A
+     *  read-only data directory is a total outage (sign-in writes), not a degraded mode. */
+    ok?: boolean
+    error?: string
     path: string
     exists: boolean
     bytes: number

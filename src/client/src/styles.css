@@ -537,6 +537,27 @@ body.resizing-row {
   line-height: 1.45;
 }
 
+/* A condition that breaks the deployment outright (e.g. a data directory the server cannot
+   write) rather than a hint — it needs to be impossible to skim past. */
+.setup-error {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #ffb4b4;
+  background: #3a1d1d;
+  border: 1px solid #7f2d2d;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  overflow-wrap: anywhere;
+}
+
+.setup-error code {
+  color: #ffd9d9;
+  background: #2a1414;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 /* --- Top bar user chip / logout ---------------------------------------------------------- */
 
 .user-chip {

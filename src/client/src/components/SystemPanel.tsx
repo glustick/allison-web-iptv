@@ -110,6 +110,16 @@ export function SystemPanel(): JSX.Element {
         <p className="setup-hint">
           {health ? `${health.server.node} · ${health.server.platform} · ${health.database.path}` : 'Loading…'}
         </p>
+        {health?.database.ok === false && (
+          <p className="setup-error" role="alert">
+            The database is <strong>not writable</strong> ({health.database.error}). Sign-in and every
+            other write will fail until this is fixed. The server runs as uid 1000, so on a host
+            directory created by an earlier root-running build:
+            <code> sudo chown -R 1000:1000 &lt;your appdata dir&gt;</code> — then{' '}
+            <strong>restart the container</strong>, because SQLite fixes its write mode when it opens
+            the file.
+          </p>
+        )}
       </section>
 
       <section className="admin-section">

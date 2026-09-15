@@ -699,6 +699,12 @@ app.get('/api/admin/health', requireAuth, requireAdmin, (req, res) => {
           memoryMb: Math.round(memory.rss / (1024 * 1024))
         },
         database: {
+          // Re-probed per request (it is a single indexed write): SQLite decides whether it can
+          // write when it *opens* the file, so a data directory whose ownership is repaired while
+          // the server is running keeps a read-only connection until the process reopens it. That
+          // showed up in production as a sign-in 500 with nothing on the System page to explain
+          // it — the boot check had already run and passed or failed once, and then said nothing.
+          ...usersStore.healthCheck(),
           ...fileStats(databasePath),
           sizeLabel: formatBytes(fileStats(databasePath).bytes),
           wal: fileStats(`${databasePath}-wal`),
@@ -1367,10 +1373,13 @@ createHttpServer(app).listen(PUBLIC_PORT, () => {
     console.error('[setup] Check that DATA_DIR is mounted read-write (docker-compose: ./appdata:/appdata:rw) and that users.json is valid JSON.')
     // The container now runs unprivileged, so a data directory created by an earlier, root-run
     // build is owned by the wrong uid — say so, and say exactly what fixes it, rather than
-    // leaving it to be inferred from an EACCES.
+    // leaving it to be inferred from an EACCES. Restarting matters as much as the chown: SQLite
+    // fixes its read/write mode when it opens the file, so a permission change made while this
+    // process was already running does not take effect until it reopens the database.
     const runUid = typeof process.getuid === 'function' ? process.getuid() : null
     if (runUid !== null && runUid !== 0) {
-      console.error(`[setup] This process runs as uid ${runUid}; a directory created by an earlier root-run needs: sudo chown -R ${runUid}:${runUid} <your appdata dir>`) 
+      console.error(`[setup] This process runs as uid ${runUid}; a directory created by an earlier root-run needs: sudo chown -R ${runUid}:${runUid} <your appdata dir>`)
+      console.error('[setup] Fix ownership and then RESTART this container: SQLite fixes its write mode when it opens the file.')
     }
   } else {
     try {
