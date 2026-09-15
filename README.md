@@ -281,6 +281,20 @@ live-TV fallback would suggest. The **System** tab shows the directory, its free
 much each live session has written; live TV is unaffected (it keeps a small rolling window).
 Stale session directories left by a killed container are swept at startup.
 
+### A transcode stops when its viewer goes away
+
+A session used to end only when the client asked it to, so anything that stopped the client from
+asking — a closed tab, a reload, another tab, a laptop lid, a container restarted underneath it —
+left ffmpeg writing segments indefinitely. That is worse than the wasted disk: **a live transcode
+holds one of your provider's concurrent connections**, so orphans could starve real playback.
+
+Two things now prevent it. The player stops its session when it unmounts and sends a beacon when
+the page goes away; and the server independently stops any session **whose output nothing has
+fetched for two minutes** (`TRANSCODE_IDLE_STOP_SECONDS` tunes this), logging the reason and
+removing its directory. The idle check only applies once a session has a playlist, so the slow
+starts that the start deadlines exist to allow are never mistaken for an abandoned one. The
+**System** tab and `/api/admin/health` report each session's idle time.
+
 ## User accounts & admin console
 
 Authentication now happens in two stages:

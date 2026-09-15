@@ -237,7 +237,17 @@ const resolveFfmpegPath = createFfmpegResolver(ffmpegStaticPath, {
   fileExists: existsSync,
   execFile: (execPath, args) => execFileAsync(execPath, args)
 })
-const transcodeService = createTranscodeService({ resolveFfmpegPath })
+// Optional tuning for how long a transcode outlives its viewer (see transcodeIdle.ts). Kept as
+// seconds in the environment because that is how someone reading the logs thinks about it.
+const idleStopSeconds = Number(process.env.TRANSCODE_IDLE_STOP_SECONDS ?? '') || null
+
+const transcodeService = createTranscodeService({
+  resolveFfmpegPath,
+  // A session whose output nobody has fetched for this long is stopped (default 120s): the viewer
+  // is gone, and ffmpeg would otherwise fill the disk — and hold one of the account's two provider
+  // connections — until the container restarts. TRANSCODE_IDLE_STOP_SECONDS overrides it.
+  ...(idleStopSeconds ? { idleStopMs: idleStopSeconds * 1000 } : {})
+})
 
 // --- EPG aggregation service ----------------------------------------------------------------
 // Fetches/caches/merges the provider guide with any extra XMLTV sources configured on the

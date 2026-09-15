@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises'
 import { filesystemSpace } from './diskSpace.js'
+import { sessionIsIdle } from './transcodeIdle.js'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, extname } from 'path'
@@ -98,6 +99,10 @@ export interface TranscodeSession {
   dir: string
   /** When the session started, so the health page can show how long it has been running. */
   startedAt: number
+  /** When a client last fetched this session's output (its start time until the first request).
+   *  The health page reports the gap, and the idle sweep stops sessions nobody is watching — see
+   *  transcodeIdle.ts for why a client cannot be relied on to say when it has gone away. */
+  lastServedAt: number
   stderrTail: string[]
   subtitleTracks: SubtitleTrackInfo[]
   // ffmpeg logs the *output* file's own stream list right after the input's, in a nearly
@@ -206,11 +211,26 @@ export interface TranscodeServiceDeps {
   // Where ffmpeg writes its HLS output. Defaults to resolveTranscodeDir() (TRANSCODE_TMP_DIR,
   // else the OS temp dir) — overridable so tests write into their own scratch directory.
   tmpDir?: string
+  // A session whose output no client has asked for in this long is stopped (default 2 minutes):
+  // the viewer is gone and ffmpeg is only filling the disk and holding a provider connection.
+  idleStopMs?: number
+  // How often that is checked. Short enough to free a connection promptly, long enough that the
+  // sweep is invisible (one existsSync per live session).
+  idleSweepMs?: number
 }
 
 export interface TranscodeService {
   /** Live transcode sessions — used by the health page, not by playback. */
-  stats(): Promise<Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean; bytes: number }>>
+  stats(): Promise<
+    Array<{
+      sessionId: string
+      startedAt: string
+      runningSeconds: number
+      hasPlaylist: boolean
+      bytes: number
+      idleSeconds: number
+    }>
+  >
   /** Where segments land and how much room that filesystem has left. */
   storage(): Promise<{ dir: string; freeBytes: number | null; totalBytes: number | null }>
   startTranscode(
@@ -279,6 +299,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
   // supposed to be a quick, no-output probe.
   const probeTimeoutMs = deps.probeTimeoutMs ?? 30000
   const tmpDir = deps.tmpDir ?? resolveTranscodeDir()
+  const idleStopMs = deps.idleStopMs ?? 120_000
+  const idleSweepMs = deps.idleSweepMs ?? 15_000
 
   const transcodeSessions = new Map<string, TranscodeSession>()
 
@@ -457,6 +479,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       proc,
       dir,
       startedAt: Date.now(),
+      lastServedAt: Date.now(),
       stderrTail: [],
       subtitleTracks: [],
       inputStreamListEnded: false
@@ -639,6 +662,9 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       res.end('Not found')
       return
     }
+    // Any request at all — a playlist refresh, a segment, even a 404 for a segment ffmpeg has not
+    // written yet — means somebody is still watching, which is what keeps the idle sweep away.
+    session.lastServedAt = Date.now()
     try {
       const data = await readFile(join(session.dir, filename))
       res.writeHead(200, {
@@ -658,6 +684,34 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       void stopTranscode(sessionId)
     }
   }
+
+  // Reported live: "I have stopped streaming but ... the transcoding is continuing, the directory
+  // is growing ... is this correct?" It was not. Only the client ever stopped a session, so a
+  // client that vanished left ffmpeg running indefinitely — and a live transcode holds one of the
+  // account's two provider connections, so orphans could starve real playback. The client now also
+  // stops on unmount and beacons a stop when the page hides, but this sweep is the part that works
+  // when the client cannot speak at all.
+  async function sweepIdleSessions(): Promise<void> {
+    if (transcodeSessions.size === 0) return
+    const now = Date.now()
+    for (const [sessionId, session] of [...transcodeSessions.entries()]) {
+      const hasPlaylist =
+        existsSync(join(session.dir, 'playlist.m3u8')) || existsSync(join(session.dir, 'master.m3u8'))
+      if (!sessionIsIdle(now, { hasPlaylist, lastServedAt: session.lastServedAt }, idleStopMs)) continue
+      const idleSeconds = Math.round((now - session.lastServedAt) / 1000)
+      console.log(
+        `[transcode] stopping session ${sessionId.slice(0, 8)}… — nothing fetched its output for ${idleSeconds}s`
+      )
+      await stopTranscode(sessionId).catch((err) => {
+        console.error('[transcode] idle stop failed:', err instanceof Error ? err.message : String(err))
+      })
+    }
+  }
+
+  // Unref'd so it can never hold the process (or a test run) open, and started once for the life
+  // of the service rather than per session — the sweep is a no-op while nothing is transcoding.
+  const idleTimer = setInterval(() => void sweepIdleSessions(), idleSweepMs)
+  idleTimer.unref?.()
 
   // Deliberately independent of transcodeSessions/startTranscode's own state — this never
   // writes anything to disk and never registers a session, so it can't collide with (or need
@@ -750,7 +804,14 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
    * gigabytes, not megabytes.
    */
   async function stats(): Promise<
-    Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean; bytes: number }>
+    Array<{
+      sessionId: string
+      startedAt: string
+      runningSeconds: number
+      hasPlaylist: boolean
+      bytes: number
+      idleSeconds: number
+    }>
   > {
     const now = Date.now()
     return Promise.all(
@@ -759,7 +820,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         startedAt: new Date(session.startedAt).toISOString(),
         runningSeconds: Math.round((now - session.startedAt) / 1000),
         hasPlaylist: existsSync(join(session.dir, 'playlist.m3u8')) || existsSync(join(session.dir, 'master.m3u8')),
-        bytes: await directorySize(session.dir)
+        bytes: await directorySize(session.dir),
+        idleSeconds: Math.round((now - session.lastServedAt) / 1000)
       }))
     )
   }

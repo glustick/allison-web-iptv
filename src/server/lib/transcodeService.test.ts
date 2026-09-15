@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync, statSync } from 'fs'
-import { join } from 'path'
+import { basename, dirname, join } from 'path'
 import { tmpdir } from 'os'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { spawn } from 'child_process'
@@ -996,5 +996,54 @@ describe('timeout diagnostics', () => {
         service.startTranscode('https://upstream.example/live/user/pass/1.m3u8', false, 'timeout-2')
       )
     ).rejects.toThrow(/ffmpeg said nothing/)
+  })
+})
+
+// Reported live: "I have stopped streaming but I see that the transcoding is continuing, the
+// directory is growing ... is this correct?" — it was not: nothing but the client ever stopped a
+// session, so a vanished client left ffmpeg running for ever, holding one of the account's two
+// provider connections. These two tests are the two halves of the fix: silence ends a session,
+// but activity never does.
+describe('idle session sweep', () => {
+  it('stops a session nothing has fetched from', async () => {
+    const service = track(
+      makeService({ resolveFfmpegPath: resolverFor(FAKE_FFMPEG), idleStopMs: 300, idleSweepMs: 50 })
+    )
+    const { playlistPath } = await withFakeFfmpegMode('success', () =>
+      service.startTranscode('irrelevant-source', false, 'idle-session')
+    )
+    expect(existsSync(playlistPath)).toBe(true)
+
+    // No client ever asks for it — exactly the stopped-streaming case. (The fake ffmpeg is still
+    // 'running' throughout its own 5s sleep, as a real one would be.)
+    await new Promise((resolve) => setTimeout(resolve, 900))
+
+    const stats = await service.stats()
+    expect(stats.find((session) => session.sessionId === 'idle-session')).toBeUndefined()
+    expect(existsSync(dirname(playlistPath))).toBe(false)
+  })
+
+  it('keeps a session that is still being fetched from', async () => {
+    const service = track(
+      makeService({ resolveFfmpegPath: resolverFor(FAKE_FFMPEG), idleStopMs: 400, idleSweepMs: 50 })
+    )
+    const { playlistPath } = await withFakeFfmpegMode('success', () =>
+      service.startTranscode('irrelevant-source', false, 'watched-session')
+    )
+    const filename = basename(playlistPath)
+    const res = { writeHead() {}, end() {} } as unknown as ServerResponse
+
+    // Long past the idle window in total, but never idle for it: a playlist refresh every 60ms.
+    for (let i = 0; i < 12; i += 1) {
+      await service.serveTranscodeFile(`/__transcode/watched-session/${filename}`, res)
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    }
+
+    const stats = await service.stats()
+    const session = stats.find((entry) => entry.sessionId === 'watched-session')
+    expect(session).toBeDefined()
+    expect(session?.idleSeconds).toBeLessThan(1)
+
+    await service.stopTranscode('watched-session')
   })
 })

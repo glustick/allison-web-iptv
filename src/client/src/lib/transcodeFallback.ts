@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ErrorData } from 'hls.js'
 
 export interface TrackSelectionRequest {
@@ -84,6 +84,32 @@ export function useTranscodeFallback(): {
   }, [])
   const stopSessionRef = useRef(stopSession)
   stopSessionRef.current = stopSession
+
+  // Leaving the player — switching tab, closing it, navigating away, reloading — used to leave
+  // the server-side ffmpeg running: it stops only when something asks it to. The server now also
+  // reaps idle sessions (see transcodeIdle.ts), but that takes a couple of minutes, and until then
+  // a live transcode is holding one of the account's two provider connections. So say goodbye
+  // explicitly, and use a beacon for the case where the page is going away and a fetch would be
+  // cancelled before it left.
+  useEffect(() => {
+    const stopCurrent = (): void => {
+      const sessionId = sessionIdRef.current
+      if (!sessionId) return
+      sessionIdRef.current = null
+      transcodedUrlRef.current = null
+      try {
+        const body = new Blob([JSON.stringify({ sessionId })], { type: 'application/json' })
+        navigator.sendBeacon?.('/api/transcode/stop', body)
+      } catch {
+        stopSessionRef.current(sessionId)
+      }
+    }
+    window.addEventListener('pagehide', stopCurrent)
+    return () => {
+      window.removeEventListener('pagehide', stopCurrent)
+      stopCurrent()
+    }
+  }, [])
 
   const reset = useCallback(() => {
     triedRef.current = false
