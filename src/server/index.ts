@@ -12,6 +12,7 @@ import { fetchTextViaUpstream } from './lib/upstreamText.js'
 import { createNodeUpstreamRequest } from './lib/nodeUpstreamRequest.js'
 import { createTranscodeService, prepareTranscodeDir, resolveTranscodeDir } from './lib/transcodeService.js'
 import { dataDirRecoveryHint, describeDataDirMount } from './lib/dataDirMount.js'
+import { filesystemSpace, isLowSpace } from './lib/diskSpace.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
 import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './lib/sessionStore.js'
@@ -672,6 +673,7 @@ app.get('/api/admin/health', requireAuth, requireAdmin, (req, res) => {
     const session = req.authSession as AuthSession
     try {
       const databasePath = path.join(DATA_DIR, 'allison.db')
+      const dataDirSpace = await filesystemSpace(DATA_DIR)
       const db = openDatabase(DATA_DIR)
       const count = (table: string): number =>
         (db.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count
@@ -715,6 +717,11 @@ app.get('/api/admin/health', requireAuth, requireAdmin, (req, res) => {
           // it — the boot check had already run and passed or failed once, and then said nothing.
           ...usersStore.healthCheck(),
           ...fileStats(databasePath),
+          // A full filesystem is the one storage failure that looks like something else entirely
+          // (SQLite says "disk I/O error", not "disk full"), so report the headroom directly.
+          freeBytes: dataDirSpace?.freeBytes ?? null,
+          totalBytes: dataDirSpace?.totalBytes ?? null,
+          lowSpace: isLowSpace(dataDirSpace?.freeBytes),
           sizeLabel: formatBytes(fileStats(databasePath).bytes),
           wal: fileStats(`${databasePath}-wal`),
           counts
@@ -1369,6 +1376,17 @@ createHttpServer(app).listen(PUBLIC_PORT, () => {
       `[transcode] temp dir: ${transcodeDir}${freeBytes !== null ? ` (${formatBytes(freeBytes)} free)` : ''}` +
         (swept > 0 ? ` — cleared ${swept} leftover session dir(s)` : '')
     )
+  })
+
+  // The failure this guards against cost a long debugging session: a full filesystem makes SQLite
+  // report "disk I/O error", which reads like corruption or permissions, and no amount of chowning
+  // helps. Say the number out loud at boot instead.
+  void filesystemSpace(DATA_DIR).then((space) => {
+    if (isLowSpace(space?.freeBytes)) {
+      const mb = Math.round((space?.freeBytes ?? 0) / (1024 * 1024))
+      console.error(`[setup] WARNING: only ${mb} MB free on the filesystem holding ${DATA_DIR}.`)
+      console.error('[setup] Database writes will start failing when it fills. Free space on the host (docker image prune -a reclaims unused images).')
+    }
   })
 
   const secretProblem = checkSessionSecret()

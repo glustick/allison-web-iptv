@@ -109,7 +109,16 @@ export function SystemPanel(): JSX.Element {
         </div>
         <p className="setup-hint">
           {health ? `${health.server.node} · ${health.server.platform} · ${health.database.path}` : 'Loading…'}
+          {health?.database.freeBytes != null ? ` · ${formatBytesShort(health.database.freeBytes)} free` : ''}
         </p>
+        {health?.database.lowSpace && (
+          <p className="setup-error" role="alert">
+            Only {formatBytesShort(health.database.freeBytes ?? 0)} free on the filesystem holding the
+            database. A full disk makes SQLite report <code>disk I/O error</code> — which looks like
+            corruption or permissions, and is neither. Free space on the host:
+            <code> docker image prune -a</code> reclaims unused images.
+          </p>
+        )}
         {health?.database.ok === false && (
           <p className="setup-error" role="alert">
             The database is <strong>not writable</strong> ({health.database.error}). Sign-in and every

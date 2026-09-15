@@ -55,6 +55,11 @@ export interface HealthReport {
      *  read-only data directory is a total outage (sign-in writes), not a degraded mode. */
     ok?: boolean
     error?: string
+    /** Free space on the filesystem holding the database — the value that explains a
+     *  "disk I/O error" when nothing else about the setup looks wrong. */
+    freeBytes?: number | null
+    totalBytes?: number | null
+    lowSpace?: boolean
     path: string
     exists: boolean
     bytes: number

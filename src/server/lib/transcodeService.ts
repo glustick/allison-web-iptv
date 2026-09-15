@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, statfs, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises'
+import { filesystemSpace } from './diskSpace.js'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, extname } from 'path'
@@ -711,12 +712,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
 
   /** Where segments are being written, and how much room is left there. */
   async function storage(): Promise<{ dir: string; freeBytes: number | null; totalBytes: number | null }> {
-    try {
-      const info = await statfs(tmpDir)
-      return { dir: tmpDir, freeBytes: Number(info.bavail) * Number(info.bsize), totalBytes: Number(info.blocks) * Number(info.bsize) }
-    } catch {
-      return { dir: tmpDir, freeBytes: null, totalBytes: null }
-    }
+    const space = await filesystemSpace(tmpDir)
+    return { dir: tmpDir, freeBytes: space?.freeBytes ?? null, totalBytes: space?.totalBytes ?? null }
   }
 
   return { startTranscode, stopTranscode, serveTranscodeFile, stopAll, probeTracks, stats, storage }
