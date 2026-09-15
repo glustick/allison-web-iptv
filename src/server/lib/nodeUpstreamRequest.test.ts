@@ -224,3 +224,53 @@ describe('createNodeUpstreamRequest', () => {
     expect(() => req.abort()).not.toThrow()
   })
 })
+
+describe('first-response timeout', () => {
+  // Why this exists: an origin that accepts the TCP connection and then never sends response
+  // headers produced no stall, no error and no timeout — the stall watchdog only covers a body
+  // that has already begun — so a fetch against it hung indefinitely. Measured on a real
+  // deployment: over 150 seconds, which is what made the admin health page (and anything else
+  // that probes the provider) hang exactly when the provider was down. Reproduced here with a
+  // server that accepts and stays silent, mirroring that provider's behaviour.
+
+  it('gives up when the upstream accepts the connection but never answers', async () => {
+    const url = await listen(() => {
+      /* deliberately never writes a response */
+    })
+    const req = createNodeUpstreamRequest({ method: 'GET', url, responseTimeoutMs: 300 })
+    const error = await new Promise<Error>((resolve) => {
+      req.on('error', resolve)
+      endRequest(req)
+    })
+    expect(error.message).toMatch(/did not respond within 300ms/)
+  })
+
+  it('does not disturb a normal response', async () => {
+    const url = await listen((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' })
+      res.end('hello')
+    })
+    const req = createNodeUpstreamRequest({ method: 'GET', url, responseTimeoutMs: 3000 })
+    const res = await new Promise<{ statusCode: number; body: NodeJS.ReadableStream }>((resolve) => {
+      req.on('response', (r) => resolve({ statusCode: r.statusCode, body: r as unknown as NodeJS.ReadableStream }))
+      endRequest(req)
+    })
+    expect(res.statusCode).toBe(200)
+    expect(await collect(res.body)).toBe('hello')
+  })
+
+  it('clears the timer once headers arrive, so a slow body is not killed by it', async () => {
+    const url = await listen((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' })
+      res.write('first')
+      // Body finishes long after the response timeout would have fired.
+      setTimeout(() => res.end(' and rest'), 700)
+    })
+    const req = createNodeUpstreamRequest({ method: 'GET', url, responseTimeoutMs: 300 })
+    const res = await new Promise<{ statusCode: number; body: NodeJS.ReadableStream }>((resolve) => {
+      req.on('response', (r) => resolve({ statusCode: r.statusCode, body: r as unknown as NodeJS.ReadableStream }))
+      endRequest(req)
+    })
+    expect(await collect(res.body)).toBe('first and rest')
+  })
+})

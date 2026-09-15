@@ -19,6 +19,11 @@ import type { UpstreamClientRequest, UpstreamResponse } from './proxyServer.js'
 // rather than touching proxyServer.ts, to keep that file's parity with the desktop app intact.
 const UPSTREAM_STALL_TIMEOUT_MS = 20_000
 const UPSTREAM_STALL_CHECK_INTERVAL_MS = 5_000
+// How long an upstream may take to send response *headers* at all. Generous by default, because a
+// slow-but-alive origin should not be aborted; it exists to catch the origin that accepts the TCP
+// connection and then says nothing, which otherwise hangs forever (the stall watchdog only covers
+// a body that has already started).
+const UPSTREAM_RESPONSE_TIMEOUT_MS = 30_000
 
 /**
  * Node https/http-backed replacement for Electron's net.request (see proxyServer.ts's own
@@ -62,9 +67,26 @@ export function createNodeUpstreamRequest(opts: {
   // a slow-but-alive transfer.
   stallTimeoutMs?: number
   stallCheckIntervalMs?: number
+  // How long to wait for a response to arrive *at all* (headers). The stall watchdog below only
+  // covers a body that starts and then stops: an origin that accepts the connection and never
+  // answers produced no stall, no error and no timeout, so a fetch against it simply hung
+  // forever — measured at over 150s on the real deployment, which is what made the admin health
+  // page (and anything else that probes the provider) unusable exactly when the provider was
+  // down. Set generously by default; callers that are expected to answer a user quickly pass less.
+  responseTimeoutMs?: number
 }): UpstreamClientRequest {
   const stallTimeoutMs = opts.stallTimeoutMs ?? UPSTREAM_STALL_TIMEOUT_MS
   const stallCheckIntervalMs = opts.stallCheckIntervalMs ?? UPSTREAM_STALL_CHECK_INTERVAL_MS
+  const responseTimeoutMs = opts.responseTimeoutMs ?? UPSTREAM_RESPONSE_TIMEOUT_MS
+  let responseTimer: ReturnType<typeof setTimeout> | null = null
+  let gotResponse = false
+  const clearResponseTimer = (): void => {
+    gotResponse = true
+    if (responseTimer) {
+      clearTimeout(responseTimer)
+      responseTimer = null
+    }
+  }
   const emitter = new EventEmitter()
   const pendingHeaders: Record<string, string> = {}
   let currentReq: ClientRequest | null = null
@@ -136,7 +158,21 @@ export function createNodeUpstreamRequest(opts: {
     const requester = target.protocol === 'https:' ? httpsRequest : httpRequest
     const req = requester(urlStr, { method: opts.method ?? 'GET' })
     for (const [name, value] of Object.entries(pendingHeaders)) req.setHeader(name, value)
+    // Re-armed per attempt: a redirect starts a brand new request, and each one deserves its own
+    // window to answer.
+    if (!gotResponse) {
+      if (responseTimer) clearTimeout(responseTimer)
+      responseTimer = setTimeout(() => {
+        emitter.emit(
+          'error',
+          new Error(`Upstream did not respond within ${responseTimeoutMs}ms (no response headers)`)
+        )
+        req.destroy()
+      }, responseTimeoutMs)
+      if (typeof responseTimer.unref === 'function') responseTimer.unref()
+    }
     req.on('response', (res) => {
+      clearResponseTimer()
       const statusCode = res.statusCode ?? 0
       const location = res.headers.location
       if (statusCode >= 300 && statusCode < 400 && location) {

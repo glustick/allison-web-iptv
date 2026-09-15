@@ -650,7 +650,8 @@ async function probeProvider(credentials: SessionCredentials): Promise<Record<st
   )}`
   let value: Record<string, unknown>
   try {
-    const body = await fetchTextViaUpstream(undefined, url, 10_000)
+    // 8s to answer: this feeds the System tab and must not hang it behind a dead origin.
+    const body = await fetchTextViaUpstream(undefined, url, 10_000, undefined, 8_000)
     const parsed = JSON.parse(body) as { user_info?: Record<string, unknown> }
     const info = parsed.user_info ?? {}
     value = {

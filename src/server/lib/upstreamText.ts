@@ -36,14 +36,18 @@ export function fetchTextViaUpstream(
   createUpstreamRequest: typeof createNodeUpstreamRequest = createNodeUpstreamRequest,
   url: string,
   stallTimeoutMs = 60_000,
-  stallCheckIntervalMs?: number
+  stallCheckIntervalMs?: number,
+  // Time to wait for response headers. Passed through so a health check can answer promptly
+  // instead of inheriting the (deliberately generous) default meant for bulk downloads.
+  responseTimeoutMs?: number
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const req: UpstreamClientRequest = createUpstreamRequest({
       method: 'GET',
       url,
       stallTimeoutMs,
-      stallCheckIntervalMs
+      stallCheckIntervalMs,
+      responseTimeoutMs
     })
     let redirects = 0
     req.on('redirect', () => {
