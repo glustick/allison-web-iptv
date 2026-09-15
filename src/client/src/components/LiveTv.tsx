@@ -492,14 +492,20 @@ export function LiveTv({
           </button>
         ))}
 
+      </nav>
+      {/* The handle lives in the content column, not inside <nav>: the sidebar is a scroll
+          container, so a handle inside it is clipped by its own overflow and — with a non-overlay
+          scrollbar, which is what "there is a bar to scroll up and down" describes — sits
+          underneath that scrollbar, which then takes the pointer instead. Reported repeatedly as
+          "the category panel cannot be resized" while the EPG's own column handle (not inside a
+          scroller) worked. Here nothing can cover it or clip it. */}
+      <div className="content">
         <div
           className="resize-handle resize-handle--col resize-handle--sidebar"
           onPointerDown={startSidebarDrag}
           title="Drag to resize the sidebar"
         />
-      </nav>
 
-      <div className="content">
         {streamUrl && nowPlaying && (
           <div className="player-section" style={{ '--player-max-height': `${playerMaxHeight}px` } as CSSProperties}>
             <LivePlayer url={streamUrl} channelKey={`live:${nowPlaying.stream_id}`} />

@@ -281,6 +281,17 @@ live-TV fallback would suggest. The **System** tab shows the directory, its free
 much each live session has written; live TV is unaffected (it keeps a small rolling window).
 Stale session directories left by a killed container are swept at startup.
 
+### The guide is drag-scrollable in both directions
+
+Grabbing the EPG — its time ruler, any channel row, or a channel name — moves it: **left/right slides
+the window through time** (snapping to quarter hours), **up/down moves the channel list**. A gesture
+commits to one axis, so a diagonal drag cannot both jump the time window and scroll the list, and a
+drag never doubles as the click that selects a channel. The category sidebar is drag-resizable like
+the guide's own channel column, and its handle deliberately lives in the *content* column rather than
+inside the sidebar: the sidebar is a scroll container, so a handle inside it gets clipped by its own
+overflow and — with a non-overlay scrollbar — sits underneath that scrollbar, which then takes the
+pointer.
+
 ### A transcode stops when its viewer goes away
 
 A session used to end only when the client asked it to, so anything that stopped the client from

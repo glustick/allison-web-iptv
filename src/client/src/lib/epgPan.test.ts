@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { EPG_PAN_SNAP_MS, isTimelineDrag, snapOffset, windowOffsetAfterDrag } from './epgPan'
+import { EPG_PAN_SNAP_MS, clampScrollOffset, isTimelineDrag, panAxis, snapOffset, windowOffsetAfterDrag } from './epgPan'
 
 const WINDOW_MS = 3 * 60 * 60 * 1000
 const TRACK_PX = 600
@@ -36,6 +36,36 @@ describe('windowOffsetAfterDrag', () => {
   })
 })
 
+describe('panAxis', () => {
+  it('sends a mostly-horizontal drag to the time window and a mostly-vertical one to the list', () => {
+    expect(panAxis(100, 100, 140, 105)).toBe('time')
+    expect(panAxis(100, 100, 105, 140)).toBe('list')
+  })
+
+  it('ignores movement too small to be a drag', () => {
+    expect(panAxis(100, 100, 102, 101)).toBe('none')
+    expect(panAxis(100, 100, 100, 100)).toBe('none')
+  })
+
+  it('picks one axis for a diagonal drag rather than doing both', () => {
+    expect(panAxis(100, 100, 130, 110)).toBe('time')
+    expect(panAxis(100, 100, 110, 130)).toBe('list')
+  })
+})
+
+describe('clampScrollOffset', () => {
+  it('keeps a dragged offset inside the list', () => {
+    expect(clampScrollOffset(-40, 500)).toBe(0)
+    expect(clampScrollOffset(620, 500)).toBe(500)
+    expect(clampScrollOffset(200, 500)).toBe(200)
+  })
+
+  it('never returns a nonsense offset for a list with nowhere to scroll', () => {
+    expect(clampScrollOffset(120, 0)).toBe(0)
+    expect(clampScrollOffset(Number.NaN, 500)).toBe(0)
+  })
+})
+
 describe('isTimelineDrag', () => {
   it('needs real movement before a click becomes a pan', () => {
     expect(isTimelineDrag(100, 100, 101, 101)).toBe(false)
@@ -43,8 +73,9 @@ describe('isTimelineDrag', () => {
     expect(isTimelineDrag(100, 100, 96, 100)).toBe(true)
   })
 
-  it('leaves a mostly-vertical drag to the list scrolling it belongs to', () => {
-    expect(isTimelineDrag(100, 100, 101, 140)).toBe(false)
+  it('counts a vertical drag too — that is what moves the channel list', () => {
+    expect(isTimelineDrag(100, 100, 101, 140)).toBe(true)
+    expect(panAxis(100, 100, 101, 140)).toBe('list')
     expect(isTimelineDrag(100, 100, 130, 108)).toBe(true)  // diagonal, but horizontal wins
   })
 })

@@ -41,11 +41,28 @@ export function windowOffsetAfterDrag(
   return snapOffset(startOffsetMs - (x - startX) * msPerPx, snapMs)
 }
 
+/** Which way a gesture is going: the guide moves through time, or the list through channels. */
+export type PanAxis = 'none' | 'time' | 'list'
+
 /**
- * Whether pointer movement counts as a pan. Horizontal intent only: a mostly-vertical drag over
- * the guide belongs to the channel list's own scrolling, and treating it as a pan would also
- * swallow the click that follows it.
+ * Classify a drag by its dominant direction — one axis at a time, so a diagonal drag cannot both
+ * scroll the channel list and jump the time window. Both are "hold the mouse down and move",
+ * which is what the guide is asked to do: left/right for time, up/down for channels.
  */
+export function panAxis(
+  startX: number,
+  startY: number,
+  x: number,
+  y: number,
+  thresholdPx: number = EPG_PAN_DRAG_THRESHOLD_PX
+): PanAxis {
+  const dx = x - startX
+  const dy = y - startY
+  if (Math.abs(dx) < thresholdPx && Math.abs(dy) < thresholdPx) return 'none'
+  return Math.abs(dx) >= Math.abs(dy) ? 'time' : 'list'
+}
+
+/** Whether pointer movement is far enough to be treated as a drag at all (either axis). */
 export function isTimelineDrag(
   startX: number,
   startY: number,
@@ -53,7 +70,16 @@ export function isTimelineDrag(
   y: number,
   thresholdPx: number = EPG_PAN_DRAG_THRESHOLD_PX
 ): boolean {
-  const dx = x - startX
-  const dy = y - startY
-  return Math.abs(dx) >= thresholdPx && Math.abs(dx) > Math.abs(dy)
+  return panAxis(startX, startY, x, y, thresholdPx) !== 'none'
+}
+
+/**
+ * Keeps a dragged list offset inside the list's own range. react-window would clamp a scroll it
+ * performed itself, but this sets the element's scrollTop, so the arithmetic has to land in range
+ * or the first frame of a drag would jump past the end.
+ */
+export function clampScrollOffset(offset: number, maxOffset: number): number {
+  if (!Number.isFinite(offset)) return 0
+  if (!Number.isFinite(maxOffset) || maxOffset <= 0) return 0
+  return Math.min(maxOffset, Math.max(0, offset))
 }

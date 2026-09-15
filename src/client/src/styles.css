@@ -190,6 +190,8 @@ body {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* The sidebar's resize handle is positioned against this box (see .resize-handle--sidebar). */
+  position: relative;
 }
 
 .player-section {
@@ -235,8 +237,12 @@ body {
    area has to live *inside* the edge, which is why this is a wide grab strip rather than a
    couple of pixels straddling the border. */
 .resize-handle--sidebar {
-  right: 0;
-  width: 12px;
+  /* Straddles the divider from the *content* side: 4px over the sidebar, 16px inside the content,
+     so the sidebar's own scrollbar (which sits on its right edge) cannot take the pointer, and the
+     sidebar's overflow cannot clip the handle. The grip line lands exactly on the divider. */
+  left: -4px;
+  right: auto;
+  width: 20px;
 }
 
 /* A visible grip, so the panel reads as resizable before the pointer finds the strip: reported
@@ -247,7 +253,7 @@ body {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 0;
+  left: 4px;
   width: 2px;
   background: #2c3342;
 }
