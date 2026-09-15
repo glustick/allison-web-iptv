@@ -57,7 +57,7 @@ interface StartTranscodeResponse {
 export function useTranscodeFallback(): {
   getSourceUrl: (originalUrl: string) => string
   tryFallback: (data: ErrorData, originalUrl: string, onReload: () => void, onError?: (message: string) => void) => boolean
-  tryFallbackForSilentAudio: (originalUrl: string, onReload: () => void, onError?: (message: string) => void) => boolean
+  tryFallbackForSilentAudio: (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void) => boolean
   selectTracks: (requested: TrackSelectionRequest, audioTracks?: Array<{ index: number }>, subtitleTracks?: Array<{ index: number; supported?: boolean }>) => TrackSelectionResult
   reset: () => void
   beginRun: () => void
@@ -145,10 +145,15 @@ export function useTranscodeFallback(): {
     [startFallback]
   )
 
+  // `isVod` is the caller's, not a constant: this hook is used by both LivePlayer (a live
+  // channel) and NativeVideoPlayer (a movie/episode file). Hardcoding true here meant every live
+  // silent-audio fallback was transcoded as if it were a seekable file — no `-live_start_index
+  // -1` / `-reconnect*` (the signed-URL expiry race those exist for, see transcodeService), and
+  // VOD's 240s start deadline instead of live's 45s.
   const tryFallbackForSilentAudio = useCallback(
-    (originalUrl: string, onReload: () => void, onError?: (message: string) => void): boolean => {
+    (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void): boolean => {
       if (awaitingRef.current || triedRef.current) return false
-      startFallback(originalUrl, true, onReload, onError)
+      startFallback(originalUrl, isVod, onReload, onError)
       return true
     },
     [startFallback]

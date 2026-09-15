@@ -23,6 +23,7 @@ import { createSearchService } from './lib/searchService.js'
 import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagnostics.js'
 import { createRateLimiter } from './lib/rateLimit.js'
 import { assertSafeExternalUrl, isSameOrigin, isSecureRequest, securityHeaders, UnsafeUrlError } from './lib/security.js'
+import { mapSameOriginStreamPath } from './lib/upstreamUrl.js'
 import {
   applyPendingRestore,
   backupDatabase,
@@ -1272,6 +1273,18 @@ app.post('/api/connect', requireAuth, (req, res) => {
 function resolveUpstreamUrl(relativeOrAbsolute: string, req: Request): string {
   const targetBase = getProxyTargetBase(req)
   if (!targetBase) throw new Error('Not connected to an IPTV server')
+  // Since v0.11.0 the client is credential-free, so for playback it sends this app its own
+  // /api/stream/<kind>/<id>.<ext> path (see the /api/stream route further up). Map that back to
+  // the provider's own path: resolving it as-is asks the *provider* for /api/stream/..., which
+  // does not exist there, so ffmpeg reads nothing and the session produces no output — while the
+  // player sits on the un-decodable original stream reporting fragParsingError. Anything that is
+  // not one of those paths falls through to the same-origin resolution below.
+  const mappedSession = getAuthSession(req)
+  const mappedPath = mapSameOriginStreamPath(
+    relativeOrAbsolute,
+    mappedSession ? resolveAccountCredentials(mappedSession.username) : null
+  )
+  if (mappedPath) relativeOrAbsolute = mappedPath
   // The client normally sends a same-origin path (/live/user/pass/id.m3u8). An *absolute* URL in
   // that field would replace the provider base wholesale, which made this a request-forgery
   // primitive: any signed-in user could point the server at an arbitrary address and have the

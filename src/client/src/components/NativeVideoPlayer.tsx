@@ -174,6 +174,8 @@ export function NativeVideoPlayer({
       releaseTimer = setTimeout(() => {
         tryFallbackForSilentAudio(
           url,
+          // A movie/episode: a real seekable file, so VOD's segment window and start deadline.
+          true,
           () => setReloadTick((t) => t + 1),
           (message) => {
             setPreparing(false)

@@ -186,6 +186,9 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
       releaseTimer = setTimeout(() => {
         tryFallbackForSilentAudio(
           url,
+          // Live TV is not a VOD file: false is what gives ffmpeg the live demuxer/reconnect flags
+          // and live's own start deadline.
+          false,
           () => setReloadTick((t) => t + 1),
           (message) => {
             fatalErrorShown = true
