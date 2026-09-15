@@ -1,6 +1,15 @@
-import { useEffect, useState, type CSSProperties, type JSX } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type JSX,
+  type PointerEvent as ReactPointerEvent
+} from 'react'
 import { List, useListRef } from 'react-window'
 import { pct } from '../lib/epgTime'
+import { isTimelineDrag, windowOffsetAfterDrag } from '../lib/epgPan'
 import type { Session } from '../lib/appAuth'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
 import { useAggregatedEpg, type AggregatedEpgData } from '../lib/useAggregatedEpg'
@@ -89,6 +98,14 @@ interface RowProps {
   shortEpgByStream: Record<number, ShortEpgProgram[]>
   requestShortEpg: (streamId: number) => void
   onSelectChannel: (channel: LiveStream) => void
+  /** Drag-to-pan the whole grid through time (see lib/epgPan.ts); attached to each row's timeline
+   *  so the guide can be dragged anywhere, not only on the ruler. */
+  onTimelinePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void
+  onTimelinePointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void
+  onTimelinePointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void
+  /** True while the pointer has actually panned — a drag must not also fire the click that
+   *  selecting a channel rides on. */
+  didPan: () => boolean
 }
 
 function EpgRow({
@@ -102,7 +119,11 @@ function EpgRow({
   aggregated,
   shortEpgByStream,
   requestShortEpg,
-  onSelectChannel
+  onSelectChannel,
+  onTimelinePointerDown,
+  onTimelinePointerMove,
+  onTimelinePointerUp,
+  didPan
 }: { index: number; style: CSSProperties } & RowProps): JSX.Element {
   const channel = channels[index]
   const listings = useChannelListings(channel, aggregated, shortEpgByStream, requestShortEpg)
@@ -113,11 +134,24 @@ function EpgRow({
 
   return (
     <div style={style} className={isActive ? 'epg-row active' : 'epg-row'}>
-      <button className="epg-row-channel" onClick={() => onSelectChannel(channel)}>
+      <button
+        className="epg-row-channel"
+        onClick={() => {
+          if (didPan()) return
+          onSelectChannel(channel)
+        }}
+      >
         {channel.stream_icon ? <img src={channel.stream_icon} alt="" loading="lazy" /> : <span className="epg-row-channel-icon placeholder" />}
         <span className="epg-row-channel-name">{channel.name}</span>
       </button>
-      <div className="epg-row-timeline">
+      <div
+        className="epg-row-timeline"
+        onPointerDown={onTimelinePointerDown}
+        onPointerMove={onTimelinePointerMove}
+        onPointerUp={onTimelinePointerUp}
+        onPointerCancel={onTimelinePointerUp}
+        title="Drag left or right to move the guide through time"
+      >
         {listings === undefined && <div className="epg-row-loading" />}
         {listings !== undefined && listings.length === 0 && (
           <span className="epg-row-empty">No guide data</span>
@@ -134,6 +168,7 @@ function EpgRow({
               title={`${formatTime(p.startMs)} – ${formatTime(p.stopMs)}\n${p.title}${p.description ? '\n' + p.description : ''}`}
               onClick={(e) => {
                 e.stopPropagation()
+                if (didPan()) return
                 onSelectChannel(channel)
               }}
             >
@@ -150,9 +185,11 @@ function EpgRow({
 // A simplified port of the desktop app's own Gantt-chart EPG guide: channels down the vertical
 // axis (virtualized via react-window, so it stays workable against a catalog with thousands of
 // channels), time left-to-right, each programme a positioned block sized by its duration.
-// Deliberately left out of this pass (see the desktop app's EpgGrid.tsx for the fuller
-// version): drag-to-pan the timeline, keyboard navigation, and catch-up/timeshift playback for
-// past programmes.
+// Drag-to-pan the timeline is implemented (see lib/epgPan.ts): grabbing the guide — the time
+// ruler or any row's timeline — slides the window through time, and a drag never doubles as the
+// click that selects a channel. Still left out of this pass (see the desktop app's EpgGrid.tsx
+// for the fuller version): keyboard navigation and catch-up/timeshift playback for past
+// programmes.
 export function EpgGrid({
   session,
   channels,
@@ -173,6 +210,16 @@ export function EpgGrid({
   const [now, setNow] = useState(() => Date.now())
   const [windowOffsetMs, setWindowOffsetMs] = useState(0)
   const listRef = useListRef(null)
+  // Drag-to-pan (was deliberately left out of the first pass — see this file's own doc comment
+  // below). The offset lives in a ref as well as state so the drag reads the value it started
+  // from without depending on a fresh render, and so the whole gesture is one pointer capture
+  // rather than a state update per move.
+  const offsetRef = useRef(0)
+  offsetRef.current = windowOffsetMs
+  const panRef = useRef<{ startX: number; startY: number; startOffset: number; width: number } | null>(null)
+  const pannedRef = useRef(false)
+  const didPan = useCallback((): boolean => pannedRef.current, [])
+  const [panning, setPanning] = useState(false)
   const { dimension: channelColumnWidth, startDrag: startChannelColumnDrag } = useResizableDimension(
     loadSavedDimension(EPG_CHANNEL_COL_KEY, EPG_CHANNEL_COL_DEFAULT, EPG_CHANNEL_COL_MIN, EPG_CHANNEL_COL_MAX),
     'x',
@@ -195,12 +242,58 @@ export function EpgGrid({
     return () => clearInterval(interval)
   }, [])
 
+  const startPan = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return
+    // A fresh gesture: whatever the previous one did, this one starts as a potential click.
+    pannedRef.current = false
+    panRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startOffset: offsetRef.current,
+      width: event.currentTarget.clientWidth
+    }
+    // Guarded: capture throws for a pointer the browser does not consider active (a synthetic
+    // event in a test harness, or a pointer already released). Panning works without it — the
+    // element still receives the moves it is over — so a failure here must not abort the gesture.
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    } catch {
+      /* capture is an optimisation, not a requirement */
+    }
+    setPanning(true)
+  }, [])
+
+  const movePan = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
+    const pan = panRef.current
+    if (!pan) return
+    if (!pannedRef.current) {
+      // Below the threshold this is still a click on whatever is under the pointer.
+      if (!isTimelineDrag(pan.startX, pan.startY, event.clientX, event.clientY)) return
+      pannedRef.current = true
+    }
+    const next = windowOffsetAfterDrag(pan.startOffset, pan.startX, event.clientX, pan.width, WINDOW_HOURS * HOUR_MS)
+    setWindowOffsetMs((current) => (current === next ? current : next))
+  }, [])
+
+  const endPan = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
+    panRef.current = null
+    setPanning(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    // pannedRef stays set until the next pointerdown: the click that follows a drag arrives after
+    // this handler and must not select the channel the user just dragged past.
+  }, [])
+
   const firstTick = Math.ceil(windowStart / HOUR_MS) * HOUR_MS
   const hourTicks: number[] = []
   for (let t = firstTick; t <= windowEnd; t += HOUR_MS) hourTicks.push(t)
 
   return (
-    <div className="epg-grid" style={{ '--epg-channel-col-width': `${channelColumnWidth}px` } as CSSProperties}>
+    <div
+      className={panning ? 'epg-grid epg-grid--panning' : 'epg-grid'}
+      style={{ '--epg-channel-col-width': `${channelColumnWidth}px` } as CSSProperties}
+    >
       {/* One handle spanning the grid's full height — the header's nav block and every row's
           channel cell share the same width variable, so a single divider moves them together
           (the desktop app's own v0.7.9 arrangement). */}
@@ -222,7 +315,14 @@ export function EpgGrid({
             ▶
           </button>
         </div>
-        <div className="epg-time-header-track">
+        <div
+          className="epg-time-header-track"
+          onPointerDown={startPan}
+          onPointerMove={movePan}
+          onPointerUp={endPan}
+          onPointerCancel={endPan}
+          title="Drag left or right to move the guide through time"
+        >
           {hourTicks.map((t) => (
             <span key={t} className="epg-time-tick" style={{ left: `${pct(t, windowStart, windowEnd)}%` }}>
               {formatHour(t)}
@@ -260,7 +360,11 @@ export function EpgGrid({
               aggregated,
               shortEpgByStream,
               requestShortEpg: request,
-              onSelectChannel
+              onSelectChannel,
+              onTimelinePointerDown: startPan,
+              onTimelinePointerMove: movePan,
+              onTimelinePointerUp: endPan,
+              didPan
             }}
             rowComponent={EpgRow}
             style={{ height: '100%', width: '100%' }}

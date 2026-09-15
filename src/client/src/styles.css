@@ -230,26 +230,32 @@ body {
    vertical span and width, so without a horizontal offset the handle falls back to its static
    position — the sidebar's left edge, underneath the category buttons — leaving the sidebar
    looking un-resizable. (It was missing from the release that introduced the handle, so the
-   sidebar never actually resized; Live TV, Movies and Series all share .sidebar and this class.) */
+   sidebar never actually resized; Live TV, Movies and Series all share .sidebar and this class.)
+   The sidebar is a scroll container, so everything outside its padding box is clipped: the hit
+   area has to live *inside* the edge, which is why this is a wide grab strip rather than a
+   couple of pixels straddling the border. */
 .resize-handle--sidebar {
-  right: -4px;
-  width: 10px;
+  right: 0;
+  width: 12px;
 }
 
-/* A hairline grip so the handle is discoverable at rest, not only once the pointer finds it. */
+/* A visible grip, so the panel reads as resizable before the pointer finds the strip: reported
+   as "the category panel should also be able to resize" while the EPG's own column handle — which
+   sits inside its panel with a visible divider — was found fine. */
 .resize-handle--sidebar::after {
   content: '';
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 4px;
+  left: 0;
   width: 2px;
-  background: #232733;
+  background: #2c3342;
 }
 
 .resize-handle--sidebar:hover::after,
 body.resizing-col .resize-handle--sidebar::after {
   background: #4f7cff;
+  width: 3px;
 }
 
 .resize-handle--row {
@@ -383,6 +389,23 @@ body.resizing-row {
   font-size: 11px;
   color: #9aa1ad;
   align-self: center;
+}
+
+/* The guide's timeline is drag-to-pan (see lib/epgPan.ts). A grab cursor is the affordance:
+   empty timeline, the ruler, and mid-drag the whole grid. Programme blocks keep their pointer
+   cursor because clicking one still selects that channel. */
+.epg-time-header-track,
+.epg-row-timeline {
+  cursor: grab;
+}
+
+.epg-grid--panning .epg-time-header-track,
+.epg-grid--panning .epg-row-timeline {
+  cursor: grabbing;
+}
+
+.epg-grid--panning {
+  user-select: none;
 }
 
 .epg-time-header-track {

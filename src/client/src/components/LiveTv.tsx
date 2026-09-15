@@ -5,6 +5,7 @@ import { LivePlayer } from './LivePlayer'
 import { EpgGrid } from './EpgGrid'
 import { ReorderableChannelList, type ReorderableRow } from './ReorderableChannelList'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
+import { sectionTitle } from '../lib/sectionTitle'
 import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
 import {
   addChannelToCategory,
@@ -402,12 +403,13 @@ export function LiveTv({
   }, [applyPrefs, handlePrefsError, prefs])
 
   const streamUrl = nowPlaying ? session.client.getStreamUrl('live', nowPlaying.stream_id, 'm3u8') : null
-  const sectionTitle =
-    selection.type === 'favourites'
-      ? 'Favourites'
-      : selection.type === 'history'
-        ? 'Watch history'
-        : selectedCustom?.name ?? 'All channels'
+  // A provider category is a category: its name is what belongs above its channel list (and the
+  // guide under it), not "All channels" — which is only true for the unfiltered selection.
+  const providerCategoryName =
+    selection.type === 'provider'
+      ? categories.find((category) => String(category.category_id) === String(selection.id))?.category_name
+      : undefined
+  const sectionTitleText = sectionTitle(selection, { custom: selectedCustom?.name, provider: providerCategoryName })
 
   return (
     <div className="app-body">
@@ -556,7 +558,7 @@ export function LiveTv({
         )}
 
         <div className="list-toolbar">
-          <span className="list-toolbar-title">{sectionTitle}</span>
+          <span className="list-toolbar-title">{sectionTitleText}</span>
           {selection.type === 'custom' && !picking && (
             <>
               <button type="button" className="admin-small-btn" onClick={() => setPicking(true)}>
