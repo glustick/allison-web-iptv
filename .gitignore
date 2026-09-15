@@ -7,3 +7,7 @@ appdata/
 .env
 .DS_Store
 .claude/settings.local.json
+
+# Scratch space used while testing against a real browser/server (stand-ins, CDP drivers,
+# throwaway provider fixtures). Never part of the app or the image.
+.openclaw/
