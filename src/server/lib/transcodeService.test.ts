@@ -103,7 +103,7 @@ describe('startTranscode', () => {
 
     await expect(
       withFakeFfmpegMode('hang_forever', () => service.startTranscode('irrelevant-source', false, 's1'))
-    ).rejects.toThrow('Timed out waiting for ffmpeg')
+    ).rejects.toThrow(/Timed out after \d+s waiting for ffmpeg/)
   })
 
   it('returns the master playlist once both it and the subtitle rendition exist', async () => {
@@ -966,5 +966,35 @@ describe('live input resilience', () => {
     // Matroska/MP4 input fails the whole transcode before a single frame is read.
     const args = await argsFor(true)
     expect(args).not.toContain('-live_start_index')
+  })
+})
+
+describe('timeout diagnostics', () => {
+  it('reports ffmpeg\'s own output when a start times out, not just the word timeout', async () => {
+    // The live deadline is the one that bites in practice, so drive that. fake-ffmpeg's
+    // "never_outputs_but_logs" mode writes a plausible stderr line and then does nothing.
+    const service = track(
+      makeService({
+        resolveFfmpegPath: async () => FAKE_FFMPEG,
+        liveDeadlineMs: 700,
+        pollIntervalMs: 50
+      })
+    )
+    await expect(
+      withFakeFfmpegMode('never_outputs_but_logs', () =>
+        service.startTranscode('https://upstream.example/live/user/pass/1.m3u8', false, 'timeout-1')
+      )
+    ).rejects.toThrow(/Timed out after 1s waiting for ffmpeg.*400 Bad Request/s)
+  })
+
+  it('says so explicitly when ffmpeg produced no output of its own', async () => {
+    const service = track(
+      makeService({ resolveFfmpegPath: async () => FAKE_FFMPEG, liveDeadlineMs: 700, pollIntervalMs: 50 })
+    )
+    await expect(
+      withFakeFfmpegMode('never_outputs', () =>
+        service.startTranscode('https://upstream.example/live/user/pass/1.m3u8', false, 'timeout-2')
+      )
+    ).rejects.toThrow(/ffmpeg said nothing/)
   })
 })

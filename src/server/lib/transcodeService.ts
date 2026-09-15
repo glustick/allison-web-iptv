@@ -261,7 +261,12 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeService {
-  const liveDeadlineMs = deps.liveDeadlineMs ?? 20000
+  // Live's window is deliberately shorter than VOD's: a viewer is waiting in real time. But 20s
+  // proved too tight — measured on a real deployment, the first live playlist had still not
+  // appeared at 20s while the origin was still delivering, which failed a session that would have
+  // succeeded. Timeouts now also report ffmpeg's own output, so the next one is diagnosable rather
+  // than a coin flip between "slow" and "broken".
+  const liveDeadlineMs = deps.liveDeadlineMs ?? 45000
   const vodDeadlineMs = deps.vodDeadlineMs ?? 240000
   const pollIntervalMs = deps.pollIntervalMs ?? 300
   const stopGraceMs = deps.stopGraceMs ?? 2000
@@ -612,7 +617,16 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       return { sessionId, playlistPath: playlistFile, subtitleTracks: session.subtitleTracks }
     }
     await stopTranscode(sessionId)
-    throw new Error('Timed out waiting for ffmpeg to produce transcoded output')
+    // Carry ffmpeg's own last words through. A bare "timed out" is unactionable: it cannot
+    // distinguish a slow origin still delivering from a fetch loop hammering a dead URL, and those
+    // two need opposite responses. The buffered stderr is already kept for the exited-early path
+    // (below) — this path just wasn't using it.
+    const waitedSeconds = Math.round((isVod ? vodDeadlineMs : liveDeadlineMs) / 1000)
+    const stalledTail = session.stderrTail.slice(-10).join('\n').trim()
+    throw new Error(
+      `Timed out after ${waitedSeconds}s waiting for ffmpeg to produce transcoded output` +
+        (stalledTail ? `: ${stalledTail}` : ' (ffmpeg said nothing — it may be waiting on the origin)')
+    )
   }
 
   async function serveTranscodeFile(url: string, res: ServerResponse): Promise<void> {

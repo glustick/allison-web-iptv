@@ -8,6 +8,14 @@ set -u
 last_arg="${@: -1}"
 
 case "${FAKE_FFMPEG_MODE:-}" in
+  never_outputs)      # produces no playlist and says nothing: the timeout path's empty case
+    sleep 30
+    ;;
+  never_outputs_but_logs)  # produces no playlist but explains itself, like a real stalled fetch
+    echo "[https @ 0x1] HTTP error 400 Bad Request" >&2
+    echo "[hls @ 0x1] Failed to open segment 25995 of playlist 0" >&2
+    sleep 30
+    ;;
   dump_args)
     # Records the exact argv startTranscode built, so tests can pin the input-side options
     # (live start index, retries, reconnects) rather than trusting them to survive a refactor.
