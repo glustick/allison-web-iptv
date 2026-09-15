@@ -35,3 +35,31 @@ export function isLowSpace(freeBytes: number | null | undefined, thresholdBytes 
   if (freeBytes === null || freeBytes === undefined) return false
   return freeBytes < thresholdBytes
 }
+
+/**
+ * Whether there is too little room to start a transcode, and what to tell the viewer.
+ *
+ * Added because the threshold above existed but was connected to nothing: a session could be
+ * started on a filesystem with megabytes left, and — for a film, which keeps every segment so the
+ * viewer can scrub — keep writing until the disk was full. At that point SQLite fails to write and
+ * the whole app reports "disk I/O error", which is how the earlier outage presented.
+ *
+ * The two cases genuinely differ. A film keeps everything it writes (a 2h20 feature at ~10.7 Mbps
+ * is well over 10 GB), so it needs the full headroom up front. Live TV keeps a small rolling window
+ * — a couple of megabytes — so it only needs the same floor as the database, and refusing to
+ * transcode a channel because a film-sized reservation is unavailable would be wrong.
+ */
+export function transcodeSpaceRefusal(freeBytes: number | null | undefined, isVod: boolean): string | null {
+  if (freeBytes === null || freeBytes === undefined) return null
+  const needed = isVod ? LOW_SPACE_THRESHOLD_FOR_TRANSCODE_BYTES : LOW_SPACE_THRESHOLD_BYTES
+  if (freeBytes >= needed) return null
+  // MB below a gigabyte: "0.0 GB free" is technically true but useless to read.
+  const human = (bytes: number): string =>
+    bytes >= 1024 * 1024 * 1024
+      ? `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
+      : `${Math.round(bytes / 1024 / 1024)} MB`
+  return (
+    `Not enough free space to transcode this ${isVod ? 'title' : 'channel'}: ` +
+    `${human(freeBytes)} free, ${human(needed)} needed. Free some space and try again.`
+  )
+}

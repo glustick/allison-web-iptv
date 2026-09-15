@@ -295,6 +295,24 @@ removing its directory. The idle check only applies once a session has a playlis
 starts that the start deadlines exist to allow are never mistaken for an abandoned one. The
 **System** tab and `/api/admin/health` report each session's idle time.
 
+### A transcode cannot fill the disk
+
+The idle sweep above stops a session nobody is watching — which is what made a *directory* keep
+growing — but a session somebody *is* watching can also fill a small volume: a film keeps every
+segment it writes (that is what makes it scrubbable), so a 2h20 feature needs well over 10 GB. A
+full filesystem is not a transcode problem, it is an outage: SQLite stops writing and every request
+answers "disk I/O error" (see the space note at the top of `lib/diskSpace.ts`).
+
+So the filesystem is checked before a session starts and while it runs:
+
+- **Before starting**, a transcode is refused with a readable reason rather than being allowed to
+  run out of room: a film needs 8 GB free, live TV — which keeps only a rolling window — needs
+  256 MB, the same floor the database itself needs. The viewer sees
+  *"Not enough free space to transcode this title: 3.2 GB free, 8.0 GB needed."*
+- **While running**, the same sweep that reaps idle sessions stops *every* session if the free
+  space falls below 256 MB, and logs why. Whatever is streaming is worth less than the app staying
+  able to write to its database.
+
 ## User accounts & admin console
 
 Authentication now happens in two stages:

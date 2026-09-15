@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises'
-import { filesystemSpace } from './diskSpace.js'
+import { filesystemSpace, isLowSpace, transcodeSpaceRefusal } from './diskSpace.js'
 import { sessionIsIdle } from './transcodeIdle.js'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
@@ -340,6 +340,16 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     const ffmpegPath = await deps.resolveFfmpegPath()
     if (!ffmpegPath) {
       throw new Error('ffmpeg binary not available on this platform')
+    }
+    // Refuse rather than fill the disk. A film keeps every segment so the viewer can scrub, so it
+    // needs real headroom up front; live TV keeps a small rolling window and only needs the
+    // database's own floor. Refusing here is the difference between "this title needs more room
+    // than you have" and the app reporting "disk I/O error" to everything, logins included.
+    const startSpace = await filesystemSpace(tmpDir)
+    const spaceRefusal = transcodeSpaceRefusal(startSpace?.freeBytes, isVod)
+    if (spaceRefusal) {
+      console.error(`[transcode] refusing to start: ${spaceRefusal}`)
+      throw new Error(spaceRefusal)
     }
     // A stop() for this exact sessionId could already have arrived (the renderer switched away
     // before this call even started) — nothing to spawn in that case.
@@ -686,14 +696,29 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
   }
 
   // Reported live: "I have stopped streaming but ... the transcoding is continuing, the directory
-  // is growing ... is this correct?" It was not. Only the client ever stopped a session, so a
+  // is growing ... is this correct?" It was not — and the same report asked for the disk to be
+  // protected: "the directory should be cleaned up, else it will continue to grow and fill up the
+  // disk space like previously" — hence the space guard at the top of this sweep. Only the client ever stopped a session, so a
   // client that vanished left ffmpeg running indefinitely — and a live transcode holds one of the
   // account's two provider connections, so orphans could starve real playback. The client now also
   // stops on unmount and beacons a stop when the page hides, but this sweep is the part that works
   // when the client cannot speak at all.
-  async function sweepIdleSessions(): Promise<void> {
+  async function sweepSessions(): Promise<void> {
     if (transcodeSessions.size === 0) return
     const now = Date.now()
+    // Disk first, and unapologetically: below this the *database* is about to fail too — that is
+    // exactly how the earlier outage presented ("disk I/O error" on every request, while writes to
+    // files still worked because ext4 keeps reserved blocks). Whatever is streaming is worth less
+    // than the app staying able to record anything, so every session goes.
+    const sweepSpace = await filesystemSpace(tmpDir)
+    if (isLowSpace(sweepSpace?.freeBytes)) {
+      const freeMb = Math.round((sweepSpace?.freeBytes ?? 0) / 1024 / 1024)
+      console.error(
+        `[transcode] stopping ${transcodeSessions.size} session(s): only ${freeMb} MB free on ${tmpDir} — a full disk breaks the database as well`
+      )
+      stopAll()
+      return
+    }
     for (const [sessionId, session] of [...transcodeSessions.entries()]) {
       const hasPlaylist =
         existsSync(join(session.dir, 'playlist.m3u8')) || existsSync(join(session.dir, 'master.m3u8'))
@@ -710,7 +735,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
 
   // Unref'd so it can never hold the process (or a test run) open, and started once for the life
   // of the service rather than per session — the sweep is a no-op while nothing is transcoding.
-  const idleTimer = setInterval(() => void sweepIdleSessions(), idleSweepMs)
+  const idleTimer = setInterval(() => void sweepSessions(), idleSweepMs)
   idleTimer.unref?.()
 
   // Deliberately independent of transcodeSessions/startTranscode's own state — this never
