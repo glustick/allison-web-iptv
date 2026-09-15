@@ -6,7 +6,7 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.8.0 — drag-and-drop ordering for favourites and custom categories)
+## Current state (v0.10.0 — hardened container, and transcodes that know where their disk is)
 
 **v0.7.0** moves everything the app persists into a single **SQLite database** (`allison.db`)
 and builds a proper per-user library on top of it: **★ Favourites** and **🕘 History** in the
@@ -249,6 +249,36 @@ Environment knobs:
 - `SESSION_SECRET` — 16+ characters, and changing it makes stored IPTV credentials undecryptable (accounts are unaffected).
 
 Worth doing outside the app: keep it off the public internet where possible (Tailscale/WireGuard, or an IP allowlist at the reverse proxy), enable HSTS and modern TLS at the proxy, and treat a downloaded database backup as sensitive — it contains every account.
+
+### Container hardening
+
+The image now runs the server as an **unprivileged user** (`node`, uid 1000), and the reference
+`docker-compose.yml` adds the container-level settings worth pairing with that: a **read-only
+rootfs**, a small `tmpfs` for scratch files, `no-new-privileges`, and **all capabilities
+dropped**. Verified with the real image: `id` reports `uid=1000(node)`, `docker inspect` shows
+`ReadonlyRootfs=true` and `CapDrop=[ALL]`, and a full transcode still completes.
+
+**Updating an existing install** — an `./appdata` directory created by an earlier build (which
+ran as root) is owned by root, and the server now writes as uid 1000. If the container starts and
+logs that the data directory is not usable, that is why; the log says exactly what to run:
+
+```bash
+sudo chown -R 1000:1000 ./appdata ./transcode
+```
+
+Alternatively start it once with `user: "0:0"` in the compose file: the entrypoint repairs
+ownership of both directories and then drops back to uid 1000 for the server itself. Leave that
+commented out once the permissions are correct.
+
+### Transcode storage — `TRANSCODE_TMP_DIR`
+
+ffmpeg writes HLS segments to `TRANSCODE_TMP_DIR` (default: the OS temp dir, i.e. `/tmp`; the
+reference compose points it at `/transcode`, backed by `./transcode`). **Size this volume**: a
+*VOD* session keeps every segment it produces, for as long as it runs, so the viewer can scrub
+anywhere in the film — a 2h20 feature at ~10.7 Mbps is well over 10 GB, not the few hundred MB a
+live-TV fallback would suggest. The **System** tab shows the directory, its free space, and how
+much each live session has written; live TV is unaffected (it keeps a small rolling window).
+Stale session directories left by a killed container are swept at startup.
 
 ## User accounts & admin console
 

@@ -16,12 +16,41 @@ services:
       # security appliances) — see the README's own account of hitting this directly.
       # Mount a PEM bundle into the container and point this at it if so:
       # - NODE_EXTRA_CA_CERTS=/certs/ca-bundle.pem
+      # Where ffmpeg writes HLS segments during a transcode. Parked on a real volume rather than
+      # the container's own writable layer for two reasons: the rootfs below is read-only, and a
+      # *movie* keeps every segment for as long as it plays (so the viewer can scrub anywhere) —
+      # a feature-length title at ~10 Mbps is comfortably into the gigabytes. Give this volume
+      # room, and check the System tab's free-space readout if you are unsure.
+      - TRANSCODE_TMP_DIR=/transcode
     volumes:
       # Persistent storage, mapped read-write: survives container recreation and image
       # updates. Without this, an update wipes accounts and everyone lands back on the
       # first-run admin setup screen.
       - ./appdata:/appdata:rw
+      - ./transcode:/transcode:rw
       # - ./ca-bundle.pem:/certs/ca-bundle.pem:ro
+    # --- Hardening ---------------------------------------------------------------------------
+    # The image already runs the server as an unprivileged user; these are the container-level
+    # settings worth keeping alongside it.
+    #
+    # ONE-TIME STEP FOR EXISTING INSTALLS: an ./appdata directory created by an earlier build (it
+    # ran as root) is owned by root, and the server now writes as uid 1000. If the container
+    # starts and reports the data directory is not usable, run on the host:
+    #     sudo chown -R 1000:1000 ./appdata ./transcode
+    # (Starting once with `user: "0:0"` below also fixes it automatically, then drops privileges.)
+    read_only: true
+    tmpfs:
+      # ffmpeg and Node still want somewhere for scratch files; segments go to /transcode, so this
+      # only has to hold small, transient things.
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Uncomment to have the entrypoint repair ownership of ./appdata and ./transcode on start
+    # (it chowns, then drops to uid 1000). Leave commented out when the directories are already
+    # owned correctly — running as root at all is what the rest of this block avoids.
+    # user: "0:0" 
     # Also baked into the image's own Dockerfile (so a plain `docker run` gets it too) —
     # declared here as well so stack-management UIs that only read the compose file itself
     # (rather than inspecting the image) still surface health status.

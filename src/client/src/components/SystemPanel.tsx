@@ -225,6 +225,7 @@ export function SystemPanel(): JSX.Element {
                 <th>Session</th>
                 <th>Running</th>
                 <th>Output</th>
+                <th>Disk used</th>
               </tr>
             </thead>
             <tbody>
@@ -233,11 +234,12 @@ export function SystemPanel(): JSX.Element {
                   <td>{session.sessionId}</td>
                   <td>{session.runningSeconds}s</td>
                   <td>{session.hasPlaylist ? 'playlist ready' : 'starting'}</td>
+                  <td>{formatBytesShort(session.bytes)}</td>
                 </tr>
               ))}
               {health && health.transcode.active.length === 0 && (
                 <tr>
-                  <td colSpan={3} className="admin-empty">
+                  <td colSpan={4} className="admin-empty">
                     None running
                   </td>
                 </tr>
@@ -245,6 +247,16 @@ export function SystemPanel(): JSX.Element {
             </tbody>
           </table>
         </div>
+        {health && (
+          <p className="setup-hint">
+            Segments are written to <code>{health.transcode.storage.dir}</code>
+            {health.transcode.storage.freeBytes !== null
+              ? ` — ${formatBytesShort(health.transcode.storage.freeBytes)} free there.`
+              : ' (free space unavailable).'}{' '}
+            A movie keeps every segment while it plays, so a feature-length title can use several
+            gigabytes; point <code>TRANSCODE_TMP_DIR</code> somewhere roomy if that is a problem.
+          </p>
+        )}
       </section>
 
       <section className="admin-section">

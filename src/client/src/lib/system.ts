@@ -60,7 +60,12 @@ export interface HealthReport {
     counts: Record<string, number>
   }
   guide: Array<{ kind: string; url: string; status: string; channelCount: number; programmeCount: number; error?: string }> | null
-  transcode: { active: Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean }> }
+  transcode: {
+    active: Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean; bytes: number }>
+    /** Where transcoded segments are written, and the free space there. A VOD session keeps every
+     *  segment until it stops, so this is the number that tells you whether a film will fit. */
+    storage: { dir: string; freeBytes: number | null; totalBytes: number | null }
+  }
   search: SearchStatus
   provider: Record<string, unknown> & { reachable?: boolean; error?: string; configured?: boolean }
   backups: Array<{ name: string; bytes: number; modifiedAt: string }>

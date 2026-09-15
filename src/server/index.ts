@@ -10,7 +10,7 @@ import { createRequire } from 'module'
 import { createProxyServer, type ProxyServerDeps } from './lib/proxyServer.js'
 import { fetchTextViaUpstream } from './lib/upstreamText.js'
 import { createNodeUpstreamRequest } from './lib/nodeUpstreamRequest.js'
-import { createTranscodeService } from './lib/transcodeService.js'
+import { createTranscodeService, prepareTranscodeDir, resolveTranscodeDir } from './lib/transcodeService.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
 import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './lib/sessionStore.js'
@@ -706,7 +706,8 @@ app.get('/api/admin/health', requireAuth, requireAdmin, (req, res) => {
         },
         guide,
         transcode: {
-          active: transcodeService.stats()
+          active: await transcodeService.stats(),
+          storage: await transcodeService.storage()
         },
         search: searchService.status(),
         security: {
@@ -1335,6 +1336,26 @@ createHttpServer(app).listen(PUBLIC_PORT, () => {
     .then((ffmpegPath) => console.log(`[transcode] ffmpeg: ${ffmpegPath}`))
     .catch((err) => console.error(`[transcode] no usable ffmpeg: ${err instanceof Error ? err.message : String(err)}`))
 
+  // Segments (especially a whole movie's worth — see resolveTranscodeDir) land here, so this is
+  // worth proving at boot rather than discovering as a stalled transcode later.
+  const transcodeDir = resolveTranscodeDir()
+  void prepareTranscodeDir(transcodeDir).then(async ({ error, swept }) => {
+    if (error) {
+      console.error(`[transcode] temp dir ${transcodeDir} ${error}`)
+      const uid = typeof process.getuid === 'function' ? process.getuid() : null
+      console.error(
+        `[transcode] Set TRANSCODE_TMP_DIR to a writable path, or fix ownership for uid ${uid ?? 'unknown'} ` +
+          `(a host directory created by an earlier root-run needs: sudo chown -R ${uid ?? 1000}:${uid ?? 1000} <dir>).`
+      )
+      return
+    }
+    const { freeBytes } = await transcodeService.storage()
+    console.log(
+      `[transcode] temp dir: ${transcodeDir}${freeBytes !== null ? ` (${formatBytes(freeBytes)} free)` : ''}` +
+        (swept > 0 ? ` — cleared ${swept} leftover session dir(s)` : '')
+    )
+  })
+
   const secretProblem = checkSessionSecret()
   if (secretProblem) {
     console.error(`[setup] ${secretProblem}`)
@@ -1344,6 +1365,13 @@ createHttpServer(app).listen(PUBLIC_PORT, () => {
   if (!health.ok) {
     console.error(`[setup] Data directory is NOT usable: ${health.error}`)
     console.error('[setup] Check that DATA_DIR is mounted read-write (docker-compose: ./appdata:/appdata:rw) and that users.json is valid JSON.')
+    // The container now runs unprivileged, so a data directory created by an earlier, root-run
+    // build is owned by the wrong uid — say so, and say exactly what fixes it, rather than
+    // leaving it to be inferred from an EACCES.
+    const runUid = typeof process.getuid === 'function' ? process.getuid() : null
+    if (runUid !== null && runUid !== 0) {
+      console.error(`[setup] This process runs as uid ${runUid}; a directory created by an earlier root-run needs: sudo chown -R ${runUid}:${runUid} <your appdata dir>`) 
+    }
   } else {
     try {
       if (!usersStore.hasUsers()) {

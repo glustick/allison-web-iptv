@@ -45,9 +45,18 @@ COPY package.json ./
 # or video (HEVC) codec can't be played directly by the browser — confirmed live on a real
 # provider). ffmpegResolver already prefers a working system ffmpeg over the bundled copy, so
 # installing this is all that's needed. Costs ~400MB of image size.
+# gosu rides along for the entrypoint's drop-privileges path (see docker-entrypoint.sh): it is a
+# few hundred KB and the alternative — `su`/`runuser` — drags in a whole login stack and mangles
+# signal delivery, which matters here because SIGTERM is how the server stops live transcodes on
+# shutdown. ffmpeg is the real payload of this layer.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg \
+  && apt-get install -y --no-install-recommends ffmpeg gosu \
   && rm -rf /var/lib/apt/lists/*
+
+# Both writable locations, created here and owned by the unprivileged user, so a *named* volume
+# picks up working ownership straight from the image. A host bind mount still arrives owned by
+# whoever created it on the host — see the README's hardening notes for the one-line chown.
+RUN mkdir -p /appdata /transcode && chown node:node /appdata /transcode
 
 EXPOSE 8085
 
@@ -57,4 +66,12 @@ EXPOSE 8085
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8085)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+# The server itself runs unprivileged. It never needs root: it reads /app, writes its own
+# database under /appdata, and writes transcode segments under TRANSCODE_TMP_DIR. The entrypoint
+# exists only for the case where a manager starts the container as root anyway, where it fixes
+# ownership once and then drops to this same user.
+USER node
+
+COPY --chown=node:node docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/server/index.js"]

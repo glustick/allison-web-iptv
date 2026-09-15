@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { mkdtemp, rm, readFile, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, statfs, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, extname } from 'path'
@@ -108,6 +108,90 @@ export interface TranscodeSession {
   inputStreamListEnded: boolean
 }
 
+export const TRANSCODE_DIR_PREFIX = 'allisoniptv-transcode-'
+
+/**
+ * Where transcoded segments are written.
+ *
+ * Defaults to the OS temp dir, which inside the Docker image is the container's own writable
+ * layer — fine for a quick live-TV fallback, but wrong for a full movie: the VOD playlist keeps
+ * every segment (`-hls_list_size 0`, so the viewer can scrub anywhere), which for a 2h20 feature
+ * at ~10.7 Mbps runs well past 10 GB. Two consequences: a long film can fill whatever filesystem
+ * this points at, and a read-only rootfs (a real container-hardening win) would have nowhere to
+ * put the output. TRANSCODE_TMP_DIR aims this at a real, sized volume instead.
+ */
+export function resolveTranscodeDir(): string {
+  const configured = process.env.TRANSCODE_TMP_DIR?.trim()
+  return configured && configured.length > 0 ? configured : tmpdir()
+}
+
+/** Bytes on disk under a directory, tolerating entries that disappear mid-walk. */
+async function directorySize(dir: string): Promise<number> {
+  let entries: string[]
+  try {
+    entries = await readdir(dir)
+  } catch {
+    return 0
+  }
+  let total = 0
+  for (const entry of entries) {
+    const full = join(dir, entry)
+    try {
+      const info = await stat(full)
+      total += info.isDirectory() ? await directorySize(full) : info.size
+    } catch {
+      // Deleted between readdir and stat (playlist rolling, or a stop landing mid-walk) — it
+      // contributed nothing to the real total either.
+    }
+  }
+  return total
+}
+
+/**
+ * Removes transcode directories left behind by a previous run. A clean shutdown deletes its own
+ * (see stopTranscode/stopAll), but a container that gets killed — or a host that loses power —
+ * leaves the last session's segments sitting on disk indefinitely. Nothing can be mid-transcode
+ * at boot, so every directory carrying this app's own prefix is garbage by definition.
+ */
+export async function sweepStaleTranscodeDirs(dir: string): Promise<number> {
+  let entries: string[]
+  try {
+    entries = await readdir(dir)
+  } catch {
+    return 0
+  }
+  let removed = 0
+  for (const entry of entries) {
+    if (!entry.startsWith(TRANSCODE_DIR_PREFIX)) continue
+    await rm(join(dir, entry), { recursive: true, force: true }).catch(() => {})
+    removed += 1
+  }
+  return removed
+}
+
+/**
+ * Boot-time preparation: make sure the directory exists, prove it is genuinely writable, and
+ * clear stale segments out. Returns an error string rather than throwing so the caller can report
+ * it in the same self-describing style as the other boot checks — a transcode that fails because
+ * its temp directory belongs to a different uid otherwise only surfaces much later, as a
+ * mysterious "ffmpeg exited before producing output".
+ */
+export async function prepareTranscodeDir(dir: string): Promise<{ error: string | null; swept: number }> {
+  try {
+    await mkdir(dir, { recursive: true })
+  } catch (err) {
+    return { error: `cannot be created (${err instanceof Error ? err.message : String(err)})`, swept: 0 }
+  }
+  const probe = join(dir, `.write-test-${process.pid}`)
+  try {
+    await writeFile(probe, 'ok')
+    await rm(probe, { force: true })
+  } catch (err) {
+    return { error: `is not writable (${err instanceof Error ? err.message : String(err)})`, swept: 0 }
+  }
+  return { error: null, swept: await sweepStaleTranscodeDirs(dir) }
+}
+
 export interface TranscodeServiceDeps {
   resolveFfmpegPath: () => Promise<string | null>
   // All six below have real production defaults (see createTranscodeService) — overridable
@@ -118,11 +202,16 @@ export interface TranscodeServiceDeps {
   stopGraceMs?: number
   subtitleGraceMs?: number
   probeTimeoutMs?: number
+  // Where ffmpeg writes its HLS output. Defaults to resolveTranscodeDir() (TRANSCODE_TMP_DIR,
+  // else the OS temp dir) — overridable so tests write into their own scratch directory.
+  tmpDir?: string
 }
 
 export interface TranscodeService {
   /** Live transcode sessions — used by the health page, not by playback. */
-  stats(): Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean }>
+  stats(): Promise<Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean; bytes: number }>>
+  /** Where segments land and how much room that filesystem has left. */
+  storage(): Promise<{ dir: string; freeBytes: number | null; totalBytes: number | null }>
   startTranscode(
     sourceUrl: string,
     isVod: boolean,
@@ -183,6 +272,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
   // clicked "check for extra audio tracks" wait out the full 240s VOD deadline for what's
   // supposed to be a quick, no-output probe.
   const probeTimeoutMs = deps.probeTimeoutMs ?? 30000
+  const tmpDir = deps.tmpDir ?? resolveTranscodeDir()
 
   const transcodeSessions = new Map<string, TranscodeSession>()
 
@@ -229,7 +319,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       cancelledSessions.delete(sessionId)
       throw new Error('Transcode cancelled')
     }
-    const dir = await mkdtemp(join(tmpdir(), 'allisoniptv-transcode-'))
+    const dir = await mkdtemp(join(tmpDir, TRANSCODE_DIR_PREFIX))
     const playlistFile = join(dir, 'playlist.m3u8')
 
     const proc = spawn(ffmpegPath, [
@@ -598,16 +688,36 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     })
   }
 
-  /** What the health page shows: which transcode sessions are live and how long they've run. */
-  function stats(): Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean }> {
+  /**
+   * What the health page shows: which transcode sessions are live, how long they've run, and how
+   * much disk each has written. That last number is the one that matters operationally — a VOD
+   * session keeps every segment it produces until it stops, so a feature-length title is
+   * gigabytes, not megabytes.
+   */
+  async function stats(): Promise<
+    Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean; bytes: number }>
+  > {
     const now = Date.now()
-    return [...transcodeSessions.entries()].map(([sessionId, session]) => ({
-      sessionId,
-      startedAt: new Date(session.startedAt).toISOString(),
-      runningSeconds: Math.round((now - session.startedAt) / 1000),
-      hasPlaylist: existsSync(join(session.dir, 'playlist.m3u8')) || existsSync(join(session.dir, 'master.m3u8'))
-    }))
+    return Promise.all(
+      [...transcodeSessions.entries()].map(async ([sessionId, session]) => ({
+        sessionId,
+        startedAt: new Date(session.startedAt).toISOString(),
+        runningSeconds: Math.round((now - session.startedAt) / 1000),
+        hasPlaylist: existsSync(join(session.dir, 'playlist.m3u8')) || existsSync(join(session.dir, 'master.m3u8')),
+        bytes: await directorySize(session.dir)
+      }))
+    )
   }
 
-  return { startTranscode, stopTranscode, serveTranscodeFile, stopAll, probeTracks, stats }
+  /** Where segments are being written, and how much room is left there. */
+  async function storage(): Promise<{ dir: string; freeBytes: number | null; totalBytes: number | null }> {
+    try {
+      const info = await statfs(tmpDir)
+      return { dir: tmpDir, freeBytes: Number(info.bavail) * Number(info.bsize), totalBytes: Number(info.blocks) * Number(info.bsize) }
+    } catch {
+      return { dir: tmpDir, freeBytes: null, totalBytes: null }
+    }
+  }
+
+  return { startTranscode, stopTranscode, serveTranscodeFile, stopAll, probeTracks, stats, storage }
 }
