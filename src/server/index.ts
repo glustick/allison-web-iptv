@@ -11,6 +11,7 @@ import { createProxyServer, type ProxyServerDeps } from './lib/proxyServer.js'
 import { fetchTextViaUpstream } from './lib/upstreamText.js'
 import { createNodeUpstreamRequest } from './lib/nodeUpstreamRequest.js'
 import { createTranscodeService, prepareTranscodeDir, resolveTranscodeDir } from './lib/transcodeService.js'
+import { dataDirRecoveryHint, describeDataDirMount } from './lib/dataDirMount.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
 import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './lib/sessionStore.js'
@@ -1379,15 +1380,15 @@ createHttpServer(app).listen(PUBLIC_PORT, () => {
   if (!health.ok) {
     console.error(`[setup] Data directory is NOT usable: ${health.error}`)
     console.error('[setup] Check that DATA_DIR is mounted read-write (docker-compose: ./appdata:/appdata:rw) and that users.json is valid JSON.')
-    // The container now runs unprivileged, so a data directory created by an earlier, root-run
-    // build is owned by the wrong uid — say so, and say exactly what fixes it, rather than
-    // leaving it to be inferred from an EACCES. Restarting matters as much as the chown: SQLite
-    // fixes its read/write mode when it opens the file, so a permission change made while this
-    // process was already running does not take effect until it reopens the database.
+    // The container runs unprivileged, so a data directory created by an earlier, root-running
+    // build belongs to the wrong uid. Name the actual host path to fix, read from this container's
+    // own mount table — an operator left to guess "<your appdata dir>" guessed wrong once already.
+    // A directory mounted :ro is called out separately, because no chown can fix that.
     const runUid = typeof process.getuid === 'function' ? process.getuid() : null
     if (runUid !== null && runUid !== 0) {
-      console.error(`[setup] This process runs as uid ${runUid}; a directory created by an earlier root-run needs: sudo chown -R ${runUid}:${runUid} <your appdata dir>`)
-      console.error('[setup] Fix ownership and then RESTART this container: SQLite fixes its write mode when it opens the file.')
+      for (const line of dataDirRecoveryHint(DATA_DIR, runUid, describeDataDirMount(DATA_DIR))) {
+        console.error(`[setup] ${line}`)
+      }
     }
   } else {
     try {
