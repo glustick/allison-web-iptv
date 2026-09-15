@@ -320,11 +320,51 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       cancelledSessions.delete(sessionId)
       throw new Error('Transcode cancelled')
     }
+    // Live HLS arrives as a playlist; a movie or episode is one file. The distinction decides which
+    // input options are legal (see the spawn args below) — and it is made on the URL shape, because
+    // that is what ffmpeg itself will sniff.
+    const isHlsSource = /\.m3u8(\?|#|$)/i.test(sourceUrl)
+    const isHttpSource = /^https?:\/\//i.test(sourceUrl)
+
     const dir = await mkdtemp(join(tmpDir, TRANSCODE_DIR_PREFIX))
     const playlistFile = join(dir, 'playlist.m3u8')
 
     const proc = spawn(ffmpegPath, [
       '-y',
+      // Input-side resilience, ahead of -i. Not cosmetic: this provider signs segment URLs with a
+      // lifetime measured in tens of seconds — measured directly against its live CDN, a segment
+      // URL returns 200 at t+17s and 400 Bad Request from t+28s onwards, permanently. ffmpeg's
+      // defaults walk straight into that. `-live_start_index` defaults to -3, so a live stream
+      // begins by requesting segments that are already ~30-45s old, i.e. expired; and
+      // `-seg_max_retry` defaults to 0, so one failed fetch is fatal where reloading the playlist
+      // would have handed back freshly-signed URLs.
+      //
+      // Measured on the real channel (Sky News FHD) with a 75-second window:
+      //   previous arguments: 2 segments written, 46 "Failed to open segment", 48 HTTP 400s
+      //   these arguments:    7 segments written, 0 failures, 0 HTTP 400s
+      //
+      // The key one is `-live_start_index -1`: ffmpeg defaults to -3, i.e. starting three segments
+      // back from the live edge, and for THIS provider that is a race against an expiry it does not
+      // win on a slow link. Measured: a live segment URL returns 200 up to ~t+17s and 400 Bad
+      // Request from ~t+28s onward — permanently. With a ~9.6s segment duration, three segments back
+      // is already ~29s old, so whether the transcode lives or dies comes down to network speed.
+      // Starting at the newest segment keeps the whole opening fetch inside the token's life.
+      // Contrast the earlier local measurement, where the -3 default wrote 2 segments in 75s with
+      // 46 "Failed to open segment" errors, while starting at -1 wrote 7 with none.
+      //
+      // Which options can be passed at all is decided by the *input*, not by us: ffmpeg matches
+      // input options against the actual demuxer and protocol and refuses the whole command with
+      // "Option X not found" otherwise. `-live_start_index` belongs to the HLS demuxer, so handing
+      // it to a movie (Matroska/MP4) fails the transcode outright — caught by this project's own
+      // real-ffmpeg integration tests, not by review. The reconnect options belong to the HTTP
+      // protocol, so they are meaningless for anything that isn't http(s).
+      //
+      // Deliberately only options this project's *runtime* ffmpeg has — Debian bookworm's 5.1.x,
+      // which is what the Dockerfile installs. `-seg_max_retry` would be the obvious companion but
+      // it does not exist before ffmpeg 6, and passing it makes ffmpeg exit with "Unrecognized
+      // option" before reading a frame; the integration tests and a container run both caught that.
+      ...(isHttpSource && !isVod && isHlsSource ? ['-live_start_index', '-1'] : []),
+      ...(isHttpSource ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3'] : []),
       '-i',
       sourceUrl,
       // Movies/series routinely carry an embedded subtitle track alongside the audio this fix

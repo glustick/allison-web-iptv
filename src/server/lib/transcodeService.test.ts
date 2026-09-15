@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { chmodSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync, statSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
@@ -903,4 +903,68 @@ describe('real ffmpeg integration', () => {
       rmSync(fixtureDir, { recursive: true, force: true })
     }
   }, 30000)
+})
+
+describe('live input resilience', () => {
+  // The provider signs live segment URLs with a lifetime of tens of seconds (measured: 200 at
+  // t+17s, 400 from t+28s). ffmpeg's defaults — live_start_index -3, seg_max_retry 0 — spend that
+  // budget before they start. These pin the flags that fix it so a refactor can't quietly drop them.
+  async function argsFor(isVod: boolean): Promise<string[]> {
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-live-args-'))
+    mkdirSync(join(fixtureDir, 'transcode'), { recursive: true })
+    const argsFile = join(fixtureDir, `args-${isVod ? 'vod' : 'live'}.txt`)
+    const service = track(
+      makeService({
+        resolveFfmpegPath: async () => FAKE_FFMPEG,
+        tmpDir: join(fixtureDir, 'transcode')
+      })
+    )
+    try {
+      await withEnv({ FAKE_FFMPEG_ARGS_FILE: argsFile }, () =>
+        withFakeFfmpegMode('dump_args', async () => {
+          // Realistic shapes: live is a playlist, a movie is one file. The flags under test are
+          // chosen from this shape, so using one URL for both would test nothing.
+          const source = isVod ? 'https://upstream.example/movie/user/pass/1.mp4' : 'https://upstream.example/live/user/pass/1.m3u8'
+          await service.startTranscode(source, isVod, `s-${isVod}`)
+        })
+      )
+      return readFileSync(argsFile, 'utf8').split('\n').filter(Boolean)
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }
+
+  it('starts a live stream at the newest segment instead of three back', async () => {
+    const args = await argsFor(false)
+    const i = args.indexOf('-live_start_index')
+    expect(i).toBeGreaterThanOrEqual(0)
+    expect(args[i + 1]).toBe('-1')
+    expect(i).toBeLessThan(args.indexOf('-i'))
+  })
+
+  it('never passes an option this project\'s ffmpeg does not have', async () => {
+    // -seg_max_retry is the natural companion flag and exists only from ffmpeg 6; the image ships
+    // Debian bookworm's 5.1.x, where it makes ffmpeg exit with "Unrecognized option" before it
+    // reads a frame. Verified by running the real binary, not by reading release notes.
+    const args = await argsFor(false)
+    expect(args).not.toContain('-seg_max_retry')
+  })
+
+  it('retries the connection instead of giving up on the first dropped request', async () => {
+    const args = await argsFor(false)
+    expect(args).toContain('-reconnect')
+    expect(args).toContain('-reconnect_streamed')
+  })
+
+  it('does not apply a live start index to a movie, which has no live window', async () => {
+    const args = await argsFor(true)
+    expect(args).not.toContain('-live_start_index')
+  })
+
+  it('omits the HLS-demuxer option for a movie, which ffmpeg would reject outright', async () => {
+    // Regression guard: -live_start_index is an HLS-demuxer option, and passing it to a
+    // Matroska/MP4 input fails the whole transcode before a single frame is read.
+    const args = await argsFor(true)
+    expect(args).not.toContain('-live_start_index')
+  })
 })

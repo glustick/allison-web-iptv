@@ -8,6 +8,13 @@ set -u
 last_arg="${@: -1}"
 
 case "${FAKE_FFMPEG_MODE:-}" in
+  dump_args)
+    # Records the exact argv startTranscode built, so tests can pin the input-side options
+    # (live start index, retries, reconnects) rather than trusting them to survive a refactor.
+    printf '%s\n' "$@" > "${FAKE_FFMPEG_ARGS_FILE:?FAKE_FFMPEG_ARGS_FILE must be set}"
+    printf '#EXTM3U\n#EXT-X-ENDLIST\n' > "$last_arg"
+    sleep 5
+    ;;
   success)
     printf '#EXTM3U\n#EXT-X-ENDLIST\n' > "$last_arg"
     sleep 5
