@@ -85,6 +85,11 @@ export function LiveTv({
   const [nowPlaying, setNowPlaying] = useState<LiveStream | null>(null)
   // Set when what is playing is a past programme rather than the live channel.
   const [catchup, setCatchup] = useState<{ startMs: number; stopMs: number; title: string } | null>(null)
+  // Catch-up is raw MPEG-TS: hls.js parses playlists and Safari cannot decode MPEG-TS at all, so
+  // the browser is handed this app's own HLS output instead — the same transcode machinery the
+  // silent-audio fallback uses. Null while that transcode is starting.
+  const [catchupStream, setCatchupStream] = useState<string | null>(null)
+  const [catchupError, setCatchupError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [prefs, setPrefs] = useState<PrefsState>(EMPTY_PREFS)
   const [prefsError, setPrefsError] = useState<string | null>(null)
@@ -440,16 +445,53 @@ export function LiveTv({
 
   // Catch-up swaps this channel's live playlist for the provider's archive stream — the player, the
   // silent-audio fallback and the idle sweep all keep working untouched.
-  const catchupUrl =
-    nowPlaying && catchup
-      ? session.client.getTimeshiftUrl(
-          nowPlaying.stream_id,
-          Math.floor(catchup.startMs / 1000),
-          Math.max(1, Math.ceil((catchup.stopMs - catchup.startMs) / 60_000))
-        )
-      : null
+  // Starting a catch-up transcode, and stopping it again when the programme changes or the viewer
+  // goes back to live: the session belongs to this playback, not to the channel.
+  useEffect(() => {
+    if (!catchup || !nowPlaying) {
+      setCatchupStream(null)
+      return
+    }
+    const sourceUrl = session.client.getTimeshiftUrl(
+      nowPlaying.stream_id,
+      Math.floor(catchup.startMs / 1000),
+      Math.max(1, Math.ceil((catchup.stopMs - catchup.startMs) / 60_000))
+    )
+    const sessionId = crypto.randomUUID()
+    let cancelled = false
+    setCatchupStream(null)
+    setCatchupError(null)
+    fetch('/api/transcode/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // isVod false: an archive window is a rolling source, so it gets live's shape and deadline.
+      body: JSON.stringify({ sourceUrl, isVod: false, sessionId })
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.text()) || `Could not start catch-up (${res.status})`)
+        return (await res.json()) as { url: string }
+      })
+      .then(({ url }) => {
+        if (!cancelled) setCatchupStream(url)
+      })
+      .catch((err) => {
+        if (!cancelled) setCatchupError(err instanceof Error ? err.message : 'Could not start catch-up')
+      })
+    return () => {
+      cancelled = true
+      void fetch('/api/transcode/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId })
+      }).catch(() => {})
+    }
+  }, [catchup, nowPlaying, session.client])
+  
+  // Catch-up plays the transcoded HLS; everything else plays the live playlist.
   const streamUrl = nowPlaying
-    ? catchupUrl ?? session.client.getStreamUrl('live', nowPlaying.stream_id, 'm3u8')
+    ? catchup
+      ? catchupStream
+      : session.client.getStreamUrl('live', nowPlaying.stream_id, 'm3u8')
     : null
   // A provider category is a category: its name is what belongs above its channel list (and the
   // guide under it), not "All channels" — which is only true for the unfiltered selection.
@@ -554,6 +596,11 @@ export function LiveTv({
           title="Drag to resize the sidebar"
         />
 
+        {catchup && !catchupStream && !catchupError && (
+          <div className="epg-note" style={{ padding: '8px 16px' }}>
+            Preparing the catch-up stream — a few seconds the first time.
+          </div>
+        )}
         {streamUrl && nowPlaying && (
           <div className="player-section" style={{ '--player-max-height': `${playerMaxHeight}px` } as CSSProperties}>
             {/* A different source for the same channel: key it so the player reloads. */}
@@ -622,9 +669,9 @@ export function LiveTv({
           </div>
         )}
 
-        {(loadError || prefsError) && (
+        {(loadError || prefsError || catchupError) && (
           <div className="login-error" style={{ padding: '8px 16px' }}>
-            {loadError ?? prefsError}
+            {loadError ?? prefsError ?? catchupError}
           </div>
         )}
 

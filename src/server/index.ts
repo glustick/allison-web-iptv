@@ -23,7 +23,7 @@ import { createSearchService } from './lib/searchService.js'
 import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagnostics.js'
 import { createRateLimiter } from './lib/rateLimit.js'
 import { assertSafeExternalUrl, isSameOrigin, isSecureRequest, securityHeaders, UnsafeUrlError } from './lib/security.js'
-import { mapSameOriginStreamPath } from './lib/upstreamUrl.js'
+import { mapSameOriginStreamPath, parseSameOriginTimeshiftPath } from './lib/upstreamUrl.js'
 import { createProviderWatch, isDiscordWebhookUrl, postDiscordWebhook, type ProviderWatch } from './lib/providerWatch.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
 import {
@@ -1451,6 +1451,20 @@ function resolveUpstreamUrl(relativeOrAbsolute: string, req: Request): string {
   // player sits on the un-decodable original stream reporting fragParsingError. Anything that is
   // not one of those paths falls through to the same-origin resolution below.
   const mappedSession = getAuthSession(req)
+  // A catch-up source handed to the transcoder: catch-up is raw MPEG-TS, which hls.js cannot
+  // parse and Safari cannot decode at all, so the browser is given this app's HLS output instead.
+  // See lib/upstreamUrl.ts — and note this has to happen *before* the origin check below, since the
+  // provider path is what that check is supposed to see.
+  const mappedTimeshift = parseSameOriginTimeshiftPath(relativeOrAbsolute)
+  const timeshiftCredentials = mappedSession ? resolveAccountCredentials(mappedSession.username) : null
+  if (mappedTimeshift && timeshiftCredentials) {
+    relativeOrAbsolute = buildTimeshiftPath(
+      timeshiftCredentials,
+      mappedTimeshift.file,
+      mappedTimeshift.startSeconds,
+      mappedTimeshift.durationMinutes
+    )
+  }
   const mappedPath = mapSameOriginStreamPath(
     relativeOrAbsolute,
     mappedSession ? resolveAccountCredentials(mappedSession.username) : null

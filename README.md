@@ -397,8 +397,10 @@ The server builds the provider's own timeshift path (`/timeshift/<user>/<pass>/<
 in one small function (`lib/timeshift.ts`), because that shape is a provider convention the API does
 not advertise — confirmed against the real provider (HTTP 200, `video/mp2t`). A start outside any
 plausible archive window is refused before it becomes a request for years of video, and the browser
-never sees the credentials: playback goes through `/api/timeshift/<id>.ts?start=&duration=` exactly
-like the live streams do.
+never sees the credentials: playback goes through `/api/timeshift/<id>.ts?start=&duration=`, and —
+because a timeshift stream is raw MPEG-TS, which hls.js cannot parse and Safari cannot decode at all —
+the browser is handed this app's own HLS output from the transcoder instead, the same machinery the
+E-AC-3 fallback uses.
 
 ## Tabs that do not stop playback
 

@@ -48,3 +48,35 @@ export function mapSameOriginStreamPath(
   if (!(STREAM_KINDS as readonly string[]).includes(kind)) return null
   return `/${kind}/${encodeURIComponent(credentials.username)}/${encodeURIComponent(credentials.password)}/${file}`
 }
+
+// Catch-up has the same problem as playback, one layer deeper: the transcoder is handed a
+// client-supplied source URL and fetches it itself, so a same-origin /api/timeshift/... has to be
+// mapped back onto the provider's own timeshift path. Without this, asking the transcoder to convert
+// a catch-up stream resolves the *app's* own route against the provider and fails.
+//
+// It matters because catch-up streams are raw MPEG-TS: hls.js parses playlists, and Safari cannot
+// decode MPEG-TS at all, so the browser has to be given HLS — which means a transcode, which means
+// this mapping.
+const TIMESHIFT_PATH_PATTERN = /^\/api\/timeshift\/([A-Za-z0-9_-]+\.ts)$/
+
+export interface TimeshiftPathRequest {
+  file: string
+  startSeconds: number
+  durationMinutes: number
+}
+
+/** The parts of a same-origin catch-up URL, or null when the input is not one. */
+export function parseSameOriginTimeshiftPath(input: string): TimeshiftPathRequest | null {
+  if (typeof input !== 'string') return null
+  const [path, query = ''] = input.split('#')[0].split('?')
+  const match = TIMESHIFT_PATH_PATTERN.exec(path)
+  if (!match) return null
+  const params = new URLSearchParams(query)
+  // has() as well as a numeric check: Number(null) is 0, so a URL that simply omitted the parameters
+  // would look like a valid request for a stream starting at the epoch.
+  if (!params.has('start') || !params.has('duration')) return null
+  const startSeconds = Number(params.get('start'))
+  const durationMinutes = Number(params.get('duration'))
+  if (!Number.isFinite(startSeconds) || !Number.isFinite(durationMinutes)) return null
+  return { file: match[1], startSeconds, durationMinutes }
+}
