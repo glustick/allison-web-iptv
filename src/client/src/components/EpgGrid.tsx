@@ -174,7 +174,7 @@ function EpgRow({
               key={p.key}
               className={`epg-block${isPast ? ' epg-block--past' : ''}${catchup ? ' epg-block--catchup' : ''}`}
               style={{ left: `${left}%`, width: `${width}%` }}
-              title={`${formatTime(p.startMs)} – ${formatTime(p.stopMs)}\n${p.title}${p.description ? '\n' + p.description : ''}`}
+              title={`${formatTime(p.startMs)} – ${formatTime(p.stopMs)}\n${p.title}${p.description ? '\n' + p.description : ''}${catchup ? '\n▶ Play from catch-up' : ''}`}
               onClick={(e) => {
                 e.stopPropagation()
                 if (didPan()) return
