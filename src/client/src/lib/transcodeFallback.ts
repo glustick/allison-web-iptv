@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { noteStreamNeedsTranscode } from './transcodeHints'
 import type { ErrorData } from 'hls.js'
 
 export interface TrackSelectionRequest {
@@ -137,6 +138,8 @@ export function useTranscodeFallback(): {
     (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void): void => {
       triedRef.current = true
       awaitingRef.current = true
+      // This stream needed converting once, so it will again — the next play skips straight to it.
+      noteStreamNeedsTranscode(originalUrl)
       const sessionId = crypto.randomUUID()
       sessionIdRef.current = sessionId
       fetch('/api/transcode/start', {

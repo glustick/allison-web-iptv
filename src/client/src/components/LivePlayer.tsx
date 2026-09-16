@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
+import { streamNeedsTranscode } from '../lib/transcodeHints'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
@@ -85,6 +86,11 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     if (!video) return
     setError(null)
     beginRun()
+    // Known to need converting (lib/transcodeHints.ts): skip the direct attempt rather than playing
+    if (streamNeedsTranscode(url)) {
+      tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
+      return
+    }
     const sourceUrl = getSourceUrl(url)
     let hls: Hls | null = null
     let networkRetryCount = 0

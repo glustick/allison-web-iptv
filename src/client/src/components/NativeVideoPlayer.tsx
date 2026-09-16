@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
+import { streamNeedsTranscode } from '../lib/transcodeHints'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { evaluatePlaybackSample, type PlaybackWatchState } from '../lib/playbackRecovery'
 import { TrackControls, type PlayerTrack } from './TrackControls'
@@ -112,6 +113,12 @@ export function NativeVideoPlayer({
     window.addEventListener('pagehide', report)
     const markPlaying = (): void => setPreparing(false)
     video.addEventListener('playing', markPlaying)
+    // Known to need converting (lib/transcodeHints.ts): go straight there instead of spending
+    if (streamNeedsTranscode(url)) {
+      setPreparing(true)
+      tryFallbackForSilentAudio(url, true, () => setReloadTick((t) => t + 1), (message) => setError(message))
+      return
+    }
     const sourceUrl = getSourceUrl(url)
     const isM3u8 = sourceUrl.endsWith('.m3u8')
 
