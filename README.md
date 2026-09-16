@@ -386,6 +386,20 @@ when the provider is slow or entirely down. (Search tokenises differently from t
 on purpose: the matcher drops packaging words like `HD`/`Channel` because it is deciding identity,
 whereas search keeps them, because people type the words they can see.)
 
+## Catch-up: play a programme that already finished
+
+For channels your provider flags with `tv_archive`, clicking a **finished** programme in the guide
+plays it from the provider's archive instead of the live channel — the now-playing bar says which
+programme it is, and **Return to live** switches back. Programmes still on air are left to the live
+stream, since that is the better answer for those.
+
+The server builds the provider's own timeshift path (`/timeshift/<user>/<pass>/<minutes>/<start>/<id>.ts`)
+in one small function (`lib/timeshift.ts`), because that shape is a provider convention the API does
+not advertise — confirmed against the real provider (HTTP 200, `video/mp2t`). A start outside any
+plausible archive window is refused before it becomes a request for years of video, and the browser
+never sees the credentials: playback goes through `/api/timeshift/<id>.ts?start=&duration=` exactly
+like the live streams do.
+
 ## Tabs that do not stop playback
 
 **EPG**, **Admin** and **System** open in their own browser tab, because all three are configuration

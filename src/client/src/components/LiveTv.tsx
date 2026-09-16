@@ -83,6 +83,8 @@ export function LiveTv({
   const [selection, setSelection] = useState<Selection>({ type: 'favourites' })
   const [providerChannels, setProviderChannels] = useState<LiveStream[]>([])
   const [nowPlaying, setNowPlaying] = useState<LiveStream | null>(null)
+  // Set when what is playing is a past programme rather than the live channel.
+  const [catchup, setCatchup] = useState<{ startMs: number; stopMs: number; title: string } | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [prefs, setPrefs] = useState<PrefsState>(EMPTY_PREFS)
   const [prefsError, setPrefsError] = useState<string | null>(null)
@@ -309,6 +311,7 @@ export function LiveTv({
   const selectChannel = useCallback(
     (channel: LiveStream | null): void => {
       setNowPlaying(channel)
+        setCatchup(null)
       if (!channel) return
       // Watching something is what history means here; failures are surfaced but never block play.
       void recordHistory({ kind: 'live', streamId: channel.stream_id, name: channel.name, category: channel.category_id })
@@ -356,6 +359,16 @@ export function LiveTv({
       handlePrefsError(err, 'Could not create the category')
     }
   }, [applyPrefs, handlePrefsError, newCategoryName, prefs])
+
+  // Playing a past programme: the same channel from the provider's archive. Set *after*
+  // selectChannel, which clears it — selectChannel means "play this channel live".
+  const playCatchup = useCallback(
+    (channel: LiveStream, programme: { startMs: number; stopMs: number; title: string }): void => {
+      selectChannel(channel)
+      setCatchup({ startMs: programme.startMs, stopMs: programme.stopMs, title: programme.title })
+    },
+    [selectChannel]
+  )
 
   const handleSavePicks = useCallback(async (): Promise<void> => {
     if (!selectedCustom) return
@@ -425,7 +438,19 @@ export function LiveTv({
     }
   }, [applyPrefs, handlePrefsError, prefs])
 
-  const streamUrl = nowPlaying ? session.client.getStreamUrl('live', nowPlaying.stream_id, 'm3u8') : null
+  // Catch-up swaps this channel's live playlist for the provider's archive stream — the player, the
+  // silent-audio fallback and the idle sweep all keep working untouched.
+  const catchupUrl =
+    nowPlaying && catchup
+      ? session.client.getTimeshiftUrl(
+          nowPlaying.stream_id,
+          Math.floor(catchup.startMs / 1000),
+          Math.max(1, Math.ceil((catchup.stopMs - catchup.startMs) / 60_000))
+        )
+      : null
+  const streamUrl = nowPlaying
+    ? catchupUrl ?? session.client.getStreamUrl('live', nowPlaying.stream_id, 'm3u8')
+    : null
   // A provider category is a category: its name is what belongs above its channel list (and the
   // guide under it), not "All channels" — which is only true for the unfiltered selection.
   const providerCategoryName =
@@ -531,9 +556,26 @@ export function LiveTv({
 
         {streamUrl && nowPlaying && (
           <div className="player-section" style={{ '--player-max-height': `${playerMaxHeight}px` } as CSSProperties}>
-            <LivePlayer url={streamUrl} channelKey={`live:${nowPlaying.stream_id}`} />
+            {/* A different source for the same channel: key it so the player reloads. */}
+            <LivePlayer
+              url={streamUrl}
+              channelKey={catchup ? `live:${nowPlaying.stream_id}@${catchup.startMs}` : `live:${nowPlaying.stream_id}`}
+            />
             <div className="now-playing-bar">
-              <span>Now playing: {nowPlaying.name}</span>
+              <span>
+                Now playing: {nowPlaying.name}
+                {catchup ? ` — catch-up: ${catchup.title}` : ''}
+              </span>
+              {catchup && (
+                <button
+                  type="button"
+                  className="admin-small-btn"
+                  onClick={() => setCatchup(null)}
+                  title="Go back to this channel live"
+                >
+                  Return to live
+                </button>
+              )}
               <span className="now-playing-actions">
                 <button
                   type="button"
@@ -637,6 +679,7 @@ export function LiveTv({
             activeStreamId={nowPlaying?.stream_id}
             onSelectChannel={selectChannel}
             onOpenEpgSettings={onOpenEpgSettings}
+            onPlayCatchup={playCatchup}
             emptyMessage={
               selection.type === 'favourites' ? 'No favourites yet — press ☆ on a channel while it plays.' : undefined
             }
@@ -754,6 +797,7 @@ export function LiveTv({
             activeStreamId={nowPlaying?.stream_id}
             onSelectChannel={selectChannel}
             onOpenEpgSettings={onOpenEpgSettings}
+            onPlayCatchup={playCatchup}
             emptyMessage={
               selection.type === 'favourites'
                 ? 'No favourites yet — press ☆ on a channel while it plays.'

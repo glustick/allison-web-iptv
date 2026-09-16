@@ -281,14 +281,11 @@ export function EpgGrid({
       startScrollTop: scroller?.scrollTop ?? 0,
       maxScrollTop: scroller ? Math.max(0, scroller.scrollHeight - scroller.clientHeight) : 0
     }
-    // Guarded: capture throws for a pointer the browser does not consider active (a synthetic
-    // event in a test harness, or a pointer already released). Panning works without it — the
-    // element still receives the moves it is over — so a failure here must not abort the gesture.
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId)
-    } catch {
-      /* capture is an optimisation, not a requirement */
-    }
+    // Deliberately *not* capturing the pointer on press. Pointer capture also retargets the
+    // compatibility mouse events, so a click on a programme block would be delivered to the element
+    // that captured — this drag surface — and the block's own handler would never run. A synthetic
+    // .click() bypasses all of that, which is exactly how the breakage hid: real clicks stopped
+    // selecting anything the day panning was added. Capture is taken below, once a drag starts.
     setPanning(true)
   }, [])
 
@@ -298,7 +295,15 @@ export function EpgGrid({
     const axis = panAxis(pan.startX, pan.startY, event.clientX, event.clientY)
     // Below the threshold this is still a click on whatever is under the pointer.
     if (axis === 'none') return
-    pannedRef.current = true
+    if (!pannedRef.current) {
+      pannedRef.current = true
+      // Now it is a drag, keep receiving moves even when the pointer leaves this element.
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId)
+      } catch {
+        /* capture is an optimisation, not a requirement */
+      }
+    }
 
     if (axis === 'time') {
       const next = windowOffsetAfterDrag(
