@@ -1034,6 +1034,19 @@ body.resizing-col {
 
 /* --- Library: favourites, history, custom categories ------------------------------------- */
 
+/* Segmented toggle in a list toolbar (see LiveTv.tsx's guide/list choice for Favourites and custom
+   categories). The pressed half is highlighted, so which view you are in is obvious. */
+.view-toggle {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.admin-small-btn.active {
+  border-color: #4f7cff;
+  color: #e7e9ee;
+  background: rgba(79, 124, 255, 0.15);
+}
+
 .sidebar-section-label {
   padding: 14px 14px 6px;
   font-size: 11px;

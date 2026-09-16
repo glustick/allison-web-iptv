@@ -6,6 +6,7 @@ import { EpgGrid } from './EpgGrid'
 import { ReorderableChannelList, type ReorderableRow } from './ReorderableChannelList'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { sectionTitle } from '../lib/sectionTitle'
+import { loadStoredLibraryView, parseLibraryView, saveLibraryView, type LibraryView } from '../lib/libraryView'
 import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
 import {
   addChannelToCategory,
@@ -188,6 +189,28 @@ export function LiveTv({
     return map
   }, [providerChannels])
 
+  // Reported as "the favourite EPG is missing": Favourites and custom categories were list-only,
+  // so the guide did not exist for them. Both views earn their place — the list is where reordering
+  // and removal live, the guide is where you see what is on — so this is a choice rather than a
+  // replacement: defaulting to the guide for Favourites (what was asked for) and to the list for a
+  // custom category, whose main actions ("Add channels", ✕) live in the list.
+  const [libraryViewOverride, setLibraryViewOverride] = useState<LibraryView | null>(() => loadStoredLibraryView())
+  const libraryView: LibraryView = libraryViewOverride ?? (selection.type === 'favourites' ? 'guide' : 'list')
+  const chooseLibraryView = useCallback((view: LibraryView): void => {
+    setLibraryViewOverride(view)
+    saveLibraryView(view)
+  }, [])
+
+  // The guide draws a channel icon. Library rows carry their own (falling back to the provider's list
+  // when it happens to be loaded), but the synthesised streams these views are built from carry
+  // none — so borrow the row's.
+  const guideChannels = useMemo(
+    () =>
+      channels.map((channel) =>
+        channel.stream_icon ? channel : { ...channel, stream_icon: providerIconById.get(channel.stream_id) ?? '' }
+      ),
+    [channels, providerIconById]
+  )
   const libraryRows: ReorderableRow[] = useMemo(() => {
     if (selection.type === 'favourites') {
       return liveFavourites.map((favourite) => ({
@@ -578,6 +601,28 @@ export function LiveTv({
               </button>
             </>
           )}
+          {(selection.type === 'favourites' || selection.type === 'custom') && !picking && (
+            <span className="view-toggle" role="group" aria-label="How to show these channels">
+              <button
+                type="button"
+                className={libraryView === 'guide' ? 'admin-small-btn active' : 'admin-small-btn'}
+                aria-pressed={libraryView === 'guide'}
+                onClick={() => chooseLibraryView('guide')}
+                title="Show the guide for these channels"
+              >
+                Guide
+              </button>
+              <button
+                type="button"
+                className={libraryView === 'list' ? 'admin-small-btn active' : 'admin-small-btn'}
+                aria-pressed={libraryView === 'list'}
+                onClick={() => chooseLibraryView('list')}
+                title="Show the reorderable list"
+              >
+                List
+              </button>
+            </span>
+          )}
           {selection.type === 'history' && prefs.history.length > 0 && (
             <button type="button" className="admin-small-btn" onClick={() => void handleClearHistory()}>
               Clear history
@@ -585,7 +630,18 @@ export function LiveTv({
           )}
         </div>
 
-        {(selection.type === 'favourites' || selection.type === 'history' || selection.type === 'custom') && !picking ? (
+        {(selection.type === 'favourites' || selection.type === 'custom') && !picking && libraryView === 'guide' ? (
+          <EpgGrid
+            session={session}
+            channels={guideChannels}
+            activeStreamId={nowPlaying?.stream_id}
+            onSelectChannel={selectChannel}
+            onOpenEpgSettings={onOpenEpgSettings}
+            emptyMessage={
+              selection.type === 'favourites' ? 'No favourites yet — press ☆ on a channel while it plays.' : undefined
+            }
+          />
+        ) : (selection.type === 'favourites' || selection.type === 'history' || selection.type === 'custom') && !picking ? (
           <ReorderableChannelList
             rows={libraryRows}
             reorderable={selection.type !== 'history'}
@@ -694,7 +750,7 @@ export function LiveTv({
         ) : (
           <EpgGrid
             session={session}
-            channels={channels}
+            channels={guideChannels}
             activeStreamId={nowPlaying?.stream_id}
             onSelectChannel={selectChannel}
             onOpenEpgSettings={onOpenEpgSettings}

@@ -402,6 +402,11 @@ whereas search keeps them, because people type the words they can see.)
 
 ## Your library: favourites, history and custom categories
 
+Favourites and custom categories can be shown either as the **reorderable list** (drag to reorder,
+✕ to remove, and where a category's *Add channels* lives) or as the **guide**, showing what is on
+across just those channels. A small **Guide / List** toggle sits above them and remembers your
+choice; Favourites opens on the guide.
+
 All three live in the sidebar and are stored per account in the database:
 
 - **★ Favourites** — the star in the now-playing bar toggles the channel you're watching; the
