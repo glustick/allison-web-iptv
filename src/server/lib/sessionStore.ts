@@ -12,6 +12,10 @@ export interface SessionCredentials {
   // Optional extra XMLTV guide sources (see epgService.ts) — carried with the credentials so
   // /api/epg can aggregate them alongside the provider's own guide.
   epgUrls?: string[]
+  // Where to post provider-outage alerts (a Discord webhook — see lib/providerWatch.ts). Stored with
+  // the credentials rather than in preferences because it is a posting credential: anyone holding it
+  // can write to that channel.
+  alertWebhook?: string
 }
 
 export interface EncryptedSessionPayload {

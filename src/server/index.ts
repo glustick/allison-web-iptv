@@ -24,6 +24,7 @@ import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagn
 import { createRateLimiter } from './lib/rateLimit.js'
 import { assertSafeExternalUrl, isSameOrigin, isSecureRequest, securityHeaders, UnsafeUrlError } from './lib/security.js'
 import { mapSameOriginStreamPath } from './lib/upstreamUrl.js'
+import { createProviderWatch, isDiscordWebhookUrl, postDiscordWebhook } from './lib/providerWatch.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
 import {
   applyPendingRestore,
@@ -554,7 +555,7 @@ app.get('/api/session', requireAuth, (req, res) => {
   try {
     const stored = usersStore.getIptvCredentials(session.username)
     if (!stored) {
-      res.json({ ok: true, configured: false, server: null, username: null, passwordSet: false, epgUrls: [] })
+            res.json({ ok: true, configured: false, server: null, username: null, passwordSet: false, epgUrls: [], alertWebhookSet: false })
       return
     }
     const credentials = decryptSessionCredentials(stored)
@@ -565,7 +566,9 @@ app.get('/api/session', requireAuth, (req, res) => {
     // server can address the provider itself: it holds the credentials encrypted, and the relay
     // routes below inject them on the way out. `passwordSet` is what the settings screen needs to
     // say "a password is stored" without being able to display it.
-    res.json({ ok: true, configured: true, server: credentials.server, username: credentials.username, passwordSet: true, epgUrls: credentials.epgUrls ?? [] })
+        // The webhook never travels to the browser — only whether one is saved, exactly like the
+        // provider password. The settings screen shows a blank field that means "keep the stored one".
+        res.json({ ok: true, configured: true, server: credentials.server, username: credentials.username, passwordSet: true, epgUrls: credentials.epgUrls ?? [], alertWebhookSet: Boolean(credentials.alertWebhook) })
   } catch (err) {
     // A stored config that no longer decrypts (SESSION_SECRET changed) or an unreadable
     // store is treated as "not configured" so the user can re-enter it — but the reason is
@@ -649,9 +652,67 @@ app.get('/api/stream/:kind/:file', requireAuth, (req, res) => {
   relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
 })
 
+// "Is the watchdog wired up?" — the one question a person asks before trusting an automated
+// channel, so they can prove it without waiting for an outage. Reports only whether Discord
+// accepted the message; the webhook itself is never returned.
+app.post('/api/alerts/test', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
+  const session = req.authSession as AuthSession
+  const credentials = resolveAccountCredentials(session.username)
+  if (!credentials?.alertWebhook) {
+    res.status(400).json({ error: 'No alert webhook is saved for this account' })
+    return
+  }
+  let host = credentials.server
+  try {
+    host = new URL(credentials.server).hostname
+  } catch {
+    /* an unparseable server URL is a config problem, not a reason not to send a test */
+  }
+  const delivered = await postDiscordWebhook(credentials.alertWebhook, {
+    content: `🧪 Test alert from your IPTV client — the watchdog is wired up. It will post here if **${host}** stops responding.`
+  })
+  res.json({ ok: delivered, delivered })
+  })()
+})
+
+// One watcher per account that has both a provider and an alert target. Started here rather than
+// inside the request path because it has to keep working while nobody is using the app — that is
+// the entire point of it. See lib/providerWatch.ts for why it only speaks on state changes.
+for (const user of usersStore.listUsers()) {
+  const stored = usersStore.getIptvCredentials(user.username)
+  if (!stored) continue
+  let credentials: SessionCredentials
+  try {
+    credentials = decryptSessionCredentials(stored)
+  } catch {
+    continue
+  }
+  const webhook = credentials.alertWebhook
+  if (!webhook || !isDiscordWebhookUrl(webhook)) continue
+  let host = credentials.server
+  try {
+    host = new URL(credentials.server).hostname
+  } catch {
+    /* keep the raw string as the label */
+  }
+  createProviderWatch({
+    host,
+    probe: async () => {
+      const result = await probeProvider(credentials)
+      return {
+        reachable: result.reachable === true,
+        detail: String(result.error ?? 'provider answered without a user_info block')
+      }
+    },
+    postAlert: (body) => postDiscordWebhook(webhook, body)
+  })
+  console.log(`[watch] provider watchdog active for ${host} — outage alerts go to Discord`)
+}
+
 app.post('/api/session/save', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
-  const { server, username, password, epgUrls } = req.body ?? {}
+    const { server, username, password, epgUrls, alertWebhook } = req.body ?? {}
   // A blank password means "leave the stored one alone". The settings screen can no longer read
   // the password back (see /api/session), so requiring it on every save would force a retype
   // just to change the server URL or the guide sources. Only a *first* save must supply one.
@@ -669,7 +730,15 @@ app.post('/api/session/save', requireAuth, (req, res) => {
       server: server.trim(),
       username: username.trim(),
       password: effectivePassword,
-      epgUrls: sanitizeEpgUrls(epgUrls)
+            epgUrls: sanitizeEpgUrls(epgUrls),
+            // A string sets it, null clears it, a blank field keeps the stored one — the same shapes the
+            // password field uses, so the settings screen can stay dumb about secrets.
+            alertWebhook:
+              alertWebhook === null
+                ? undefined
+                : typeof alertWebhook === 'string' && alertWebhook.trim().length > 0
+                  ? alertWebhook.trim()
+                  : existing?.alertWebhook
     }
     usersStore.setIptvCredentials(session.username, encryptSessionCredentials(credentials))
 
