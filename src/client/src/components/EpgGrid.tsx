@@ -5,11 +5,12 @@ import {
   useState,
   type CSSProperties,
   type JSX,
-  type PointerEvent as ReactPointerEvent
+  type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 import { List, useListRef } from 'react-window'
 import { pct } from '../lib/epgTime'
-import { clampScrollOffset, panAxis, windowOffsetAfterDrag } from '../lib/epgPan'
+import { clampScrollOffset, EPG_PAN_SNAP_MS, offsetAfterArrowKey, panAxis, windowOffsetAfterDrag } from '../lib/epgPan'
 import { catchupForProgramme } from '../lib/catchup'
 import type { Session } from '../lib/appAuth'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
@@ -18,6 +19,9 @@ import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib
 import type { LiveStream, ShortEpgProgram } from '../lib/types'
 
 const HOUR_MS = 3_600_000
+// The channel row height, in one place: the List renders rows at this size and the keyboard
+// arrows scroll by exactly one of them.
+const ROW_HEIGHT = 40
 const WINDOW_HOURS = 3
 
 // The channel column is drag-resizable (see useResizableDimension.ts) with the desktop app's
@@ -324,6 +328,28 @@ export function EpgGrid({
     }
   }, [])
 
+  // Keyboard: the programme blocks are real buttons, so Tab reaches them and Enter plays them
+  // already — what was missing is movement. Arrows pan the window (a quarter hour, matching the
+  // drag's own snap) and step the channel list; Home comes back to now. See .epg-block:focus-visible
+  // for the focus ring that makes any of this discoverable.
+  const onGridKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault()
+      setWindowOffsetMs((current) => offsetAfterArrowKey(current, event.key as 'ArrowLeft' | 'ArrowRight'))
+      return
+    }
+    if (event.key === 'Home') {
+      event.preventDefault()
+      setWindowOffsetMs(0)
+      return
+    }
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const scroller = listRef.current?.element
+      if (!scroller) return
+      event.preventDefault()
+      scroller.scrollTop += (event.key === 'ArrowDown' ? 1 : -1) * 40
+    }
+  }, [])
   const endPan = useCallback((event: ReactPointerEvent<HTMLElement>): void => {
     panRef.current = null
     setPanning(false)
@@ -345,6 +371,9 @@ export function EpgGrid({
 
   return (
     <div
+      tabIndex={-1}
+      // One keydown handler for the whole guide: arrows pan and scroll, Enter plays a block.
+      onKeyDown={onGridKeyDown}
       className={panning ? 'epg-grid epg-grid--panning' : 'epg-grid'}
       style={{ '--epg-channel-col-width': `${channelColumnWidth}px` } as CSSProperties}
     >
@@ -404,7 +433,7 @@ export function EpgGrid({
           <List<RowProps>
             listRef={listRef}
             rowCount={channels.length}
-            rowHeight={40}
+            rowHeight={ROW_HEIGHT}
             rowProps={{
               channels,
               windowStart,

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { EPG_PAN_SNAP_MS, clampScrollOffset, isTimelineDrag, panAxis, snapOffset, windowOffsetAfterDrag } from './epgPan'
+import {
+  clampScrollOffset,
+  EPG_PAN_SNAP_MS,
+  isTimelineDrag,
+  offsetAfterArrowKey,
+  panAxis,
+  snapOffset,
+  windowOffsetAfterDrag
+} from './epgPan'
 
 const WINDOW_MS = 3 * 60 * 60 * 1000
 const TRACK_PX = 600
@@ -77,5 +85,17 @@ describe('isTimelineDrag', () => {
     expect(isTimelineDrag(100, 100, 101, 140)).toBe(true)
     expect(panAxis(100, 100, 101, 140)).toBe('list')
     expect(isTimelineDrag(100, 100, 130, 108)).toBe(true)  // diagonal, but horizontal wins
+  })
+})
+
+describe('offsetAfterArrowKey', () => {
+  it("left is earlier and right is later, matching the guide's own buttons", () => {
+    expect(offsetAfterArrowKey(0, 'ArrowLeft')).toBe(-EPG_PAN_SNAP_MS)
+    expect(offsetAfterArrowKey(0, 'ArrowRight')).toBe(EPG_PAN_SNAP_MS)
+  })
+
+  it('steps by a quarter hour by default, and by whatever it is told', () => {
+    expect(EPG_PAN_SNAP_MS).toBe(15 * 60 * 1000)
+    expect(offsetAfterArrowKey(3600_000, 'ArrowRight', 3600_000)).toBe(7200_000)
   })
 })

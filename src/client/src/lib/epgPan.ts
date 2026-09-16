@@ -83,3 +83,16 @@ export function clampScrollOffset(offset: number, maxOffset: number): number {
   if (!Number.isFinite(maxOffset) || maxOffset <= 0) return 0
   return Math.min(maxOffset, Math.max(0, offset))
 }
+
+/**
+ * How an arrow key moves the guide, in the same sign convention as everything else here: a negative
+ * offset is *earlier* (the ◀ button's direction), positive is later. Extracted so the direction can
+ * be asserted rather than eyeballed — the one thing a keyboard feature gets wrong silently.
+ */
+export function offsetAfterArrowKey(
+  offsetMs: number,
+  key: 'ArrowLeft' | 'ArrowRight',
+  stepMs: number = EPG_PAN_SNAP_MS
+): number {
+  return key === 'ArrowLeft' ? offsetMs - stepMs : offsetMs + stepMs
+}

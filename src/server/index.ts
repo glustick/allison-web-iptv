@@ -25,6 +25,7 @@ import { createRateLimiter } from './lib/rateLimit.js'
 import { assertSafeExternalUrl, isSameOrigin, isSecureRequest, securityHeaders, UnsafeUrlError } from './lib/security.js'
 import { mapSameOriginStreamPath, parseSameOriginTimeshiftPath } from './lib/upstreamUrl.js'
 import { createProviderWatch, isDiscordWebhookUrl, postDiscordWebhook, type ProviderWatch } from './lib/providerWatch.js'
+import { createAuthAudit } from './lib/authAudit.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
 import {
   applyPendingRestore,
@@ -358,6 +359,7 @@ app.post('/api/auth/setup', (req, res) => {
     const session = createAuthSession(user.username, user.role)
     setAuthCookie(res, session.token, isSecureRequest(req))
     res.json({ ok: true, user: { username: user.username, role: user.role } })
+    authAudit.record({ outcome: 'setup', username, ...auditContext(req) })
   } catch (err) {
     if (err instanceof UserStoreError && !err.storageUnavailable) {
       res.status(400).json({ error: err.message })
@@ -374,6 +376,14 @@ app.post('/api/auth/setup', (req, res) => {
 // many accounts" and "many hosts trying one account" are different attacks.
 const loginLimiter = createRateLimiter()
 
+// Where a sign-in came from, for the audit trail. Never anything secret.
+function auditContext(req: Request): { ip: string; userAgent: string } {
+  return {
+    ip: req.ip ?? req.socket.remoteAddress ?? 'unknown',
+    userAgent: String(req.headers['user-agent'] ?? 'unknown')
+  }
+}
+
 app.post('/api/auth/login', (req, res) => {
   const username = typeof req.body?.username === 'string' ? req.body.username.trim() : ''
   const password = typeof req.body?.password === 'string' ? req.body.password : ''
@@ -386,6 +396,7 @@ app.post('/api/auth/login', (req, res) => {
   if (blocked.length > 0) {
     const retryAfter = Math.max(...blocked.map((decision) => decision.retryAfterSeconds ?? 60))
     res.setHeader('Retry-After', String(retryAfter))
+    authAudit.record({ outcome: 'locked', username, ...auditContext(req) })
     res.status(429).json({
       error: `Too many failed sign-in attempts. Try again in ${Math.max(1, Math.ceil(retryAfter / 60))} minute(s).`
     })
@@ -394,10 +405,12 @@ app.post('/api/auth/login', (req, res) => {
   try {
     const user = usersStore.verifyCredentials(username, password)
     if (!user) {
+      authAudit.record({ outcome: 'failed', username, ...auditContext(req) })
       for (const key of throttleKeys) loginLimiter.recordFailure(key)
       res.status(401).json({ error: 'Incorrect username or password' })
       return
     }
+    authAudit.record({ outcome: 'ok', username, ...auditContext(req) })
     for (const key of throttleKeys) loginLimiter.recordSuccess(key)
     // recordLogin writes the users file — on a read-only or full data volume that write is
     // what fails here, so keep the login itself inside this guard rather than letting an
@@ -415,6 +428,7 @@ app.post('/api/auth/login', (req, res) => {
 app.post('/api/auth/logout', (req, res) => {
   const session = getAuthSession(req)
   if (session) destroyAuthSession(session.token)
+  authAudit.record({ outcome: 'logout', username: session?.username ?? 'unknown', ...auditContext(req) })
   clearAuthCookie(res, isSecureRequest(req))
   res.json({ ok: true })
 })
@@ -440,6 +454,13 @@ app.post('/api/auth/activity', requireAuth, (req, res) => {
 //
 // The webhook lives on the *calling admin's own account*, alongside the provider credentials it
 // watches — so the address an alert goes to always travels with the provider it is about.
+// The sign-in trail: who, when, from where, and whether it worked. In memory for the session and
+// mirrored to the container log (see lib/authAudit.ts), because a deploy restarts the app.
+app.get('/api/admin/audit', requireAuth, requireAdmin, (req, res) => {
+  const limit = Number(req.query.limit)
+  res.json({ entries: authAudit.recent(Number.isFinite(limit) && limit > 0 ? limit : 50) })
+})
+
 app.get('/api/admin/alerts', requireAuth, requireAdmin, (req, res) => {
   const session = req.authSession as AuthSession
   const credentials = resolveAccountCredentials(session.username)
@@ -723,6 +744,8 @@ app.post('/api/alerts/test', requireAuth, (req, res) => {
 // while somebody is waiting, rare enough not to be a load on anyone's panel.
 const watchIntervalMs = (Number(process.env.PROVIDER_WATCH_INTERVAL_SECONDS ?? '') || 90) * 1000
 
+// Who signed in, from where — see lib/authAudit.ts.
+const authAudit = createAuthAudit()
 const providerWatches = new Map<string, ProviderWatch>()
 
 // Starts (or restarts) the watchdog for one account. Called at boot and whenever an admin changes

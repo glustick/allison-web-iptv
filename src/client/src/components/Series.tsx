@@ -6,6 +6,7 @@ import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { formatClock } from './Movies'
 import {
   clearResumePosition,
+  setFavourite,
   fetchPrefs,
   recordHistory,
   setResumePosition,
@@ -16,7 +17,7 @@ import type { Category, SeriesItem, SeriesInfo, SeriesEpisode } from '../lib/typ
 
 const EMPTY_PREFS: PrefsState = { favourites: [], categories: [], history: [], resume: [] }
 
-type Selection = { type: 'all' } | { type: 'provider'; id: string } | { type: 'history' }
+type Selection = { type: 'all' } | { type: 'favourites' } | { type: 'provider'; id: string } | { type: 'history' }
 
 /** Resuming an episode is the whole point of tracking series progress: the position is keyed by
  *  episode id, so each episode in a season keeps its own place. */
@@ -127,11 +128,13 @@ export function Series({
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null)
   const [seriesList, setSeriesList] = useState<SeriesItem[]>([])
   const [openSeries, setOpenSeries] = useState<SeriesItem | null>(null)
+  // Series favourites: prefs already stores them (kind 'series'); this tab just never showed them.
   const [nowPlaying, setNowPlaying] = useState<{ episode: SeriesEpisode } | null>(null)
   const [startAt, setStartAt] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection>({ type: 'all' })
   const [prefs, setPrefs] = useState<PrefsState>(EMPTY_PREFS)
+  const seriesFavourites = useMemo(() => prefs.favourites.filter((f) => f.kind === 'series'), [prefs.favourites])
   const { sidebarWidth, startSidebarDrag } = useSidebarWidth()
 
   useEffect(() => {
@@ -220,6 +223,12 @@ export function Series({
   return (
     <div className="app-body">
       <nav className="sidebar" style={{ width: sidebarWidth }}>
+          <button
+            className={selection.type === 'favourites' ? 'category-btn active' : 'category-btn'}
+            onClick={() => (setSelection({ type: 'favourites' }), setOpenSeries(null))}
+          >
+            ★ Favourites{seriesFavourites.length > 0 ? ` (${seriesFavourites.length})` : ''}
+          </button>
         <button
           className={selection.type === 'history' ? 'category-btn active' : 'category-btn'}
           onClick={() => {
@@ -274,8 +283,42 @@ export function Series({
         )}
         {nowPlaying && (
           <div className="now-playing-bar">
-            Now playing: {nowPlaying.episode.title}
-            {startAt > 0 && <span className="resume-note"> · resumed at {formatClock(startAt)}</span>}
+              Now playing: {nowPlaying.episode.title}
+              {startAt > 0 && <span className="resume-note"> · resumed at {formatClock(startAt)}</span>}
+              {openSeries && (
+                <span className="now-playing-actions">
+                  <button
+                    type="button"
+                    className={
+                      seriesFavourites.some((f) => f.streamId === openSeries.series_id)
+                        ? 'prefs-action active'
+                        : 'prefs-action'
+                    }
+                    title={
+                      seriesFavourites.some((f) => f.streamId === openSeries.series_id)
+                        ? 'Remove this series from favourites'
+                        : 'Add this series to favourites'
+                    }
+                    onClick={() => {
+                      const isFavourite = seriesFavourites.some((f) => f.streamId === openSeries.series_id)
+                      void setFavourite(
+                        {
+                          kind: 'series',
+                          streamId: openSeries.series_id,
+                          name: openSeries.name,
+                          category: openSeries.category_id,
+                          icon: openSeries.cover
+                        },
+                        !isFavourite
+                      )
+                        .then((favourites) => setPrefs((current) => ({ ...current, favourites })))
+                        .catch(() => {})
+                    }}
+                  >
+                    {seriesFavourites.some((f) => f.streamId === openSeries.series_id) ? '★' : '☆'}
+                  </button>
+                </span>
+              )}
           </div>
         )}
         {loadError && (
@@ -329,11 +372,14 @@ export function Series({
           </>
         ) : (
           <div className="channel-list">
-            {seriesList.map((item) => (
-              <button key={item.series_id} className="channel-row" onClick={() => setOpenSeries(item)}>
-                {item.name}
-              </button>
-            ))}
+              {(selection.type === 'favourites'
+                ? seriesFavourites.map((f) => ({ series_id: f.streamId, name: f.name } as SeriesItem))
+                : seriesList
+              ).map((item) => (
+                <button key={item.series_id} className="channel-row" onClick={() => setOpenSeries(item)}>
+                  {item.name}
+                </button>
+              ))}
           </div>
         )}
       </div>
