@@ -386,6 +386,14 @@ when the provider is slow or entirely down. (Search tokenises differently from t
 on purpose: the matcher drops packaging words like `HD`/`Channel` because it is deciding identity,
 whereas search keeps them, because people type the words they can see.)
 
+## Tabs that do not stop playback
+
+**EPG**, **Admin** and **System** open in their own browser tab, because all three are configuration
+rather than something you watch — switching to them in the same tab unmounts the player and stops
+whatever is playing. They are real links, so middle-click and ⌘/ctrl-click work as you would expect.
+The tab a new window opens on comes from the URL (`?tab=admin`), since a fresh page load has no
+memory of where you were; anything unrecognised falls back to Live TV.
+
 ## Provider alerts (admin → **Admin** → *Provider alerts*)
 
 The server watches your provider and posts to a **Discord webhook** when it stops answering — once

@@ -4,6 +4,7 @@ import { SetupScreen } from './components/SetupScreen'
 import { IptvConfigScreen } from './components/IptvConfigScreen'
 import { AdminConsole } from './components/AdminConsole'
 import { EpgSettings } from './components/EpgSettings'
+import { tabFromSearch, tabHref } from './lib/tabs'
 import { SystemPanel } from './components/SystemPanel'
 import { SearchBar } from './components/SearchBar'
 import type { MediaKind } from './lib/prefs'
@@ -36,7 +37,7 @@ export default function App(): JSX.Element {
   const [savedConfig, setSavedConfig] = useState<IptvConfig | null>(null)
   const [iptvPhase, setIptvPhase] = useState<IptvPhase>('checking')
   const [autoConnectError, setAutoConnectError] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('live')
+  const [tab, setTab] = useState<Tab>(() => tabFromSearch(window.location.search) as Tab)
   const [updateMessage, setUpdateMessage] = useState<string | null>(null)
   // A search hit is played by the view that owns that kind, so the request carries a nonce:
   // picking the same result twice must still switch tab and start playback.
@@ -232,18 +233,42 @@ export default function App(): JSX.Element {
           <button className={tab === 'series' ? 'tab active' : 'tab'} onClick={() => setTab('series')} disabled={!session}>
             Series
           </button>
-          <button className={tab === 'epg' ? 'tab active' : 'tab'} onClick={() => setTab('epg')} disabled={!session}>
-            EPG
-          </button>
+          {/* Opens in its own tab: this is configuration, and swapping tabs here would tear down
+              whatever is playing. A real link, so middle-click and cmd-click work too. */}
+          <a
+            className={tab === 'epg' ? 'tab active' : 'tab'}
+            href={tabHref('epg')}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="EPG opens in a new tab so playback here is not interrupted"
+          >
+            EPG ↗
+          </a>
+          {/* Opens in its own tab: this is configuration, and swapping tabs here would tear down
+              whatever is playing. A real link, so middle-click and cmd-click work too. */}
           {appUser.role === 'admin' && (
-            <button className={tab === 'admin' ? 'tab active' : 'tab'} onClick={() => setTab('admin')}>
-              Admin
-            </button>
+            <a
+              className={tab === 'admin' ? 'tab active' : 'tab'}
+              href={tabHref('admin')}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Admin opens in a new tab so playback here is not interrupted"
+            >
+              Admin ↗
+            </a>
           )}
+          {/* Opens in its own tab: this is configuration, and swapping tabs here would tear down
+              whatever is playing. A real link, so middle-click and cmd-click work too. */}
           {appUser.role === 'admin' && (
-            <button className={tab === 'system' ? 'tab active' : 'tab'} onClick={() => setTab('system')}>
-              System
-            </button>
+            <a
+              className={tab === 'system' ? 'tab active' : 'tab'}
+              href={tabHref('system')}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="System opens in a new tab so playback here is not interrupted"
+            >
+              System ↗
+            </a>
           )}
         </div>
         <SearchBar

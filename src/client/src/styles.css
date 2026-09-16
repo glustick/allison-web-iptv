@@ -139,6 +139,11 @@ body {
 }
 
 .tab {
+  /* Also used for <a> elements (the tabs that open in their own window), so no underlines and the
+     same box as the buttons beside them. */
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
   padding: 6px 14px;
   background: none;
   border: none;
