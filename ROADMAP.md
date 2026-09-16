@@ -186,3 +186,9 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
 - **Keep extending the real-server test pattern.** *Ongoing.* `proxyServer.test.ts` and
   `nodeUpstreamRequest.test.ts` spin up a real `http.Server`; extend that to the transcode and
   EPG fetch paths where live behaviour has diverged from reasoning before.
+
+
+## Decided against
+
+- **Custom categories for films and series.** The user's call (2026-09-16): the provider's own
+  categories plus favourites are enough for VOD. Recorded here so it is not proposed again.
