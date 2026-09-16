@@ -1,11 +1,54 @@
 # Roadmap
 
-Recommended enhancements for future development, refreshed **2026-09-15 against v0.13.0**.
+Recommended enhancements for future development, refreshed **2026-09-16 against v0.23.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.23.0 — "Catch-up you can actually watch, and watchdogs that speak up."** Ten releases
+(v0.14.0–v0.23.0) that turned the guide into the app's primary surface and gave the deployment a
+voice when things break:
+
+- **v0.14.0/v0.14.1** — a Favourites-only Guide/List toggle, and a notice when a deploy ended your
+  session.
+- **v0.15.0** — the **provider watchdog**: a signed-streak state machine (two agreeing checks before
+  it calls an outage) posting to a **Discord webhook** on down and up, naming the host and the
+  provider's own error but never the account. The webhook is stored encrypted with the provider
+  credentials and never reaches the browser.
+- **v0.16.0** — **EPG, Admin and System open in their own tab** as real links (`?tab=admin` deep
+  links work), because configuring the app in the same tab unmounts the player and stops playback.
+- **v0.17.0** — **catch-up playback**, the roadmap's highest-value gap. Selecting a finished
+  programme replays it from the provider's archive, through `/api/timeshift/<id>.ts?start=&duration=`,
+  with the credentials still server-side. It also exposed a real bug: the guide had captured the
+  pointer on every press since v0.12.0, and pointer capture retargets compatibility mouse events — so
+  **every click on a programme had silently done nothing for two releases**.
+- **v0.18.0** — **catch-up works in Safari**. A timeshift stream is raw MPEG-TS: hls.js cannot parse
+  it and Safari cannot decode it, so the bar showed catch-up while nothing played. The browser is now
+  handed the transcoder's own HLS output, the same machinery the E-AC-3 fallback uses.
+- **v0.19.0 / v0.20.0** — **keyboard navigation** for the guide (arrows pan a quarter hour and scroll
+  a row, Home returns to now, ↑/↓ walks focus to the same column in the adjacent row), **series
+  favourites**, and a sign-in **audit trail** (ok / failed / locked / logout / setup, with IP and
+  user-agent) that survives a restart because it lives in SQLite.
+- **v0.21.0** — watchdog alerts can go to **several Discord channels**, with strict parsing so a
+  mistyped destination fails at save time rather than during an outage.
+- **v0.22.0** — the fallback **remembers which streams need converting** (measured: Sky News FHD's
+  E-AC-3, *Batman Begins*' E-AC-3 5.1 in Matroska), so the second play skips the ten-to-thirty-second
+  dead start. Per-device on purpose, bounded, expiring.
+- **v0.23.0** — **app-health alerts** on the same webhook (a full disk or an unwritable database, the
+  app's own two real failure modes, previously visible only on the System tab), and **restart a
+  programme that is still on air** by double-clicking it.
+- Also today: the env timezone moved to Asia/Singapore so the container-update schedules fire at
+  03:00 local rather than 03:00 UTC, and the deploy script (`scripts/dockhand-update.sh`) became
+  step 6 of the release recipe — plus a repair to its streaming guard, which secret-redaction had
+  silently broken into always reporting "unknown".
+
+**The lesson this stretch earned, again:** the catch-up click bug was invisible to code reading and
+obvious the moment a real click was measured. So was a disk threshold wired to nothing. Both are
+arguments for the CDP harness over reasoning.
+
+### The stretch before it (v0.13.0 and back)
 
 **v0.13.0 — "The provider password never reaches the browser."** The day's nine releases
 (v0.11.0–v0.13.0) began with the last big security item and then worked through what live use
@@ -56,8 +99,16 @@ The honest arc from the original port to today:
 | **v0.12.0** | Drag-to-pan the guide; panel title names its category |
 | v0.12.1–v0.12.2 | A transcode stops when its viewer goes, and cannot fill the disk |
 | **v0.13.0** | Guide drags in both directions; the category panel really resizes |
+| **v0.14.0–v0.14.1** | Favourites-only guide toggle; a notice when a deploy ended your session |
+| **v0.15.0** | **Provider watchdog** — Discord alerts on outage and recovery |
+| **v0.16.0** | EPG / Admin / System open in their own tab so playback survives |
+| **v0.17.0–v0.18.0** | **Catch-up playback**, then made to work in Safari via the transcoder |
+| **v0.19.0–v0.20.0** | Guide keyboard navigation, series favourites, durable sign-in audit |
+| **v0.21.0** | Alerts to several Discord channels |
+| **v0.22.0** | Remembering which streams need converting |
+| **v0.23.0** | App-health alerts; restart a programme that is still on air |
 
-**Where it stands (v0.13.0):** 63 source files plus 32 test files (**320 tests**), TypeScript
+**Where it stands (v0.23.0):** 72 source files plus 41 test files (**395 tests**), TypeScript
 type-checks and ESLint clean, a SQLite-backed per-account library, encrypted credentials at
 rest, no provider credential in the browser at all, Docker/GHCR packaging with a real
 `HEALTHCHECK`, and live verification against a real provider (~6k channels / ~300k-programme
@@ -66,6 +117,28 @@ browser (Chrome over the DevTools Protocol — see the harness note under Qualit
 failures live, name them plainly, and let the operator fix them from just the message.**
 
 ## Recently completed (previously on this roadmap)
+
+- **Catch-up / timeshift playback** — v0.17.0/v0.18.0. Finished programmes replay from the
+  provider's archive, bounded by `TIMESHIFT_MAX_MINUTES`, credentials still server-side, and routed
+  through the transcoder because a timeshift stream is raw MPEG-TS that hls.js and Safari cannot
+  decode.
+- **Restart a programme that is still on air** — v0.23.0. Double-click (or Shift+Enter), for any
+  channel with `tv_archive`; the archive serves from the programme's start up to now.
+- **Guide keyboard navigation** — v0.19.0/v0.20.0. Arrows pan a quarter hour (15-minute steps),
+  ↑/↓ scroll a row, Home returns to now, and ↑/↓ on a programme moves focus to the same column in
+  the adjacent row, falling through to a scroll when there is no row.
+- **Provider watchdog and alerting** — v0.15.0/v0.21.0. Two agreeing checks before calling an outage,
+  a single good one breaking the streak, down/up messages that name the host and the provider's error
+  but never the account, and several Discord destinations with strict save-time parsing.
+- **App-health alerts** — v0.23.0. The app's own two real failure modes (full disk, unwritable
+  database) on the same webhook, one watch for the whole app, every distinct destination told once.
+- **Tabs that do not stop playback** — v0.16.0. EPG, Admin and System are real links in their own
+  tab, with `?tab=` deep links.
+- **Sign-in audit trail** — v0.19.0/v0.20.0. Who signed in, from which address and user-agent, and
+  every failure, in SQLite so it survives a restart.
+- **Series favourites** — v0.19.0, completing the VOD library alongside the existing favourites.
+- **Remembering streams that need converting** — v0.22.0. A per-device, bounded, expiring memory of
+  the streams the fallback had to rescue, so the second play is immediate.
 
 - **Provider credentials never reach the browser** — v0.11.0. The last big security item from
   the original queue: stream and API traffic is addressed by the server, not by URLs carrying
@@ -99,16 +172,6 @@ failures live, name them plainly, and let the operator fix them from just the me
 
 ### 1. Live TV & playback
 
-- **Catch-up / timeshift playback.** *Open — highest-value gap.* The provider already exposes
-  `tv_archive` / `tv_archive_duration` on each channel, the server already proxies `/timeshift/`,
-  and the EPG grid already *renders* past programmes — but selecting one does nothing. Wire the
-  grid's past programmes to the already-proxied timeshift URL, bounded by the server's ingest
-  window (24h back / 72h forward — widen deliberately if a longer look-back is wanted). The
-  deliberate omission is documented in `EpgGrid.tsx` and `xmltv.ts`.
-- **EPG grid keyboard navigation.** *Open (drag shipped in v0.13.0).* The guide now drags in
-  both directions, 1:1 with the pointer; what remains is keyboard navigation — arrow keys to move
-  the time window and the channel list, and a visible focus order through programmes. Worth doing
-  alongside catch-up, since both make the grid the primary surface rather than a picture of one.
 - **Player settings that persist.** *Open (partial).* `TrackControls` lets you switch audio /
   subtitle tracks live, but the choice resets per session and there is no quality or
   subtitle-styling surface. Persist the selected tracks per saved profile and add a compact
@@ -138,18 +201,15 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
   every segment while it plays (that is what makes it scrubbable), so a 2h20 feature holds 10 GB+
   for its runtime. Decide whether to bound that — cap the retained window and give up far-back
   scrubbing, or accept it now that the disk cannot actually fill.
-- **Update/upgrade tooling for image bloat.** *Open.* Every release adds a ~1 GB image to the
-  host. Document/script a Watchtower sidecar or a scheduled `docker image prune`, since the
-  in-app banner (v0.9.x) only *notifies* — it cannot replace a running container from inside
-  itself.
-- **Degraded-health alerting.** *Shipped for the provider in v0.15.0* (a Discord webhook, posted on
-  outage and recovery — see the README). What remains is the other half: the *app's own* health
-  (a full disk, an unwritable database) still only shows on the System tab rather than pinging
-  anyone.
-- **Skip the multi-arch image build for docs-only commits.** *Open.* Every push to `main`
-  builds a full multi-arch image (~15 min, arm64 `better-sqlite3` under emulation), including
-  commits that touch only markdown. A `paths-ignore` on `**.md` in the workflow would save that
-  time and keep CI meaningful.
+- **Image bloat, still.** *Partly handled.* Dockhand already runs a scheduled container update
+(03:00 Asia/Singapore, after the environment timezone was moved off UTC), so the app itself stays
+current. What is left is the *images*: every release adds roughly 1 GB to the host, and the in-app
+banner can only notify — it cannot replace a running container from inside itself. A scheduled
+`docker image prune` on the NAS is the missing half.
+- **Skip the multi-arch build for docs-only commits.** *Open.* Every push to `main` builds a full
+multi-arch image (~13–20 min, arm64 `better-sqlite3` under emulation). `[skip ci]` in the commit
+message is used by hand for documentation commits; a `paths-ignore: ['**.md']` on the workflow would
+make that automatic and stop it depending on remembering.
 
 ### 4. Deployment
 
@@ -158,9 +218,6 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
 - **Confirm a real Synology deployment.** *Open.* The Synology section is reasoning-based
   ("compatible, not yet confirmed deployed"); a real hardware walkthrough would catch anything
   the reasoning missed.
-- **Decide the WAN-exposure posture.** *Open — a policy question, not just engineering.* The
-  server relays the provider's stream and holds the Xtream credentials itself; document (and
-  ideally enforce) whether it should ever be reachable off-LAN without a VPN in front.
 
 ### 5. Multi-user & security
 
@@ -173,16 +230,16 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
 
 ### 6. Quality & testing
 
-- **A repeatable live-verification checklist.** *Open.* A fixed script (login → saved
-  credentials → reload → EPG → play a channel that hits the EC-3 fallback) so future changes get
-  the same "verify live, don't just reason about it" confirmation this project's history relies
-  on, without rediscovering the steps each time.
-- **End-to-end coverage.** *Open (partly available).* No Playwright, but a real-browser
-  harness now exists: Chrome over the DevTools Protocol driven from Node's built-in WebSocket,
-  with genuine `Input.dispatchMouseEvent`/`KeyEvent` and `elementFromPoint` assertions. That is
-  what proved the v0.13.0 divider fix (the pixel at the divider hit-tests to the handle; dragging
-  it moves the panel; a 120px drag scrolls the list exactly 120px). Fold it into a scripted
-  login → EPG → drag → play check so the next UI claim is measured rather than reasoned.
+- **Fold the ad-hoc checks into one script.** *Partly done.* The pieces exist and get used:
+`scripts/cdp-drive.mjs` and `scripts/cdp-verify-live.mjs` drive a real Chrome over the DevTools
+Protocol with genuine mouse/keyboard input, `scripts/verify-catchup.mjs` walks one feature end to end
+(channel → finished programme → preparing → player advancing → now-playing bar → return to live), and
+`scripts/dockhand-update.sh` deploys and reports. What is missing is a single scripted
+login → guide → drag → play check that a future change runs *by default* rather than assembling each
+time. The harness has already earned its keep: it is what proved the v0.13.0 divider fix
+(the pixel at the divider hit-tests to the handle; a 120 px drag scrolls the list exactly 120 px) and
+what exposed the guide's pointer-capture bug that had silently eaten every programme click since
+v0.12.0.
 - **Keep extending the real-server test pattern.** *Ongoing.* `proxyServer.test.ts` and
   `nodeUpstreamRequest.test.ts` spin up a real `http.Server`; extend that to the transcode and
   EPG fetch paths where live behaviour has diverged from reasoning before.
@@ -192,3 +249,14 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
 
 - **Custom categories for films and series.** The user's call (2026-09-16): the provider's own
   categories plus favourites are enough for VOD. Recorded here so it is not proposed again.
+
+
+- **Network hardening beyond what is already there.** The user's call (2026-09-16): the app keeps
+  running on the public internet as it is — *"i dont need so many restrictions for a small app."*
+  Tailscale, a source-IP allowlist at the reverse proxy, an authenticating layer in front, and an
+  OpenVPN client around the app were all discussed and all declined; the VPN, when wanted, runs on
+  the **client machine**. Recorded because it keeps surfacing as "the biggest remaining win", and
+  because the technical case is genuinely weaker than it looks: the app's own egress (API, EPG, VOD,
+  the transcoder's source) is the only traffic a server-side tunnel could carry, while **live
+  segments are fetched by the browser straight from the provider's CDN** and never enter the app at
+  all. Recorded here so it is not proposed again.

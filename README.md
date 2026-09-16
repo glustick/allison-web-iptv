@@ -6,7 +6,37 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.13.0 — a credential-free browser, and transcodes that stop when you do)
+## Current state (v0.23.0 — catch-up you can watch, and watchdogs that speak up)
+
+**v0.23.0** adds the two things that only matter when something is wrong. **App-health alerts** post
+to the same Discord webhook as the provider watchdog when the *app itself* is in trouble — a full
+disk or an unwritable database, the two failures that have actually taken this deployment down —
+because both were previously visible only to someone already looking at the System tab. And a
+programme that is **still on air** can be **restarted from its beginning**: double-click it (or
+Shift+Enter on a focused programme) and the archive serves it from the start, which is the whole
+point for live sport.
+
+**v0.22.0** remembers which streams need converting. Sky News FHD carries E-AC-3 first (undecodable
+in Chrome) and *Batman Begins* is E-AC-3 5.1 inside Matroska: both played **nothing for ten to
+thirty seconds** before the fallback noticed — on every single start. The fallback now remembers, so
+the second play goes straight to the transcoder.
+
+**v0.21.0** lets the watchdog post to **several Discord channels** at once (comma- or
+newline-separated, deduplicated; a mistyped destination is refused when you save it rather than
+discovered during an outage) and says how many accepted each alert. **v0.20.0** moves the sign-in
+audit trail into SQLite so it survives a restart, and lets ↑/↓ move focus from a programme to the
+same column in the adjacent row. **v0.19.0** adds **keyboard navigation** to the guide (arrows pan a
+quarter hour and scroll a row, Home returns to now), **series favourites**, and the sign-in **audit
+trail** itself. **v0.18.0** fixes **catch-up in Safari**: a timeshift stream is raw MPEG-TS, which
+hls.js cannot parse and Safari cannot decode at all, so the browser is handed this app's own HLS
+output instead. **v0.17.0** ships **catch-up playback** — and fixes a real bug it exposed: the guide
+had been capturing the pointer on *every* press since v0.12.0, which retargeted compatibility mouse
+events and made **every click on a programme do nothing**. **v0.16.0** opens **EPG, Admin and
+System in their own tabs**, so opening configuration no longer stops whatever is playing.
+**v0.15.0** adds the **provider watchdog** and its Discord alerts; **v0.14.0/v0.14.1** add a
+Favourites guide/list toggle and a notice when a session is ended by a deploy.
+
+### Earlier (v0.13.0 and back)
 
 **v0.13.0** makes the guide drag-scrollable in both directions — left/right slides the window
 through time, up/down moves the channel list, 1:1 with the pointer — and fixes the category
@@ -27,7 +57,7 @@ browser entirely** — playback goes through the server's own session-authentica
 and `/api/xtream` routes, so it no longer appears in URLs, in browser history, or in a
 reverse proxy's access log.
 
-### Earlier (v0.10.0 and back)
+### Much earlier (v0.10.0 and back)
 
 **v0.7.0** moves everything the app persists into a single **SQLite database** (`allison.db`)
 and builds a proper per-user library on top of it: **★ Favourites** and **🕘 History** in the
@@ -390,8 +420,11 @@ whereas search keeps them, because people type the words they can see.)
 
 For channels your provider flags with `tv_archive`, clicking a **finished** programme in the guide
 plays it from the provider's archive instead of the live channel — the now-playing bar says which
-programme it is, and **Return to live** switches back. Programmes still on air are left to the live
-stream, since that is the better answer for those.
+programme it is, and **Return to live** switches back. A programme **still on air** plays live as
+usual when you click it — but **double-click** one (or press **Shift+Enter** on a focused programme)
+and it restarts from its beginning instead, for any channel that keeps an archive. That is the point
+for live sport: the archive serves from any moment inside its window, so "I joined at half time" has
+an answer.
 
 The server builds the provider's own timeshift path (`/timeshift/<user>/<pass>/<minutes>/<start>/<id>.ts`)
 in one small function (`lib/timeshift.ts`), because that shape is a provider convention the API does
@@ -401,6 +434,20 @@ never sees the credentials: playback goes through `/api/timeshift/<id>.ts?start=
 because a timeshift stream is raw MPEG-TS, which hls.js cannot parse and Safari cannot decode at all —
 the browser is handed this app's own HLS output from the transcoder instead, the same machinery the
 E-AC-3 fallback uses.
+
+## Streams that always need converting
+
+Some streams this browser simply cannot play: Sky News FHD carries **E-AC-3** as its first audio
+track (undecodable in Chrome), and *Batman Begins* is **E-AC-3 5.1 inside Matroska**. Both used to
+play *nothing* for ten to thirty seconds before the fallback noticed and started converting — on
+every start, because nothing remembered.
+
+The fallback now remembers which streams needed converting, and the next play goes straight to the
+transcoder. It is deliberately **per-device** (`localStorage`, not a server setting): which streams
+need converting depends on the browser doing the playing, so the answer is not shared. The list is
+bounded at 200 entries and entries expire after **14 days**, because a provider can re-encode a
+stream and a stale hint would then force a pointless transcode. Worst case, if a hint is wrong, you
+get the behaviour you had before.
 
 ## Tabs that do not stop playback
 
@@ -423,6 +470,16 @@ provider credentials and is never sent to the browser — the panel shows a blan
 *keep the saved one* — and only `https://discord.com/api/webhooks/…` URLs are accepted. **Send test
 alert** proves delivery on the spot rather than during a real outage. `PROVIDER_WATCH_INTERVAL_SECONDS`
 tunes how often it checks (default 90).
+
+The same webhook also carries **app-health alerts** — the *app's* own failures, rather than the
+provider's. A full disk and an unwritable database are the two that have actually happened here:
+a full root filesystem presents as SQLite `disk I/O error` on everything including sign-in, and an
+unwritable database presents as being unable to store anything at all. Both used to be visible only
+to someone already looking at the System tab. The check runs every five minutes, needs two agreeing
+readings before it calls it, posts once when it degrades and once when it recovers, and every
+distinct destination is told exactly once even with several accounts configured. The message says
+what to do, including the container restart that an unwritable database needs after its permissions
+are fixed.
 
 ## Backup, restore and system health (admin → **System** tab)
 
