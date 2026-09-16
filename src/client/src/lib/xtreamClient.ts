@@ -112,6 +112,12 @@ export class XtreamClient {
 
   // Relative, same-origin — see this class's own doc comment for why that's load-bearing here,
   // not just a style choice.
+  // Catch-up: the provider's archive entry point (see src/server/lib/timeshift.ts). Same-origin
+  // like every other media URL, so the credentials stay server-side.
+  getTimeshiftUrl(channelId: number, startSeconds: number, durationMinutes: number): string {
+    return `/api/timeshift/${channelId}.ts?start=${startSeconds}&duration=${durationMinutes}`
+  }
+  
   getStreamUrl(kind: MediaKind, streamId: number, extension: string): string {
     const path = kind === 'live' ? 'live' : kind === 'movie' ? 'movie' : 'series'
     return `/api/stream/${path}/${streamId}.${extension}`

@@ -24,6 +24,7 @@ import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagn
 import { createRateLimiter } from './lib/rateLimit.js'
 import { assertSafeExternalUrl, isSameOrigin, isSecureRequest, securityHeaders, UnsafeUrlError } from './lib/security.js'
 import { mapSameOriginStreamPath } from './lib/upstreamUrl.js'
+import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
 import {
   applyPendingRestore,
   backupDatabase,
@@ -594,6 +595,39 @@ app.get('/api/xtream', requireAuth, (req, res) => {
   params.set('password', credentials.password)
   const session2 = req as IncomingMessage & { url?: string }
   session2.url = `/player_api.php?${params.toString()}`
+  relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
+})
+
+// Catch-up (timeshift): a past programme, served from the provider's own archive window.
+// Separate from /api/stream because the provider path needs two more pieces the stream route has
+// no place for — the start instant and how many minutes to serve — and because the start is worth
+// validating before it becomes a request for years of video. See lib/timeshift.ts for the shape,
+// which is a provider convention rather than something the panel advertises.
+app.get('/api/timeshift/:file', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const credentials = resolveAccountCredentials(session.username)
+  if (!credentials) {
+    res.status(409).json({ error: 'IPTV provider is not configured' })
+    return
+  }
+  let upstreamPath: string
+  try {
+    upstreamPath = buildTimeshiftPath(
+      credentials,
+      String(req.params.file),
+      Number(req.query.start),
+      Number(req.query.duration)
+    )
+  } catch (err) {
+    res.status(err instanceof TimeshiftRequestError ? 400 : 500).json({
+      error: err instanceof Error ? err.message : 'Unsupported catch-up request'
+    })
+    return
+  }
+  // Same relay the stream route uses: the provider's path replaces ours, and this app's
+  // credentials are injected here rather than travelling through the browser.
+  const rewritten = req as unknown as IncomingMessage & { url?: string }
+  rewritten.url = upstreamPath
   relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
 })
 

@@ -10,6 +10,7 @@ import {
 import { List, useListRef } from 'react-window'
 import { pct } from '../lib/epgTime'
 import { clampScrollOffset, panAxis, windowOffsetAfterDrag } from '../lib/epgPan'
+import { catchupForProgramme } from '../lib/catchup'
 import type { Session } from '../lib/appAuth'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
 import { useAggregatedEpg, type AggregatedEpgData } from '../lib/useAggregatedEpg'
@@ -106,6 +107,7 @@ interface RowProps {
   onTimelinePointerUp: (event: ReactPointerEvent<HTMLElement>) => void
   /** True while the pointer has actually panned — a drag must not also fire the click that
    *  selecting a channel rides on. */
+  onPlayCatchup?: (channel: LiveStream, programme: { startMs: number; stopMs: number; title: string }) => void
   didPan: () => boolean
 }
 
@@ -124,6 +126,7 @@ function EpgRow({
   onTimelinePointerDown,
   onTimelinePointerMove,
   onTimelinePointerUp,
+  onPlayCatchup,
   didPan
 }: { index: number; style: CSSProperties } & RowProps): JSX.Element {
   const channel = channels[index]
@@ -165,15 +168,20 @@ function EpgRow({
           const left = pct(p.startMs, windowStart, windowEnd)
           const width = Math.max(pct(p.stopMs, windowStart, windowEnd) - left, 2)
           const isPast = p.stopMs <= now
+          const catchup = isPast && onPlayCatchup ? catchupForProgramme(channel, p, now) : null
           return (
             <button
               key={p.key}
-              className={isPast ? 'epg-block epg-block--past' : 'epg-block'}
+              className={`epg-block${isPast ? ' epg-block--past' : ''}${catchup ? ' epg-block--catchup' : ''}`}
               style={{ left: `${left}%`, width: `${width}%` }}
               title={`${formatTime(p.startMs)} – ${formatTime(p.stopMs)}\n${p.title}${p.description ? '\n' + p.description : ''}`}
               onClick={(e) => {
                 e.stopPropagation()
                 if (didPan()) return
+                if (catchup && onPlayCatchup) {
+                  onPlayCatchup(channel, { startMs: p.startMs, stopMs: p.stopMs, title: p.title })
+                  return
+                }
                 onSelectChannel(channel)
               }}
             >
@@ -202,13 +210,15 @@ export function EpgGrid({
   activeStreamId,
   onSelectChannel,
   onOpenEpgSettings,
-  emptyMessage
+  emptyMessage,
+  onPlayCatchup,
 }: {
   session: Session
   channels: LiveStream[]
   activeStreamId?: number
   onSelectChannel: (channel: LiveStream | null) => void
   /** Jumps to the EPG section — the place external guide sources are added/removed. */
+  onPlayCatchup?: (channel: LiveStream, programme: { startMs: number; stopMs: number; title: string }) => void
   onOpenEpgSettings?: () => void
   /** Shown when there are no rows (library views explain themselves this way). */
   emptyMessage?: string
@@ -400,6 +410,7 @@ export function EpgGrid({
               shortEpgByStream,
               requestShortEpg: request,
               onSelectChannel,
+              onPlayCatchup,
               onTimelinePointerDown: startPan,
               onTimelinePointerMove: movePan,
               onTimelinePointerUp: endPan,
