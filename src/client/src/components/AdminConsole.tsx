@@ -439,14 +439,15 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
           </div>
           <p className="setup-hint">
             When the provider stops answering, the server posts to this Discord webhook — once when it goes
-            down and once when it recovers, never repeatedly while it stays down. The message names the host
-            and the error, never your account.
+            down and once when it recovers, never repeatedly while it stays down. Several webhooks work too:
+            separate them with commas, and every one of them gets told. The message names the host and the
+            error, never your account.
           </p>
           {alertError && <div className="login-error admin-error">{alertError}</div>}
           {alertNote && <div className="epg-note">{alertNote}</div>}
           <div className="add-user-row">
             <label>
-              Discord webhook URL
+              Discord webhook URL(s)
               <input
                 type="text"
                 autoComplete="off"
@@ -454,7 +455,9 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
                 value={webhookDraft}
                 onChange={(e) => setWebhookDraft(e.target.value)}
                 placeholder={
-                  alertInfo?.webhookSet ? '•••••• saved — leave blank to keep it' : 'https://discord.com/api/webhooks/…'
+                  alertInfo?.webhookSet
+                    ? '•••••• saved — leave blank to keep it'
+                    : 'https://discord.com/api/webhooks/… (comma-separate several)'
                 }
                 style={{ width: 460 }}
               />

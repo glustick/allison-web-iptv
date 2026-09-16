@@ -226,3 +226,29 @@ export async function postDiscordWebhook(url: string, body: { content: string })
     return false
   }
 }
+
+/**
+ * Several destinations, because one is often not enough: the channel you control (which works
+ * immediately) and the provider's own support channel (which needs their permission). Held as one
+ * comma-separated field so the Admin panel keeps a single input, and parsed strictly — anything that
+ * is not a Discord webhook URL is dropped rather than silently kept and quietly failing at 3am.
+ */
+export function parseDiscordWebhookList(input: string | null | undefined): string[] {
+  if (typeof input !== 'string' || input.trim() === '') return []
+  const seen = new Set<string>()
+  for (const raw of input.split(/[,\n]+/)) {
+    const candidate = raw.trim()
+    if (!candidate || !isDiscordWebhookUrl(candidate)) continue
+    seen.add(candidate)
+  }
+  return [...seen]
+}
+
+/** Posts to every destination, and reports how many accepted it. Never throws. */
+export async function postToDiscordWebhooks(
+  urls: readonly string[],
+  body: { content: string }
+): Promise<{ delivered: number; attempted: number }> {
+  const results = await Promise.all(urls.map((url) => postDiscordWebhook(url, body)))
+  return { delivered: results.filter(Boolean).length, attempted: urls.length }
+}

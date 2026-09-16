@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   advanceWatch,
   createProviderWatch,
+  parseDiscordWebhookList,
+  postToDiscordWebhooks,
   buildProviderAlert,
   DEFAULT_WATCH_THRESHOLDS,
   isDiscordWebhookUrl,
@@ -185,5 +187,71 @@ describe('createProviderWatch', () => {
     await expect(watch.checkOnce()).resolves.toBe('unknown')
     watch.stop()
     expect(posted).toHaveLength(0)
+  })
+})
+
+describe('parseDiscordWebhookList', () => {
+  it('takes one or several destinations', () => {
+    expect(parseDiscordWebhookList('https://discord.com/api/webhooks/1/a')).toEqual([
+      'https://discord.com/api/webhooks/1/a'
+    ])
+    expect(
+      parseDiscordWebhookList('https://discord.com/api/webhooks/1/a, https://discord.com/api/webhooks/2/b')
+    ).toHaveLength(2)
+    expect(parseDiscordWebhookList('https://discord.com/api/webhooks/1/a\nhttps://discord.com/api/webhooks/2/b')).toHaveLength(2)
+  })
+
+  it('drops anything that is not a Discord webhook instead of keeping it to fail later', () => {
+    const parsed = parseDiscordWebhookList(
+      'https://discord.com/api/webhooks/1/a, not-a-url, https://evil.example.com/api/webhooks/1/x, http://discord.com/api/webhooks/2/b'
+    )
+    expect(parsed).toEqual(['https://discord.com/api/webhooks/1/a'])
+  })
+
+  it('does not post to the same channel twice', () => {
+    expect(
+      parseDiscordWebhookList('https://discord.com/api/webhooks/1/a, https://discord.com/api/webhooks/1/a')
+    ).toHaveLength(1)
+  })
+
+  it('is empty for nothing at all', () => {
+    for (const input of [null, undefined, '', '   ', ',,,']) expect(parseDiscordWebhookList(input)).toEqual([])
+  })
+})
+
+describe('postToDiscordWebhooks', () => {
+  it('posts to every destination and counts the ones that accepted', async () => {
+    const calls: string[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = (async (url: string) => {
+      calls.push(url)
+      // the second destination is a webhook Discord has forgotten
+      return { ok: !String(url).endsWith('/dead') } as Response
+    }) as typeof fetch
+    try {
+      const result = await postToDiscordWebhooks(
+        ['https://discord.com/api/webhooks/1/live', 'https://discord.com/api/webhooks/2/dead'],
+        { content: 'x' }
+      )
+      expect(calls).toHaveLength(2)
+      expect(result).toEqual({ delivered: 1, attempted: 2 })
+    } finally {
+      globalThis.fetch = original
+    }
+  })
+
+  it('never throws, even when the destination is unreachable', async () => {
+    const original = globalThis.fetch
+    globalThis.fetch = (async () => {
+      throw new Error('offline')
+    }) as typeof fetch
+    try {
+      await expect(postToDiscordWebhooks(['https://discord.com/api/webhooks/1/a'], { content: 'x' })).resolves.toEqual({
+        delivered: 0,
+        attempted: 1
+      })
+    } finally {
+      globalThis.fetch = original
+    }
   })
 })

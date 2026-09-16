@@ -24,7 +24,14 @@ import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagn
 import { createRateLimiter } from './lib/rateLimit.js'
 import { assertSafeExternalUrl, isSameOrigin, isSecureRequest, securityHeaders, UnsafeUrlError } from './lib/security.js'
 import { mapSameOriginStreamPath, parseSameOriginTimeshiftPath } from './lib/upstreamUrl.js'
-import { createProviderWatch, isDiscordWebhookUrl, postDiscordWebhook, type ProviderWatch } from './lib/providerWatch.js'
+import {
+  createProviderWatch,
+  isDiscordWebhookUrl,
+  parseDiscordWebhookList,
+  postDiscordWebhook,
+  postToDiscordWebhooks,
+  type ProviderWatch
+} from './lib/providerWatch.js'
 import { createAuthAudit } from './lib/authAudit.js'
 import { createAuthAuditStore } from './lib/authAuditStore.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
@@ -484,13 +491,19 @@ app.post('/api/admin/alerts', requireAuth, requireAdmin, (req, res) => {
   const raw = req.body?.webhook
   const clears = raw === null
   const sets = typeof raw === 'string' && raw.trim().length > 0
-  const next = clears ? undefined : sets ? String(raw).trim() : credentials.alertWebhook
-  if (next && !isDiscordWebhookUrl(next)) {
-    // The same guard the posting side enforces, so a typo is reported where it was typed rather
-    // than discovered during an outage.
-    res.status(400).json({ error: 'That is not a Discord webhook URL (expected https://discord.com/api/webhooks/…)' })
+  const submitted = clears ? undefined : sets ? String(raw).trim() : credentials.alertWebhook
+  // One field, several destinations (comma or newline separated): the channel you control now, the
+  // provider's own support channel when they allow it. Strict about every entry — silently dropping
+  // a mistyped one means finding out during an outage, which is the whole thing this exists to avoid.
+  const entries = submitted ? submitted.split(/[,\n]+/).map((part) => part.trim()).filter(Boolean) : []
+  const invalid = entries.find((entry) => !isDiscordWebhookUrl(entry))
+  if (invalid) {
+    res.status(400).json({
+      error: `Not a Discord webhook URL: ${invalid.slice(0, 60)} (expected https://discord.com/api/webhooks/…)`
+    })
     return
   }
+  const next = entries.length > 0 ? entries.join(', ') : undefined
   try {
     const updated: SessionCredentials = { ...credentials, alertWebhook: next }
     usersStore.setIptvCredentials(session.username, encryptSessionCredentials(updated))
@@ -734,10 +747,11 @@ app.post('/api/alerts/test', requireAuth, (req, res) => {
   } catch {
     /* an unparseable server URL is a config problem, not a reason not to send a test */
   }
-  const delivered = await postDiscordWebhook(credentials.alertWebhook, {
+  const targets = parseDiscordWebhookList(credentials.alertWebhook)
+  const outcome = await postToDiscordWebhooks(targets, {
     content: `🧪 Test alert from your IPTV client — the watchdog is wired up. It will post here if **${host}** stops responding.`
   })
-  res.json({ ok: delivered, delivered })
+  res.json({ ok: outcome.delivered > 0, delivered: outcome.delivered > 0, destinations: outcome.attempted, accepted: outcome.delivered })
   })()
 })
 
@@ -774,7 +788,9 @@ function startProviderWatch(username: string, credentials: SessionCredentials): 
         }
       },
             intervalMs: watchIntervalMs,
-            postAlert: (body) => postDiscordWebhook(webhook, body)
+            // Every destination: the channel you control now, the provider's own when they allow it.
+      postAlert: async (body) =>
+        (await postToDiscordWebhooks(parseDiscordWebhookList(webhook), body)).delivered > 0
     })
   )
   console.log(`[watch] provider watchdog active for ${host} (account ${username}) — alerts go to Discord`)
