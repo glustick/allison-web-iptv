@@ -68,6 +68,12 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
   const [formError, setFormError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [note, setNote] = useState<string | null>(null)
+  // Provider-alert settings (see the server's /api/admin/alerts).
+  const [alertInfo, setAlertInfo] = useState<{ webhookSet: boolean; watching: boolean; state: string; host: string | null } | null>(null)
+  const [webhookDraft, setWebhookDraft] = useState('')
+  const [alertBusy, setAlertBusy] = useState(false)
+  const [alertNote, setAlertNote] = useState<string | null>(null)
+  const [alertError, setAlertError] = useState<string | null>(null)
   // Inline password reset: the app had no way to change a password after creation, so a typo
   // locked an account out permanently with delete-and-recreate as the only remedy.
   const [passwordTarget, setPasswordTarget] = useState<string | null>(null)
@@ -79,7 +85,11 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
-      const [sessionsRes, usersRes] = await Promise.all([fetch('/api/admin/sessions'), fetch('/api/admin/users')])
+      const [sessionsRes, usersRes, alertsRes] = await Promise.all([
+        fetch('/api/admin/sessions'),
+        fetch('/api/admin/users'),
+        fetch('/api/admin/alerts')
+      ])
       if (sessionsRes.status === 401 || sessionsRes.status === 403) {
         window.location.reload()
         return
@@ -89,6 +99,7 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
       const usersData = (await usersRes.json()) as { users: AdminUser[] }
       setSessions(sessionsData.sessions)
       setUsers(usersData.users)
+        if (alertsRes.ok) setAlertInfo((await alertsRes.json()) as typeof alertInfo)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load admin data')
@@ -174,6 +185,62 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not remove the user')
+    }
+  }
+
+  async function saveAlertWebhook(): Promise<void> {
+    setAlertBusy(true); setAlertError(null); setAlertNote(null)
+    try {
+      const res = await fetch('/api/admin/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhook: webhookDraft.trim() })
+      })
+      const data = (await res.json().catch(() => ({}))) as { error?: string; webhookSet?: boolean; watching?: boolean }
+      if (!res.ok) throw new Error(data.error ?? 'Could not save the webhook')
+      setWebhookDraft('')
+      setAlertNote(
+        data.watching
+          ? 'Saved — the watchdog is watching your provider and will post here if it stops answering.'
+          : 'Saved.'
+      )
+      await refresh()
+    } catch (err) {
+      setAlertError(err instanceof Error ? err.message : 'Could not save the webhook')
+    } finally {
+      setAlertBusy(false)
+    }
+  }
+
+  async function clearAlertWebhook(): Promise<void> {
+    setAlertBusy(true); setAlertError(null); setAlertNote(null)
+    try {
+      const res = await fetch('/api/admin/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhook: null })
+      })
+      if (!res.ok) throw new Error('Could not remove the webhook')
+      setAlertNote('Removed — no alerts will be posted.')
+      await refresh()
+    } catch (err) {
+      setAlertError(err instanceof Error ? err.message : 'Could not remove the webhook')
+    } finally {
+      setAlertBusy(false)
+    }
+  }
+
+  async function sendTestAlert(): Promise<void> {
+    setAlertBusy(true); setAlertError(null); setAlertNote(null)
+    try {
+      const res = await fetch('/api/alerts/test', { method: 'POST' })
+      const data = (await res.json().catch(() => ({}))) as { error?: string; delivered?: boolean }
+      if (!res.ok) throw new Error(data.error ?? 'Could not send the test')
+      setAlertNote(data.delivered ? 'Test message delivered to Discord.' : 'Discord refused the test — check the webhook URL.')
+    } catch (err) {
+      setAlertError(err instanceof Error ? err.message : 'Could not send the test')
+    } finally {
+      setAlertBusy(false)
     }
   }
 
@@ -361,6 +428,65 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
           </div>
         </form>
       </section>
+        <section className="admin-section">
+          <div className="epg-section-head">
+            <h2>Provider alerts</h2>
+            {alertInfo && (
+              <span className="admin-muted">
+                {alertInfo.watching ? `watching ${alertInfo.host ?? 'the provider'} — ${alertInfo.state}` : 'not watching'}
+              </span>
+            )}
+          </div>
+          <p className="setup-hint">
+            When the provider stops answering, the server posts to this Discord webhook — once when it goes
+            down and once when it recovers, never repeatedly while it stays down. The message names the host
+            and the error, never your account.
+          </p>
+          {alertError && <div className="login-error admin-error">{alertError}</div>}
+          {alertNote && <div className="epg-note">{alertNote}</div>}
+          <div className="add-user-row">
+            <label>
+              Discord webhook URL
+              <input
+                type="text"
+                autoComplete="off"
+                spellCheck={false}
+                value={webhookDraft}
+                onChange={(e) => setWebhookDraft(e.target.value)}
+                placeholder={
+                  alertInfo?.webhookSet ? '•••••• saved — leave blank to keep it' : 'https://discord.com/api/webhooks/…'
+                }
+                style={{ width: 460 }}
+              />
+            </label>
+            <button type="button" onClick={() => void saveAlertWebhook()} disabled={alertBusy}>
+              {alertBusy ? 'Saving…' : 'Save'}
+            </button>
+            <button
+              type="button"
+              className="admin-small-btn"
+              onClick={() => void sendTestAlert()}
+              disabled={alertBusy || !alertInfo?.webhookSet}
+              title={
+                alertInfo?.webhookSet
+                  ? 'Post a test message to the channel'
+                  : 'Save a webhook first — then this proves delivery'
+              }
+            >
+              Send test alert
+            </button>
+            {alertInfo?.webhookSet && (
+              <button
+                type="button"
+                className="admin-small-btn danger"
+                onClick={() => void clearAlertWebhook()}
+                disabled={alertBusy}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        </section>
     </div>
   )
 }

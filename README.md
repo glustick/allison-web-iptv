@@ -386,6 +386,20 @@ when the provider is slow or entirely down. (Search tokenises differently from t
 on purpose: the matcher drops packaging words like `HD`/`Channel` because it is deciding identity,
 whereas search keeps them, because people type the words they can see.)
 
+## Provider alerts (admin → **Admin** → *Provider alerts*)
+
+The server watches your provider and posts to a **Discord webhook** when it stops answering — once
+when it goes down, once when it recovers, and never repeatedly while it stays down. It needs two bad
+checks in a row before calling it an outage, and a single good check in the middle breaks the run, so
+a blip cannot turn into chatter in someone's support channel.
+
+The message names the host, when it started, and the provider's own error verbatim; it never mentions
+your account, because a support channel is not private. The webhook is stored encrypted with your
+provider credentials and is never sent to the browser — the panel shows a blank field that means
+*keep the saved one* — and only `https://discord.com/api/webhooks/…` URLs are accepted. **Send test
+alert** proves delivery on the spot rather than during a real outage. `PROVIDER_WATCH_INTERVAL_SECONDS`
+tunes how often it checks (default 90).
+
 ## Backup, restore and system health (admin → **System** tab)
 
 - **Health**: version, uptime, memory, database size and row counts, provider reachability with

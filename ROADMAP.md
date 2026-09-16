@@ -142,9 +142,10 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
   host. Document/script a Watchtower sidecar or a scheduled `docker image prune`, since the
   in-app banner (v0.9.x) only *notifies* — it cannot replace a running container from inside
   itself.
-- **Degraded-health alerting.** *Open.* Let `/api/health` push to a webhook (ntfy / Gotify /
-  Discord) when it flips to `degraded`, so a full disk or an unwritable DB pings the operator
-  instead of waiting to be discovered.
+- **Degraded-health alerting.** *Shipped for the provider in v0.15.0* (a Discord webhook, posted on
+  outage and recovery — see the README). What remains is the other half: the *app's own* health
+  (a full disk, an unwritable database) still only shows on the System tab rather than pinging
+  anyone.
 - **Skip the multi-arch image build for docs-only commits.** *Open.* Every push to `main`
   builds a full multi-arch image (~15 min, arm64 `better-sqlite3` under emulation), including
   commits that touch only markdown. A `paths-ignore` on `**.md` in the workflow would save that

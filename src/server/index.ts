@@ -24,7 +24,7 @@ import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagn
 import { createRateLimiter } from './lib/rateLimit.js'
 import { assertSafeExternalUrl, isSameOrigin, isSecureRequest, securityHeaders, UnsafeUrlError } from './lib/security.js'
 import { mapSameOriginStreamPath } from './lib/upstreamUrl.js'
-import { createProviderWatch, isDiscordWebhookUrl, postDiscordWebhook } from './lib/providerWatch.js'
+import { createProviderWatch, isDiscordWebhookUrl, postDiscordWebhook, type ProviderWatch } from './lib/providerWatch.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
 import {
   applyPendingRestore,
@@ -436,6 +436,49 @@ app.post('/api/auth/activity', requireAuth, (req, res) => {
 
 // --- Admin console: who is logged in, what they're watching, and account management --------
 
+// What the Admin console's "Provider alerts" panel reads and writes.
+//
+// The webhook lives on the *calling admin's own account*, alongside the provider credentials it
+// watches — so the address an alert goes to always travels with the provider it is about.
+app.get('/api/admin/alerts', requireAuth, requireAdmin, (req, res) => {
+  const session = req.authSession as AuthSession
+  const credentials = resolveAccountCredentials(session.username)
+  const watch = providerWatches.get(session.username)
+  res.json({
+    webhookSet: Boolean(credentials?.alertWebhook),
+    watching: Boolean(watch),
+    state: watch ? watch.state() : 'unknown',
+    host: credentials?.server ?? null
+  })
+})
+
+app.post('/api/admin/alerts', requireAuth, requireAdmin, (req, res) => {
+  const session = req.authSession as AuthSession
+  const credentials = resolveAccountCredentials(session.username)
+  if (!credentials) {
+    res.status(409).json({ error: 'IPTV provider is not configured on this account' })
+    return
+  }
+  const raw = req.body?.webhook
+  const clears = raw === null
+  const sets = typeof raw === 'string' && raw.trim().length > 0
+  const next = clears ? undefined : sets ? String(raw).trim() : credentials.alertWebhook
+  if (next && !isDiscordWebhookUrl(next)) {
+    // The same guard the posting side enforces, so a typo is reported where it was typed rather
+    // than discovered during an outage.
+    res.status(400).json({ error: 'That is not a Discord webhook URL (expected https://discord.com/api/webhooks/…)' })
+    return
+  }
+  try {
+    const updated: SessionCredentials = { ...credentials, alertWebhook: next }
+    usersStore.setIptvCredentials(session.username, encryptSessionCredentials(updated))
+    startProviderWatch(session.username, updated)
+    res.json({ ok: true, webhookSet: Boolean(next), watching: providerWatches.has(session.username) })
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Could not save the alert setting' })
+  }
+})
+
 app.get('/api/admin/sessions', requireAuth, requireAdmin, (_req, res) => {
   const now = Date.now()
   const sessions = [...authSessions.values()]
@@ -676,38 +719,53 @@ app.post('/api/alerts/test', requireAuth, (req, res) => {
   })()
 })
 
-// One watcher per account that has both a provider and an alert target. Started here rather than
-// inside the request path because it has to keep working while nobody is using the app — that is
-// the entire point of it. See lib/providerWatch.ts for why it only speaks on state changes.
-for (const user of usersStore.listUsers()) {
-  const stored = usersStore.getIptvCredentials(user.username)
-  if (!stored) continue
-  let credentials: SessionCredentials
-  try {
-    credentials = decryptSessionCredentials(stored)
-  } catch {
-    continue
-  }
+// How often the watchdog checks the provider. 90s by default: often enough to notice an outage
+// while somebody is waiting, rare enough not to be a load on anyone's panel.
+const watchIntervalMs = (Number(process.env.PROVIDER_WATCH_INTERVAL_SECONDS ?? '') || 90) * 1000
+
+const providerWatches = new Map<string, ProviderWatch>()
+
+// Starts (or restarts) the watchdog for one account. Called at boot and whenever an admin changes
+// the alert setting, so a new webhook takes effect at once rather than at the next restart.
+function startProviderWatch(username: string, credentials: SessionCredentials): void {
+  providerWatches.get(username)?.stop()
+  providerWatches.delete(username)
   const webhook = credentials.alertWebhook
-  if (!webhook || !isDiscordWebhookUrl(webhook)) continue
+  if (!webhook || !isDiscordWebhookUrl(webhook)) return
   let host = credentials.server
   try {
     host = new URL(credentials.server).hostname
   } catch {
     /* keep the raw string as the label */
   }
-  createProviderWatch({
-    host,
-    probe: async () => {
-      const result = await probeProvider(credentials)
-      return {
-        reachable: result.reachable === true,
-        detail: String(result.error ?? 'provider answered without a user_info block')
-      }
-    },
-    postAlert: (body) => postDiscordWebhook(webhook, body)
-  })
-  console.log(`[watch] provider watchdog active for ${host} — outage alerts go to Discord`)
+  providerWatches.set(
+    username,
+    createProviderWatch({
+      host,
+      probe: async () => {
+        const result = await probeProvider(credentials)
+        return {
+          reachable: result.reachable === true,
+          detail: String(result.error ?? 'provider answered without a user_info block')
+        }
+      },
+            intervalMs: watchIntervalMs,
+            postAlert: (body) => postDiscordWebhook(webhook, body)
+    })
+  )
+  console.log(`[watch] provider watchdog active for ${host} (account ${username}) — alerts go to Discord`)
+}
+
+// Watchdogs for every account that configured one. Started here rather than inside a request path
+// because it has to keep working while nobody is using the app — that is the entire point of it.
+for (const user of usersStore.listUsers()) {
+  const stored = usersStore.getIptvCredentials(user.username)
+  if (!stored) continue
+  try {
+    startProviderWatch(user.username, decryptSessionCredentials(stored))
+  } catch {
+    continue
+  }
 }
 
 app.post('/api/session/save', requireAuth, (req, res) => {
