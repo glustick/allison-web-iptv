@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
+import { useSessionExpired } from '../lib/sessionWatch'
 import { evaluatePlaybackSample, type PlaybackWatchState } from '../lib/playbackRecovery'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
@@ -43,6 +44,16 @@ export function NativeVideoPlayer({
   onProgress?: (positionSeconds: number, durationSeconds: number | null) => void
 }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  
+  // A restarted or expired session looks exactly like a stall: the player keeps refreshing its
+  // playlist, each refresh now answers 401, and the picture stops advancing with nothing on
+  // screen. Ask the server, and say so when the answer is no.
+  const sessionExpired = useSessionExpired(true)
+
+  // Nothing the player does can succeed once the session is gone, so stop pretending.
+  useEffect(() => {
+    if (sessionExpired) videoRef.current?.pause()
+  }, [sessionExpired])
   const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -244,12 +255,20 @@ export function NativeVideoPlayer({
           if (hlsRef.current) hlsRef.current.subtitleTrack = index
         }}
       />
+      {sessionExpired && (
+        <div className="player-error" role="status">
+          <span>Your session expired — sign in again to keep watching.</span>
+          <button type="button" className="admin-small-btn" onClick={() => window.location.reload()}>
+            Sign in again
+          </button>
+        </div>
+      )}
       {preparing && !error && (
         <div className="player-notice" role="status">
           Converting this title for playback — this can take up to a minute the first time.
         </div>
       )}
-      {error && <div className="login-error" style={{ padding: '6px 16px' }}>{error}</div>}
+      {!sessionExpired && error && <div className="login-error" style={{ padding: '6px 16px' }}>{error}</div>}
     </div>
   )
 }

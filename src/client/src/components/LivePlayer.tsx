@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
+import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { TrackControls, type PlayerTrack } from './TrackControls'
@@ -47,6 +48,16 @@ interface ChromiumVideoElement extends HTMLVideoElement {
 // components rather than one that branches.
 export function LivePlayer({ url, channelKey }: { url: string; channelKey: string }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  
+  // A restarted or expired session looks exactly like a stall: the player keeps refreshing its
+  // playlist, each refresh now answers 401, and the picture stops advancing with nothing on
+  // screen. Ask the server, and say so when the answer is no.
+  const sessionExpired = useSessionExpired(true)
+
+  // Nothing the player does can succeed once the session is gone, so stop pretending.
+  useEffect(() => {
+    if (sessionExpired) videoRef.current?.pause()
+  }, [sessionExpired])
   const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -378,7 +389,15 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
           if (hlsRef.current) hlsRef.current.subtitleTrack = index
         }}
       />
-      {error && (
+      {sessionExpired && (
+        <div className="player-error" role="status">
+          <span>Your session expired — sign in again to keep watching.</span>
+          <button type="button" className="admin-small-btn" onClick={() => window.location.reload()}>
+            Sign in again
+          </button>
+        </div>
+      )}
+      {!sessionExpired && error && (
         <div className="player-error">
           <span>{error}</span>
           <button type="button" className="admin-small-btn" onClick={() => void retryPlayback()}>
