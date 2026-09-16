@@ -12,7 +12,7 @@ import { fetchTextViaUpstream } from './lib/upstreamText.js'
 import { createNodeUpstreamRequest } from './lib/nodeUpstreamRequest.js'
 import { createTranscodeService, prepareTranscodeDir, resolveTranscodeDir } from './lib/transcodeService.js'
 import { dataDirRecoveryHint, describeDataDirMount } from './lib/dataDirMount.js'
-import { filesystemSpace, isLowSpace } from './lib/diskSpace.js'
+import { filesystemSpace, isLowSpace , LOW_SPACE_THRESHOLD_BYTES } from './lib/diskSpace.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
 import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './lib/sessionStore.js'
@@ -25,6 +25,8 @@ import { createRateLimiter } from './lib/rateLimit.js'
 import { assertSafeExternalUrl, isSameOrigin, isSecureRequest, securityHeaders, UnsafeUrlError } from './lib/security.js'
 import { mapSameOriginStreamPath, parseSameOriginTimeshiftPath } from './lib/upstreamUrl.js'
 import {
+  appHealthSample,
+  buildAppHealthAlert,
   createProviderWatch,
   isDiscordWebhookUrl,
   parseDiscordWebhookList,
@@ -794,6 +796,38 @@ function startProviderWatch(username: string, credentials: SessionCredentials): 
     })
   )
   console.log(`[watch] provider watchdog active for ${host} (account ${username}) — alerts go to Discord`)
+}
+
+// The app's own health, watched once for the whole app rather than once per account: a full disk or
+// an unwritable database is not per-account, and nobody wants the same alarm three times. Every
+// distinct destination across the configured accounts is told, once.
+{
+  const destinations = new Set<string>()
+  for (const user of usersStore.listUsers()) {
+    const stored = usersStore.getIptvCredentials(user.username)
+    if (!stored) continue
+    try {
+      for (const url of parseDiscordWebhookList(decryptSessionCredentials(stored).alertWebhook)) destinations.add(url)
+    } catch {
+      continue
+    }
+  }
+  if (destinations.size > 0) {
+    const targets = [...destinations]
+    // The same floor the transcoder refuses to start below — under it SQLite is about to fail.
+    const floor = LOW_SPACE_THRESHOLD_BYTES
+    createProviderWatch({
+      host: 'this app',
+      probe: async () => {
+        const space = await filesystemSpace(DATA_DIR)
+        const database = usersStore.status()
+        return appHealthSample({ freeBytes: space?.freeBytes ?? null, databaseOk: database.ok, lowSpaceBytes: floor })
+      },
+      postAlert: async (body) => (await postToDiscordWebhooks(targets, body)).delivered > 0,
+      intervalMs: 5 * 60_000
+    })
+    console.log(`[watch] app-health watchdog active — degradation alerts go to ${targets.length} destination(s)`)
+  }
 }
 
 // Watchdogs for every account that configured one. Started here rather than inside a request path

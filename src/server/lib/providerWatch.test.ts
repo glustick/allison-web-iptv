@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   advanceWatch,
+  appHealthSample,
+  buildAppHealthAlert,
   createProviderWatch,
   parseDiscordWebhookList,
   postToDiscordWebhooks,
@@ -253,5 +255,52 @@ describe('postToDiscordWebhooks', () => {
     } finally {
       globalThis.fetch = original
     }
+  })
+})
+
+describe('appHealthSample', () => {
+  const floor = 256 * 1024 * 1024
+
+  it('is healthy with room and a writable database', () => {
+    expect(appHealthSample({ freeBytes: 30 * 1024 ** 3, databaseOk: true, lowSpaceBytes: floor })).toEqual({
+      reachable: true,
+      detail: 'healthy'
+    })
+  })
+
+  it('is degraded below the floor, and says the number', () => {
+    const sample = appHealthSample({ freeBytes: 120 * 1024 * 1024, databaseOk: true, lowSpaceBytes: floor })
+    expect(sample.reachable).toBe(false)
+    expect(sample.detail).toContain('120 MB free')
+  })
+
+  it('is degraded when the database cannot be written, whatever the disk says', () => {
+    const sample = appHealthSample({ freeBytes: 50 * 1024 ** 3, databaseOk: false, lowSpaceBytes: floor })
+    expect(sample.reachable).toBe(false)
+    expect(sample.detail).toContain('database is not writable')
+  })
+
+  it('does not invent a disk problem it cannot measure', () => {
+    expect(appHealthSample({ freeBytes: null, databaseOk: true, lowSpaceBytes: floor }).reachable).toBe(true)
+  })
+})
+
+describe('buildAppHealthAlert', () => {
+  const at = new Date('2026-09-16T11:00:00Z')
+
+  it('says which problem it is, and what to do about it', () => {
+    const low = buildAppHealthAlert('down', { freeBytes: 120 * 1024 * 1024, databaseOk: true, lowSpaceBytes: 256 * 1024 * 1024, at }).content
+    expect(low).toContain('low disk space')
+    expect(low).toContain('Free space: **120 MB**')
+    const db = buildAppHealthAlert('down', { freeBytes: 30 * 1024 ** 3, databaseOk: false, lowSpaceBytes: 256 * 1024 * 1024, at }).content
+    expect(db).toContain('database not writable')
+    // The advice that cost a debugging session once: a restart is part of the fix.
+    expect(db).toContain('restart the container')
+  })
+
+  it('reports the recovery and how long it lasted', () => {
+    const up = buildAppHealthAlert('up', { freeBytes: 30 * 1024 ** 3, databaseOk: true, lowSpaceBytes: 256 * 1024 * 1024, at, degradedForMs: 12 * 60000 }).content
+    expect(up).toContain('healthy again')
+    expect(up).toContain('12 min')
   })
 })

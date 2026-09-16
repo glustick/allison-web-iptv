@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { catchupForProgramme } from './catchup'
+import { catchupForProgramme, restartRequestForProgramme } from './catchup'
 
 const now = Date.UTC(2026, 8, 16, 12, 0) / 1000 * 1000
 const hour = 3_600_000
@@ -62,5 +62,36 @@ describe('catchupForProgramme', () => {
       now
     )
     expect(short?.durationMinutes).toBe(1)
+  })
+})
+
+describe('restartRequestForProgramme', () => {
+  const live = { startMs: now - 45 * 60_000, stopMs: now + 15 * 60_000 }
+
+  it('asks for the current programme from its start up to now', () => {
+    const request = restartRequestForProgramme({ tv_archive: 1, tv_archive_duration: 3 }, live, now)
+    expect(request?.startSeconds).toBe(Math.floor((now - 45 * 60_000) / 1000))
+    expect(request?.durationMinutes).toBe(45)
+  })
+
+  it('leaves a finished programme to ordinary catch-up', () => {
+    expect(
+      restartRequestForProgramme({ tv_archive: 1, tv_archive_duration: 3 }, { startMs: now - 90 * 60_000, stopMs: now - 30 * 60_000 }, now)
+    ).toBeNull()
+  })
+
+  it('refuses a channel with no archive, or one whose start is outside the window', () => {
+    expect(restartRequestForProgramme({ tv_archive: 0 }, live, now)).toBeNull()
+    expect(restartRequestForProgramme({}, live, now)).toBeNull()
+    // a five-hour match on a 3-day archive is fine; one that started before the window is not
+    expect(
+      restartRequestForProgramme({ tv_archive: 1, tv_archive_duration: 1 }, { startMs: now - 30 * 3600_000, stopMs: now + 60_000 }, now)
+    ).toBeNull()
+  })
+
+  it('does not offer a restart for something that has not started', () => {
+    expect(
+      restartRequestForProgramme({ tv_archive: 1, tv_archive_duration: 3 }, { startMs: now + 60_000, stopMs: now + 3600_000 }, now)
+    ).toBeNull()
   })
 })

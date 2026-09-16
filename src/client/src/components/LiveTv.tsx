@@ -367,6 +367,16 @@ export function LiveTv({
 
   // Playing a past programme: the same channel from the provider's archive. Set *after*
   // selectChannel, which clears it — selectChannel means "play this channel live".
+  // Restarting something still on air: identical downstream to catch-up (the archive is asked
+  // for the programme's start up to now), so it goes through the same transcode flow.
+  const playRestart = useCallback(
+    (channel: LiveStream, programme: { startMs: number; stopMs: number; title: string }): void => {
+      selectChannel(channel)
+      setCatchup({ startMs: programme.startMs, stopMs: Date.now(), title: programme.title })
+    },
+    [selectChannel]
+  )
+
   const playCatchup = useCallback(
     (channel: LiveStream, programme: { startMs: number; stopMs: number; title: string }): void => {
       selectChannel(channel)
@@ -727,6 +737,7 @@ export function LiveTv({
             onSelectChannel={selectChannel}
             onOpenEpgSettings={onOpenEpgSettings}
             onPlayCatchup={playCatchup}
+            onRestartProgramme={playRestart}
             emptyMessage={
               selection.type === 'favourites' ? 'No favourites yet — press ☆ on a channel while it plays.' : undefined
             }
@@ -845,6 +856,7 @@ export function LiveTv({
             onSelectChannel={selectChannel}
             onOpenEpgSettings={onOpenEpgSettings}
             onPlayCatchup={playCatchup}
+            onRestartProgramme={playRestart}
             emptyMessage={
               selection.type === 'favourites'
                 ? 'No favourites yet — press ☆ on a channel while it plays.'

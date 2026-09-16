@@ -252,3 +252,65 @@ export async function postToDiscordWebhooks(
   const results = await Promise.all(urls.map((url) => postDiscordWebhook(url, body)))
   return { delivered: results.filter(Boolean).length, attempted: urls.length }
 }
+
+// --- the app's own health, on the same path ------------------------------------------------------
+//
+// The provider watchdog answers "can I watch anything?"; this answers "is the app itself in trouble?"
+// — the case that has actually taken this deployment down before: a full root filesystem, which
+// presents as "disk I/O error" on everything including sign-in, and an unwritable database, which
+// presents as being unable to store anything at all. Both are visible on the System tab, which is no
+// use if nobody is looking at it.
+
+export interface AppHealthFacts {
+  freeBytes: number | null
+  databaseOk: boolean
+  /** The same floor the transcoder refuses to start below; under it SQLite is about to fail. */
+  lowSpaceBytes: number
+  at: Date
+  degradedForMs?: number
+}
+
+/** One health reading, in the shape the watch state machine already understands. */
+export function appHealthSample(facts: Omit<AppHealthFacts, 'at' | 'degradedForMs'>): {
+  reachable: boolean
+  detail: string
+} {
+  const problems: string[] = []
+  if (!facts.databaseOk) problems.push('the database is not writable')
+  if (facts.freeBytes !== null && facts.freeBytes < facts.lowSpaceBytes) {
+    problems.push(`only ${Math.round(facts.freeBytes / 1024 / 1024)} MB free`)
+  }
+  return { reachable: problems.length === 0, detail: problems.join('; ') || 'healthy' }
+}
+
+function gb(bytes: number): string {
+  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 / 1024)} MB`
+}
+
+/** The app-health message. Deliberately says what to do, because that is the point of being told. */
+export function buildAppHealthAlert(event: 'down' | 'up', facts: AppHealthFacts): { content: string } {
+  if (event === 'down') {
+    return {
+      content: [
+        `⚠️ **IPTV app degraded — ${facts.databaseOk ? 'low disk space' : 'database not writable'}**`,
+        `Detected at **${facts.at.toISOString().replace('T', ' ').slice(0, 16)} UTC**.`,
+        facts.freeBytes !== null ? `Free space: **${gb(facts.freeBytes)}** (floor is ${gb(facts.lowSpaceBytes)}).` : '',
+        facts.databaseOk
+          ? '_Free space on the host, then the app can keep recording. Transcodes refuse to start below the floor._'
+          : '_The database cannot be written. Check the volume permissions, and restart the container after fixing them — SQLite fixes its write mode when it opens the file._'
+      ]
+        .filter(Boolean)
+        .join('\n')
+    }
+  }
+  return {
+    content: [
+      '✅ **IPTV app healthy again**',
+      `Recovered at **${facts.at.toISOString().replace('T', ' ').slice(0, 16)} UTC**` +
+        (facts.degradedForMs ? `, after about ${Math.round(facts.degradedForMs / 60000)} min.` : '.'),
+      facts.freeBytes !== null ? `Free space now: **${gb(facts.freeBytes)}**.` : ''
+    ]
+      .filter(Boolean)
+      .join('\n')
+  }
+}

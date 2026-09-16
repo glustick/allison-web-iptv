@@ -46,3 +46,32 @@ export function catchupForProgramme(
   const durationMinutes = Math.max(1, Math.ceil((programme.stopMs - programme.startMs) / 60_000))
   return { startSeconds: Math.floor(programme.startMs / 1000), durationMinutes }
 }
+
+/**
+ * Restarting a programme that is *still on air*, from its beginning.
+ *
+ * The archive can serve from any point inside its window, so the start of the current programme is
+ * fair game — and for live sport that is the whole point ("I joined at half time"). It is the same
+ * request as catch-up with now as the end, which is why it returns the same shape and reuses the
+ * same transcoded path; only the affordance differs, because clicking a live programme should still
+ * play the channel.
+ */
+export function restartRequestForProgramme(
+  channel: CatchupChannel,
+  programme: CatchupProgramme,
+  nowMs: number
+): CatchupRequest | null {
+  if (channel.tv_archive !== 1) return null
+  if (!Number.isFinite(programme.startMs) || !Number.isFinite(programme.stopMs)) return null
+  // Only meaningful for something still running: a finished programme is ordinary catch-up.
+  if (programme.stopMs <= nowMs) return null
+  if (programme.startMs > nowMs) return null
+
+  const archiveDays = Number.isFinite(channel.tv_archive_duration) ? Number(channel.tv_archive_duration) : 0
+  if (archiveDays <= 0) return null
+  if (nowMs - programme.startMs > archiveDays * 24 * 60 * 60 * 1000) return null
+
+  // From the programme's start up to now — however long ago that was, inside the archive window.
+  const durationMinutes = Math.max(1, Math.ceil((nowMs - programme.startMs) / 60_000))
+  return { startSeconds: Math.floor(programme.startMs / 1000), durationMinutes }
+}
