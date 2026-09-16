@@ -26,6 +26,7 @@ import { assertSafeExternalUrl, isSameOrigin, isSecureRequest, securityHeaders, 
 import { mapSameOriginStreamPath, parseSameOriginTimeshiftPath } from './lib/upstreamUrl.js'
 import { createProviderWatch, isDiscordWebhookUrl, postDiscordWebhook, type ProviderWatch } from './lib/providerWatch.js'
 import { createAuthAudit } from './lib/authAudit.js'
+import { createAuthAuditStore } from './lib/authAuditStore.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
 import {
   applyPendingRestore,
@@ -745,7 +746,7 @@ app.post('/api/alerts/test', requireAuth, (req, res) => {
 const watchIntervalMs = (Number(process.env.PROVIDER_WATCH_INTERVAL_SECONDS ?? '') || 90) * 1000
 
 // Who signed in, from where — see lib/authAudit.ts.
-const authAudit = createAuthAudit()
+const authAudit = createAuthAudit(200, createAuthAuditStore({ dataDir: DATA_DIR }))
 const providerWatches = new Map<string, ProviderWatch>()
 
 // Starts (or restarts) the watchdog for one account. Called at boot and whenever an admin changes

@@ -179,6 +179,22 @@ function EpgRow({
               className={`epg-block${isPast ? ' epg-block--past' : ''}${catchup ? ' epg-block--catchup' : ''}`}
               style={{ left: `${left}%`, width: `${width}%` }}
               title={`${formatTime(p.startMs)} – ${formatTime(p.stopMs)}\n${p.title}${p.description ? '\n' + p.description : ''}${catchup ? '\n▶ Play from catch-up' : ''}`}
+              onKeyDown={(event) => {
+                // Arrow up/down moves focus a row at a time, staying in the same column of the guide. The
+                // row above or below is drawn by the same virtualised list, so ask the document what sits at
+                // the equivalent point rather than tracking indices the list can throw away.
+                if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+                const rect = event.currentTarget.getBoundingClientRect()
+                const delta = event.key === 'ArrowDown' ? ROW_HEIGHT : -ROW_HEIGHT
+                const under = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2 + delta)
+                const target = under?.closest('button.epg-block')
+                if (target instanceof HTMLElement) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  target.focus()
+                }
+                // No row that way: say nothing, so the event reaches the grid and it scrolls instead.
+              }}
               onClick={(e) => {
                 e.stopPropagation()
                 if (didPan()) return
