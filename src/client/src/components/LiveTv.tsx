@@ -454,19 +454,27 @@ export function LiveTv({
     }
   }, [applyPrefs, handlePrefsError, prefs])
 
+  // Only these values decide which archive is playing. Depending on the `catchup` and
+  // `nowPlaying` *objects* meant every unrelated re-render (a guide refresh, a channel list
+  // update) re-ran this effect: the cleanup stops the transcode and a fresh one starts, so the
+  // player was handed a new stream every few seconds and never got to play — a hang with nothing
+  // in the console. Primitives cannot do that.
+  const catchupChannelId = catchup && nowPlaying ? nowPlaying.stream_id : null
+  const catchupStartMs = catchup ? catchup.startMs : null
+  const catchupStopMs = catchup ? catchup.stopMs : null
   // Catch-up swaps this channel's live playlist for the provider's archive stream — the player, the
   // silent-audio fallback and the idle sweep all keep working untouched.
   // Starting a catch-up transcode, and stopping it again when the programme changes or the viewer
   // goes back to live: the session belongs to this playback, not to the channel.
   useEffect(() => {
-    if (!catchup || !nowPlaying) {
+    if (catchupChannelId === null || catchupStartMs === null || catchupStopMs === null) {
       setCatchupStream(null)
       return
     }
     const sourceUrl = session.client.getTimeshiftUrl(
-      nowPlaying.stream_id,
-      Math.floor(catchup.startMs / 1000),
-      Math.max(1, Math.ceil((catchup.stopMs - catchup.startMs) / 60_000))
+      catchupChannelId,
+      Math.floor(catchupStartMs / 1000),
+      Math.max(1, Math.ceil((catchupStopMs - catchupStartMs) / 60_000))
     )
     const sessionId = newSessionId()
     let cancelled = false
@@ -501,7 +509,7 @@ export function LiveTv({
         body: JSON.stringify({ sessionId })
       }).catch(() => {})
     }
-  }, [catchup, nowPlaying, session.client])
+    }, [catchupChannelId, catchupStartMs, catchupStopMs, session.client])
   
   // Catch-up plays the transcoded HLS; everything else plays the live playlist.
   const streamUrl = nowPlaying
