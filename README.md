@@ -6,7 +6,37 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.23.0 — catch-up you can watch, and watchdogs that speak up)
+## Current state (v0.34.1 — every channel type plays, on Safari, with no credentials in the browser)
+
+**v0.34.1** closes the last gap in the playback path. Channels the provider serves as **raw MPEG-TS**
+rather than HLS — Sky News FHD and HD — now play: the client sniffs the first bytes, recognises the TS
+sync byte, and routes those streams through the transcoder instead of handing them to hls.js, which
+could never have parsed them. **v0.34.0** fixed the same kind of blind spot for audio: the
+silent-audio fallback is driven by `webkitAudioDecodedByteCount`, which exists **only in Chromium**, so
+E-AC-3-first channels (Sky Atlantic, Sky One) played silently in Safari and nothing ever recovered. The
+client now asks the server what tracks a stream carries and decides *before* playing.
+
+**v0.33.0/v0.33.1** moved live segments **through the app** rather than letting the browser fetch the
+provider's CDN directly. The provider writes absolute CDN URLs — with the account credentials in them —
+into its playlists, so live playback was putting those credentials in the browser, depending on the CDN
+accepting the browser's address (the 400s seen when segments were refused), and racing a ~25-second
+signed URL. Segments are relayed now, and a raw-TS response is piped straight through rather than
+buffered.
+
+**v0.27.0** was the one that mattered most, and it is the smallest: the Content-Security-Policy had no
+`worker-src` directive, so the browser refused the `blob:` worker that hls.js builds its demuxer in.
+hls.js therefore never started and **every** stream it handled hung — with nothing in the console but a
+single line about worker-src. It was found by reading the browser console, after hours of eliminating
+the provider, the reverse proxy, buffering, mixed content and CORS.
+
+**v0.28.0–v0.30.0** fixed a catch-up that could never play. The effect that starts the archive transcode
+also stops it in its cleanup, and its dependencies were whole objects plus the session client, so any
+unrelated re-render restarted the session — measured as a new transcode every 12 seconds, for as long
+as the viewer stayed on the channel. A second loop came from the fallback hook "converting" the
+transcoder's own output. **v0.22.0** added the per-title transcode memory; **v0.31.0/v0.31.1** made a
+silent provider say so (504 and a sentence) and stopped a deploy's image prune holding the script open.
+
+### Earlier (v0.23.0 and back)
 
 **v0.23.0** adds the two things that only matter when something is wrong. **App-health alerts** post
 to the same Discord webhook as the provider watchdog when the *app itself* is in trouble — a full

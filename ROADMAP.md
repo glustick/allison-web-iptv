@@ -1,11 +1,38 @@
 # Roadmap
 
-Recommended enhancements for future development, refreshed **2026-09-16 against v0.23.0**.
+Recommended enhancements for future development, refreshed **2026-09-17 against v0.34.1**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.34.1 — "Every channel type plays."** Eleven releases (v0.24.0–v0.34.1) that began with a report of
+*"the catchup is not playing"* and ended with every playback route confirmed on a real deployment:
+
+- **v0.24.0/v0.25.0** — the `randomUUID` crash (a secure-context-only API, so any transcode over the
+  plain-HTTP LAN address replaced the whole app with "Something went wrong"), and catch-up's rolling
+  playlist window, which deleted segments before the player could ask for them.
+- **v0.26.0** — tell a fronting nginx not to buffer relayed media.
+- **v0.27.0** — **the CSP `worker-src` fix.** hls.js runs its demuxer in a `blob:` worker; with no
+  directive for it the browser refused the worker, hls.js never started, and every stream it handled
+  hung with one console line and no other symptom. This was the root cause of the evening's failures.
+- **v0.28.0–v0.30.0** — catch-up could never play: the transcode effect's cleanup stopped the session
+  it had just started, its dependencies were objects plus the session client (so any re-render restarted
+  it — measured at a new session every 12 seconds), and the fallback hook then "converted" the
+  transcoder's own output in a second loop.
+- **v0.31.0/v0.31.1** — a silent provider now answers 504 with a sentence, and the deploy's image prune
+  can no longer hold the script open for ~42 minutes after a successful deploy.
+- **v0.32.0/v0.34.1** — **channels served as raw MPEG-TS play.** The client sniffs the first bytes
+  (`0x47`) and routes TS through the transcoder; the transcode hint then must *play* the result rather
+  than re-entering the branch that started it.
+- **v0.33.0/v0.33.1** — live segments come **through the app**: no provider credentials in the browser,
+  no dependence on the CDN accepting the viewer's address, no racing a ~25-second signed URL. A raw-TS
+  response is piped through rather than buffered into silence.
+- **v0.34.0** — **E-AC-3-first channels play on Safari.** The silent-audio fallback only ever worked in
+  Chromium; the client now probes the stream's tracks and decides before playing.
+
+### The stretch before it (v0.23.0 and back)
 
 **v0.23.0 — "Catch-up you can actually watch, and watchdogs that speak up."** Ten releases
 (v0.14.0–v0.23.0) that turned the guide into the app's primary surface and gave the deployment a
