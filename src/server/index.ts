@@ -1652,7 +1652,17 @@ function relayToProxy(req: IncomingMessage, res: ServerResponse): void {
       headers: req.headers
     },
     (relayRes) => {
-      res.writeHead(relayRes.statusCode ?? 502, relayRes.headers)
+      // Ask an upstream nginx-family reverse proxy not to buffer this response.
+      //
+      // The Synology deployment front-ends this app with openresty, whose `proxy_buffering` (on by
+      // default) holds a *streamed* body back until the buffer fills or the upstream closes. For a
+      // media response that never finishes promptly the player receives nothing and hangs with no error
+      // at all — which is what "fails through the https host, works on the LAN address" looked like:
+      // the LAN address talks to this process directly, the https host goes through the proxy. nginx
+      // and openresty honour this header; everything else ignores it.
+      const relayHeaders: Record<string, unknown> = { ...relayRes.headers }
+      if (!relayHeaders['x-accel-buffering']) relayHeaders['x-accel-buffering'] = 'no'
+      res.writeHead(relayRes.statusCode ?? 502, relayHeaders as typeof relayRes.headers)
       relayRes.pipe(res)
     }
   )
