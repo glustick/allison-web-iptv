@@ -7,7 +7,7 @@ the original scoping writeup this project started from.
 
 ## Current release
 
-**v0.34.1 — "Every channel type plays."** Eleven releases (v0.24.0–v0.34.1) that began with a report of
+**v0.34.1 — "Every channel type plays."** Fourteen releases (v0.24.0–v0.34.1) that began with a report of
 *"the catchup is not playing"* and ended with every playback route confirmed on a real deployment:
 
 - **v0.24.0/v0.25.0** — the `randomUUID` crash (a secure-context-only API, so any transcode over the
