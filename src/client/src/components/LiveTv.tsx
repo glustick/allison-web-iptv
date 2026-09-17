@@ -8,6 +8,7 @@ import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { sectionTitle } from '../lib/sectionTitle'
 import { loadStoredLibraryView, parseLibraryView, saveLibraryView, type LibraryView } from '../lib/libraryView'
 import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
+import { newSessionId } from '../lib/sessionId'
 import {
   addChannelToCategory,
   clearHistory,
@@ -467,7 +468,7 @@ export function LiveTv({
       Math.floor(catchup.startMs / 1000),
       Math.max(1, Math.ceil((catchup.stopMs - catchup.startMs) / 60_000))
     )
-    const sessionId = crypto.randomUUID()
+    const sessionId = newSessionId()
     let cancelled = false
     setCatchupStream(null)
     setCatchupError(null)
