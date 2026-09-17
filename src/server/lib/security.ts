@@ -30,6 +30,12 @@ export function securityHeaders(req: IncomingMessage, res: { setHeader: (name: s
     [
       "default-src 'self'",
       "script-src 'self'",
+      // hls.js runs its demuxer in a Web Worker created from a blob: URL. Without this directive
+      // the worker falls back to default-src 'self', the browser refuses to load it, and hls.js
+      // never starts — every stream it handles then hangs with no error anywhere except a console
+      // line about worker-src. child-src is the same permission for Safari before 15.4.
+      "worker-src 'self' blob:",
+      "child-src 'self' blob:",
       // React sets style attributes, which CSP treats as inline styles.
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https: http:",

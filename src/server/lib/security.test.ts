@@ -71,3 +71,14 @@ describe('isSameOrigin', () => {
     expect(isSameOrigin(new URL('https://evil.example/'), provider)).toBe(false)
   })
 })
+
+describe('hls.js needs a blob worker', () => {
+  it('permits worker-src with blob: — without it every hls.js stream hangs', () => {
+    const headers: Record<string, string> = {}
+    securityHeaders({ headers: {} } as never, { setHeader: (n, v) => { headers[n.toLowerCase()] = v } })
+    const csp = headers['content-security-policy']
+    expect(csp).toContain("worker-src 'self' blob:")
+    // older Safari falls back to child-src rather than worker-src
+    expect(csp).toContain("child-src 'self' blob:")
+  })
+})
