@@ -642,8 +642,8 @@ describe('createProxyServer', () => {
 
     const res = await fetchViaProxy(proxy, '/slow')
 
-    expect(res.statusCode).toBe(502)
-    expect(res.body).toContain('Upstream request failed')
+    expect(res.statusCode).toBe(504)
+    expect(res.body).toContain('did not respond in time')
   }, 10000)
 
   // Exercises the exact shape of a real bug found live (see UpstreamClientRequest's own doc
@@ -670,7 +670,7 @@ describe('createProxyServer', () => {
 
     const res = await fetchViaProxy(proxy, '/movie.mp4')
 
-    expect(res.statusCode).toBe(502)
-    expect(res.body).toContain('Upstream request failed')
+    expect(res.statusCode).toBe(504)
+    expect(res.body).toContain('did not respond in time')
   }, 10000)
 })
