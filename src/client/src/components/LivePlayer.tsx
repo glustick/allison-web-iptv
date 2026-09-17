@@ -89,7 +89,10 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     setError(null)
     beginRun()
     // Known to need converting (lib/transcodeHints.ts): skip the direct attempt rather than playing
-    if (streamNeedsTranscode(url)) {
+    // nothing first — but only when there is not already a transcoded stream to play. Once the
+    // fallback has produced a URL, this has to fall through and hand *that* to hls.js; returning here
+    // regardless is what left a freshly started transcode unfetched and the screen black.
+    if (streamNeedsTranscode(url) && getSourceUrl(url) === url) {
       tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
       return
     }
