@@ -203,6 +203,15 @@ failures live, name them plainly, and let the operator fix them from just the me
   subtitle tracks live, but the choice resets per session and there is no quality or
   subtitle-styling surface. Persist the selected tracks per saved profile and add a compact
   player-settings panel (playback quality, subtitle styling, visible fallback status).
+- **Remember the audio-track probe.** *Open (small).* Since v0.34.0 the player asks the server what
+  audio tracks a stream carries before deciding whether to transcode, so an E-AC-3-first channel does
+  not play silently on Safari. That probe costs a round trip on every play of every channel; the
+  verdict could be remembered per channel the way `lib/transcodeHints.ts` already remembers "this needs
+  converting" — bounded, expiring, per device.
+- **Say "the provider isn't responding" in the live player too.** *Partly done.* v0.31.0 made the
+  server answer **504** with a sentence when the provider goes silent, and the *movie* player shows it.
+  The live player still surfaces hls.js's own generic network error for the same condition, so a
+  provider outage reads as an app fault on live channels.
 
 ### 2. EPG & guide quality
 
@@ -228,11 +237,20 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
   every segment while it plays (that is what makes it scrubbable), so a 2h20 feature holds 10 GB+
   for its runtime. Decide whether to bound that — cap the retained window and give up far-back
   scrubbing, or accept it now that the disk cannot actually fill.
-- **Image bloat, still.** *Partly handled.* Dockhand already runs a scheduled container update
-(03:00 Asia/Singapore, after the environment timezone was moved off UTC), so the app itself stays
-current. What is left is the *images*: every release adds roughly 1 GB to the host, and the in-app
-banner can only notify — it cannot replace a running container from inside itself. A scheduled
-`docker image prune` on the NAS is the missing half.
+- **Image bloat.** *Shipped 2026-09-17.* Every release leaves its predecessor behind — 48 images /
+  44.7 GB on the NAS before anyone noticed, the same drift that caused the earlier disk-full incident
+  (89 images / 55 GB). `scripts/dockhand-update.sh` now prunes unused images after a successful deploy,
+  bounded so a Dockhand that stops answering cannot hold the script open; `PRUNE=0` skips it.
+- **Expose a transcode's `idle` reading in the System tab.** *Open (small, high diagnostic value).*
+  Tonight's hardest bugs were all visible as that one number: a session whose output nothing had fetched
+  for 60+ seconds was a session nobody was watching. The server tracks `idleSeconds` and the admin health
+  endpoint reports it; surfacing it in the UI would let the *user* see a stuck transcode rather than
+  report a black screen.
+- **The host now carries live video bandwidth.** *Worth documenting and measuring.* Live segments are
+  relayed through the app (v0.33.0) rather than fetched by the browser from the provider's CDN, which is
+  what removed the provider credentials from the browser and the dependence on the CDN accepting the
+  viewer's address. The cost is real: every viewer's live stream now flows through the NAS. Worth a note
+  in the README and a line in the System tab, so it is a known trade rather than a surprise.
 - **Skip the multi-arch build for docs-only commits.** *Open.* Every push to `main` builds a full
 multi-arch image (~13–20 min, arm64 `better-sqlite3` under emulation). `[skip ci]` in the commit
 message is used by hand for documentation commits; a `paths-ignore: ['**.md']` on the workflow would
@@ -242,6 +260,12 @@ make that automatic and stop it depending on remembering.
 
 - **Reverse-proxy / TLS docs for non-Synology hosts.** *Open.* Document a Caddy or nginx setup
   for self-hosters running anywhere other than a Synology box with its own reverse proxy.
+- **Write down what this provider actually does.** *Open (small).* Several hours went into behaviour
+  documented nowhere: channels answer their `.m3u8` URL with **either** a real playlist **or** raw
+  MPEG-TS depending on the moment (Sky News does both); playlists contain **absolute CDN URLs carrying
+  the account credentials**, signed for roughly 25 seconds; and the panel flaps with DNS and TCP fine
+  but no HTTP response at all. A "known provider quirks" section in the README would save the next
+  person — likely me — from rediscovering each one.
 - **Confirm a real Synology deployment.** *Open.* The Synology section is reasoning-based
   ("compatible, not yet confirmed deployed"); a real hardware walkthrough would catch anything
   the reasoning missed.
@@ -267,6 +291,16 @@ time. The harness has already earned its keep: it is what proved the v0.13.0 div
 (the pixel at the divider hit-tests to the handle; a 120 px drag scrolls the list exactly 120 px) and
 what exposed the guide's pointer-capture bug that had silently eaten every programme click since
 v0.12.0.
+- **A browser smoke check for the CSP.** *Open (small; the cheapest check that would have caught the
+  worst bug of 2026-09-17).* hls.js runs its demuxer in a `blob:` worker, and a policy without
+  `worker-src` makes the browser refuse it — after which hls.js never starts and *every* stream hangs
+  with one console line and no other symptom. Every server-side check passed while that was true. A
+  script that loads the app in a real browser and asserts a `blob:` worker can be created **and answer**
+  turns a silent multi-hour failure into a one-line result.
+- **Verify on Safari, not only Chrome.** *Open.* The harnesses drive Chrome; the user's browser is
+  Safari, and two of the four real bugs on 2026-09-17 were **invisible in Chrome** — the raw-TS path and
+  the audio fallback, both of which Chromium handles better. The user's console has found two bugs no
+  server-side check could. Anything asserted about playback should say which browser proved it.
 - **Keep extending the real-server test pattern.** *Ongoing.* `proxyServer.test.ts` and
   `nodeUpstreamRequest.test.ts` spin up a real `http.Server`; extend that to the transcode and
   EPG fetch paths where live behaviour has diverged from reasoning before.
