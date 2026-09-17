@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
 import { streamNeedsTranscode } from '../lib/transcodeHints'
+import { sniffStreamKind } from '../lib/streamKind'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
@@ -359,6 +360,26 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
       video.load()
     }
   }, [channelKey, reloadTick])
+
+  // Some channels are not HLS at all: the provider answers the playlist URL with raw MPEG-TS,
+  // which hls.js cannot parse — and because this player deliberately ignores playlist *parsing*
+  // errors (for a provider that shuffles segment sequences), even that failure is swallowed and the
+  // player waits forever for levels that never arrive. Measured on this account: Sky News FHD and HD
+  // both return ~3.8 MB of TS where a playlist should be. Check the first bytes and route TS to the
+  // transcoder, which is the rule the rest of the app already follows — and which also remembers the
+  // channel, so the next play goes straight there.
+  useEffect(() => {
+    if (url.startsWith('/__transcode/')) return   // already the transcoder's own output
+    if (streamNeedsTranscode(url)) return          // known already: the hint path deals with it
+    let cancelled = false
+    void (async () => {
+      const kind = await sniffStreamKind(url)
+      if (cancelled || kind !== 'mpegts') return
+      console.warn('[player] stream is raw MPEG-TS, not HLS; routing it through the transcoder')
+      tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
+    })()
+    return () => { cancelled = true }
+  }, [url, channelKey])
 
   // A player-level retry can never succeed if the login itself ended (server restart, expired
   // session) — in that case send the user through sign-in rather than looping on a dead source.
