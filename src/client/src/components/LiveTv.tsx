@@ -475,8 +475,13 @@ export function LiveTv({
     fetch('/api/transcode/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // isVod false: an archive window is a rolling source, so it gets live's shape and deadline.
-      body: JSON.stringify({ sourceUrl, isVod: false, sessionId })
+      // isVod **true**: the archive is a *recorded* source, and ffmpeg reads it far faster than
+      // real time (measured: ~11.6x). Live's rolling six-segment playlist then deletes segments
+      // before the player can ask for them — the player gets a 404 for the segment it wants, gives
+      // up, and stops the session a few seconds in (measured: media-sequence reached 61 within 25s
+      // while only six segments survived). VOD's shape keeps every segment instead, which is also
+      // what makes a programme scrubbable, and the disk guard already accounts for that.
+      body: JSON.stringify({ sourceUrl, isVod: true, sessionId })
     })
       .then(async (res) => {
         if (!res.ok) throw new Error((await res.text()) || `Could not start catch-up (${res.status})`)

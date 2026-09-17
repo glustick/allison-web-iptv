@@ -433,7 +433,10 @@ plausible archive window is refused before it becomes a request for years of vid
 never sees the credentials: playback goes through `/api/timeshift/<id>.ts?start=&duration=`, and —
 because a timeshift stream is raw MPEG-TS, which hls.js cannot parse and Safari cannot decode at all —
 the browser is handed this app's own HLS output from the transcoder instead, the same machinery the
-E-AC-3 fallback uses.
+E-AC-3 fallback uses. With one deliberate difference from live: a catch-up keeps **every** segment,
+because ffmpeg reads an archive far faster than real time (measured ~11.6×) — under live's rolling
+six-segment window, the segment a player asks for has already been deleted, so playback died seconds
+in with a 404 for the first segment.
 
 ## Streams that always need converting
 
