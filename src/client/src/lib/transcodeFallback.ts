@@ -137,6 +137,15 @@ export function useTranscodeFallback(): {
 
   const startFallback = useCallback(
     (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void): void => {
+      // A URL that is already this app's transcoder output must never be 'converted' again: the
+      // fallback would start a second transcode of the same media, stop the first, and hand the player
+      // a stream with no history. For live semantics (a rolling six-segment window) the player then
+      // cannot fetch the segment it asks for, the watchdog fires again, and it repeats — measured as a
+      // new transcode session every twelve seconds while a catch-up sat there looking hung. Every
+      // fallback route funnels through here, and this comes before the "needs converting" hint so a
+      // transient transcode URL can never be remembered.
+      if (originalUrl.startsWith('/__transcode/')) return
+
       triedRef.current = true
       awaitingRef.current = true
       // This stream needed converting once, so it will again — the next play skips straight to it.
