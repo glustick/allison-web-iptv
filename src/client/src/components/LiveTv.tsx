@@ -462,6 +462,13 @@ export function LiveTv({
   const catchupChannelId = catchup && nowPlaying ? nowPlaying.stream_id : null
   const catchupStartMs = catchup ? catchup.startMs : null
   const catchupStopMs = catchup ? catchup.stopMs : null
+  // The client is read through a ref, never a dependency. `appAuth` builds a fresh XtreamClient
+  // every time the session is loaded, so as a dependency it re-ran this effect whenever anything
+  // reloaded the session — which stops the running transcode and starts another. Measured: a new
+  // session every 12 seconds, each killed 12 seconds later, forever. The ref always has the
+  // current client without any of that.
+  const clientRef = useRef(session.client)
+  clientRef.current = session.client
   // Catch-up swaps this channel's live playlist for the provider's archive stream — the player, the
   // silent-audio fallback and the idle sweep all keep working untouched.
   // Starting a catch-up transcode, and stopping it again when the programme changes or the viewer
@@ -471,7 +478,7 @@ export function LiveTv({
       setCatchupStream(null)
       return
     }
-    const sourceUrl = session.client.getTimeshiftUrl(
+    const sourceUrl = clientRef.current.getTimeshiftUrl(
       catchupChannelId,
       Math.floor(catchupStartMs / 1000),
       Math.max(1, Math.ceil((catchupStopMs - catchupStartMs) / 60_000))
@@ -509,7 +516,7 @@ export function LiveTv({
         body: JSON.stringify({ sessionId })
       }).catch(() => {})
     }
-    }, [catchupChannelId, catchupStartMs, catchupStopMs, session.client])
+    }, [catchupChannelId, catchupStartMs, catchupStopMs])
   
   // Catch-up plays the transcoded HLS; everything else plays the live playlist.
   const streamUrl = nowPlaying
