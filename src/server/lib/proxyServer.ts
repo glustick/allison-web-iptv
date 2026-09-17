@@ -371,7 +371,24 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
         // longer parseable at all. The outer .m3u is deliberately left completely untouched:
         // m3uClient.ts's own parser already resolves everything in it directly against the
         // real playlist URL, with no proxy involvement needed.
-        const isM3u8Fetch = req.url?.startsWith('/__fetch/') && target.pathname.toLowerCase().endsWith('.m3u8')
+        // Any media playlist this proxy relays gets its references rewritten to go back through this
+  // proxy, not just the /__fetch/ (M3U profile) ones.
+  //
+  // The original note here argued the Xtream path needed nothing, because "a channel's own relative
+  // segment references already resolve correctly against this proxy's own origin". That is true of a
+  // provider that writes *relative* references — and false of this one, which writes **absolute CDN
+  // URLs** into live playlists. Measured: /api/stream/live/<id>.m3u8 comes back containing
+  // https://<cdn>/hls/<user>/<pass>/.../<token>.ts. Left alone the browser fetches those directly,
+  // which (a) puts the provider credentials in the browser and in anything watching the wire,
+  // (b) makes playback depend on the CDN accepting the browser's address — the mechanism behind the
+  // 400s seen when segments were refused, and behind live failing on a VPN'd client, and (c) means a
+  // short-lived signed URL can expire before the player asks for it.
+  //
+  // Rewriting sends every reference back to this proxy, which the provider does accept. It costs the
+  // host the video bandwidth, which is the honest price of not leaking credentials to the browser.
+  // The outer .m3u provider playlist is still deliberately untouched — see the note above about
+  // double-encoding it into something m3uClient's parser could no longer read.
+  const isM3u8Fetch = target.pathname.toLowerCase().endsWith('.m3u8')
         if (isM3u8Fetch) {
           const chunks: Buffer[] = []
           upstreamRes.on('data', (chunk) => chunks.push(chunk))

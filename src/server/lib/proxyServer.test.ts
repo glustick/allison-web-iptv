@@ -673,4 +673,34 @@ describe('createProxyServer', () => {
     expect(res.statusCode).toBe(504)
     expect(res.body).toContain('did not respond in time')
   }, 10000)
+
+  it('rewrites an Xtream live playlist so its segments come back through this proxy', async () => {
+    // The provider writes *absolute* CDN URLs into live playlists. Left alone, the browser fetches
+    // them directly: the provider credentials travel to the browser, playback depends on the CDN
+    // accepting the browser's address (the 400s), and a short-lived signed URL can expire before the
+    // player asks for it. Rewriting sends every reference back through this proxy instead.
+    const playlist = [
+      '#EXTM3U',
+      '#EXT-X-VERSION:3',
+      '#EXTINF:10.0,',
+      'https://cdn.example/hls/user/pass/abc/00001.ts',
+      '#EXTINF:10.0,',
+      'seg_00002.ts',
+      ''
+    ].join('\n')
+    const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' })
+      res.end(playlist)
+    })
+    openServers.push(origin)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => originUrl }))
+
+    const res = await fetchViaProxy(proxy, '/live/user/pass/42783.m3u8')
+
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('#EXTM3U')
+    expect(res.body).not.toContain('https://cdn.example')
+    expect(res.body).not.toContain('/user/pass/')
+    expect((res.body.match(/\/__fetch\//g) ?? []).length).toBe(2)
+  })
 })
