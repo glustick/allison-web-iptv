@@ -144,7 +144,12 @@ export function NativeVideoPlayer({
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
           console.error('[player] fatal hls error on fallback output', data.type, data.details)
-          setError(`Playback error: ${data.details}`)
+          const code = (data as { response?: { code?: number } }).response?.code
+          setError(
+            code === 502 || code === 504
+              ? 'The provider is not responding — it may be down. Try again in a few minutes.'
+              : `Playback error: ${data.details}`
+          )
         }
       })
       video.play().catch(() => {})

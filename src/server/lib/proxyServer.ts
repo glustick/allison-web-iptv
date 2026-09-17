@@ -308,8 +308,20 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
           return
         }
         console.error('[proxy] upstream request error:', err)
-        if (!res.headersSent) res.writeHead(502)
-        res.end(`Upstream request failed: ${err.message}`)
+        // A silent provider is the most common failure here — its panel goes away while DNS and TCP
+        // stay perfectly fine — and a bare "502 Upstream request failed" tells the viewer nothing.
+        // 504 plus a sentence the player can show is worth more than a code.
+        const timedOut = /timed out/i.test(err.message)
+        if (!res.headersSent) {
+          res.writeHead(timedOut ? 504 : 502, { 'Content-Type': 'application/json; charset=utf-8' })
+        }
+        res.end(
+          JSON.stringify({
+            error: timedOut
+              ? 'The provider did not respond in time. It may be down — try again shortly.'
+              : `Upstream request failed: ${err.message}`
+          })
+        )
       }
 
       const timeout = setTimeout(() => {
