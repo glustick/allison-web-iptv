@@ -703,4 +703,23 @@ describe('createProxyServer', () => {
     expect(res.body).not.toContain('/user/pass/')
     expect((res.body.match(/\/__fetch\//g) ?? []).length).toBe(2)
   })
+
+
+  it('does not treat a raw MPEG-TS body as a playlist', async () => {
+    // Some channels answer their playlist URL with raw TS. It must be forwarded as-is: rewriting
+    // needs the whole body, and a TS stream never ends, so buffering one starves the player entirely.
+    const tsBody = Buffer.from([0x47, 0x00, 0x11, 0x20, 0xb7, 0x80, 0xff, 0xff])
+    const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {
+      res.writeHead(200, { 'content-type': 'video/mp2t' })
+      res.end(tsBody)
+    })
+    openServers.push(origin)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => originUrl }))
+
+    const res = await fetchViaProxy(proxy, '/live/user/pass/37421.m3u8')
+
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['content-type']).toBe('video/mp2t')
+    expect(res.body).not.toContain('/__fetch/')
+  })
 })

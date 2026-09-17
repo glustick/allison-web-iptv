@@ -391,7 +391,26 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
   const isM3u8Fetch = target.pathname.toLowerCase().endsWith('.m3u8')
         if (isM3u8Fetch) {
           const chunks: Buffer[] = []
-          upstreamRes.on('data', (chunk) => chunks.push(chunk))
+          // Sniff the first chunk before deciding to buffer, because buffering a *stream* is fatal.
+    // Rewriting needs the whole body, but an .m3u8 URL that actually returns raw MPEG-TS never ends,
+    // and waiting for it means the player receives nothing at all. A leading 0x47 is a TS sync byte:
+    // pipe that shape straight through untouched.
+    let decided = false
+    let streaming = false
+    const onData = (chunk: Buffer): void => {
+      if (!decided) {
+        decided = true
+        if (chunk.length > 0 && chunk[0] === 0x47) {
+          streaming = true // pipe() feeds the response from here on
+          res.write(chunk)
+          upstreamRes.pipe(res)
+          return
+        }
+      }
+      if (streaming) return
+      chunks.push(chunk)
+    }
+    upstreamRes.on('data', onData)
           upstreamRes.on('end', () => {
             res.end(rewriteM3u8ForProxy(Buffer.concat(chunks).toString('utf8'), target))
           })
