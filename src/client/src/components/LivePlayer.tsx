@@ -3,6 +3,7 @@ import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
 import { streamNeedsTranscode } from '../lib/transcodeHints'
 import { sniffStreamKind } from '../lib/streamKind'
+import { probeAudioTracks } from '../lib/audioTrackProbe'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
@@ -376,6 +377,29 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
       const kind = await sniffStreamKind(url)
       if (cancelled || kind !== 'mpegts') return
       console.warn('[player] stream is raw MPEG-TS, not HLS; routing it through the transcoder')
+      tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
+    })()
+    return () => { cancelled = true }
+  }, [url, channelKey])
+
+  // Safari cannot run the silent-audio fallback at all: it is driven by webkitAudioDecodedByteCount,
+  // which exists only in Chromium. An E-AC-3-first channel (Sky Atlantic, Sky One) therefore plays
+  // silently there forever while Chrome switches to the transcode — which is why this looked like a
+  // channel-specific mystery. Ask the server what the stream actually carries and decide from that,
+  // rather than from a counter only one browser family provides. The transcoder re-encodes to AAC
+  // whatever the source, so once it starts the audio is audible.
+  useEffect(() => {
+    if (url.startsWith('/__transcode/')) return
+    if (streamNeedsTranscode(url)) return
+    let cancelled = false
+    void (async () => {
+      const tracks = await probeAudioTracks(url)
+      if (cancelled || tracks.length === 0) return
+      // this effect is a sibling of the hls one, so it cannot see that effect's local probe
+      const decodeProbe = (mimeType: string): boolean =>
+        typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mimeType)
+      if (canDecodeAudioCodec(tracks[0].codec, decodeProbe)) return
+      console.warn(`[player] first audio track is ${tracks[0].codec}, which this browser cannot decode; transcoding`)
       tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
     })()
     return () => { cancelled = true }
