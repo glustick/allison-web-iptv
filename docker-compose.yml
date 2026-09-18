@@ -1,6 +1,14 @@
 services:
   allison-web-iptv:
     image: ghcr.io/glustick/allison-web-iptv:latest
+    # Bounded on purpose: this app writes ffmpeg's stderr into its container log, and the
+    # default json-file driver keeps every line for ever — a week of transcoding is hundreds
+    # of MB. 10 MB × 3 files is plenty for the health page and any post-mortem.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
     ports:
       - "8085:8085"
