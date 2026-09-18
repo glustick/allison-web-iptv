@@ -6,6 +6,7 @@ import { EpgGrid } from './EpgGrid'
 import { ReorderableChannelList, type ReorderableRow } from './ReorderableChannelList'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { sectionTitle } from '../lib/sectionTitle'
+import { providerLookup, resolveLibraryEntry, type LibraryEntry } from '../lib/libraryResolve'
 import { loadStoredLibraryView, parseLibraryView, saveLibraryView, type LibraryView } from '../lib/libraryView'
 import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
 import { newSessionId } from '../lib/sessionId'
@@ -174,18 +175,80 @@ export function LiveTv({
   const selectedCustom: CustomCategory | null =
     selection.type === 'custom' ? prefs.categories.find((category) => category.id === selection.id) ?? null : null
 
+  // Library rows carry the id a channel had when they were saved, and this provider renumbers ids — so
+  // a favourite saved before a renumbering asks for a stream that no longer exists and the provider
+  // answers "channel unavailable", while the same channel plays from its category where the id is
+  // current. Resolving against the provider's own entry (by id, then by name) fixes both that and the
+  // archive flag a synthesised row never had. See lib/libraryResolve.ts for the measurement.
+  const libraryEntries = useMemo((): LibraryEntry[] => {
+    if (selection.type === 'favourites') {
+      return liveFavourites.map((favourite) => ({ streamId: favourite.streamId, name: favourite.name, category: favourite.category }))
+    }
+    if (selection.type === 'custom') {
+      return (selectedCustom?.channels ?? [])
+        .filter((channel) => channel.kind === 'live')
+        .map((channel) => ({ streamId: channel.streamId, name: channel.name, category: channel.sourceCategory }))
+    }
+    return []
+  }, [selection, liveFavourites, selectedCustom])
+
+  const [libraryChannels, setLibraryChannels] = useState<LiveStream[]>([])
+  const libraryCategoriesRef = useRef<Map<string, LiveStream[]>>(new Map())
+  useEffect(() => {
+    const wanted = [...new Set(libraryEntries.map((entry) => entry.category).filter((value): value is string => !!value))]
+    if (wanted.length === 0) {
+      setLibraryChannels([])
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const collected: LiveStream[] = []
+      for (const categoryId of wanted) {
+        const cached = libraryCategoriesRef.current.get(categoryId)
+        if (cached) {
+          collected.push(...cached)
+          continue
+        }
+        try {
+          const loaded = await session.client.getLiveStreams(categoryId)
+          libraryCategoriesRef.current.set(categoryId, loaded)
+          collected.push(...loaded)
+        } catch {
+          // leave that category's rows exactly as stored; the provider may just be down
+        }
+      }
+      if (!cancelled) setLibraryChannels(collected)
+    })()
+    return () => { cancelled = true }
+  }, [libraryEntries, session.client])
+
+  const libraryLookup = useMemo(() => providerLookup(libraryChannels), [libraryChannels])
+
+
   const channels: LiveStream[] = useMemo(() => {
     if (selection.type === 'favourites') {
-      return liveFavourites.map((favourite) => synthesizeStream(favourite.streamId, favourite.name, favourite.category))
+      return liveFavourites.map(
+        (favourite) =>
+          resolveLibraryEntry(
+            { streamId: favourite.streamId, name: favourite.name, category: favourite.category },
+            libraryLookup
+          ) ?? synthesizeStream(favourite.streamId, favourite.name, favourite.category)
+      )
     }
     if (selection.type === 'history') return historyChannels
     if (selection.type === 'custom') {
       return (selectedCustom?.channels ?? [])
         .filter((channel) => channel.kind === 'live')
-        .map((channel) => synthesizeStream(channel.streamId, channel.name, channel.sourceCategory))
+        .map(
+          (channel) =>
+            resolveLibraryEntry(
+              { streamId: channel.streamId, name: channel.name, category: channel.sourceCategory },
+              libraryLookup
+            ) ?? synthesizeStream(channel.streamId, channel.name, channel.sourceCategory)
+        )
     }
     return providerChannels
-  }, [selection, liveFavourites, historyChannels, selectedCustom, providerChannels])
+  }, [selection, liveFavourites, historyChannels, selectedCustom, providerChannels, libraryLookup])
 
   // Library views are plain lists (short, personal, reorderable); the guide grid stays for the
   // provider's own categories, where a virtualised 27k-row table is the right tool.
