@@ -245,6 +245,7 @@ export function SystemPanel(): JSX.Element {
                 <th>Running</th>
                 <th>Output</th>
                 <th>Disk used</th>
+                <th title="Seconds since anything fetched this session's output; the server stops a session after 120s">Idle</th>
               </tr>
             </thead>
             <tbody>
@@ -254,11 +255,18 @@ export function SystemPanel(): JSX.Element {
                   <td>{session.runningSeconds}s</td>
                   <td>{session.hasPlaylist ? 'playlist ready' : 'starting'}</td>
                   <td>{formatBytesShort(session.bytes)}</td>
+                  {/* The number that explained every hard playback bug on 2026-09-17: a session nothing is
+                      fetching is a session nobody is watching, and the server reaps it at 120 seconds. Visible
+                      here so it is a fact rather than a black screen. */}
+                  <td>
+                    {session.idleSeconds}s
+                    {session.idleSeconds >= 60 && <span className="admin-empty"> — nothing is fetching this</span>}
+                  </td>
                 </tr>
               ))}
               {health && health.transcode.active.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="admin-empty">
+                  <td colSpan={5} className="admin-empty">
                     None running
                   </td>
                 </tr>

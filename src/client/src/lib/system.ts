@@ -70,7 +70,15 @@ export interface HealthReport {
   }
   guide: Array<{ kind: string; url: string; status: string; channelCount: number; programmeCount: number; error?: string }> | null
   transcode: {
-    active: Array<{ sessionId: string; startedAt: string; runningSeconds: number; hasPlaylist: boolean; bytes: number }>
+    active: Array<{
+      sessionId: string
+      startedAt: string
+      runningSeconds: number
+      hasPlaylist: boolean
+      bytes: number
+      /** Seconds since anything fetched this session's output. The server stops a session at 120. */
+      idleSeconds: number
+    }>
     /** Where transcoded segments are written, and the free space there. A VOD session keeps every
      *  segment until it stops, so this is the number that tells you whether a film will fit. */
     storage: { dir: string; freeBytes: number | null; totalBytes: number | null }

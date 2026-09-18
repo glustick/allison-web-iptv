@@ -291,8 +291,11 @@ time. The harness has already earned its keep: it is what proved the v0.13.0 div
 (the pixel at the divider hit-tests to the handle; a 120 px drag scrolls the list exactly 120 px) and
 what exposed the guide's pointer-capture bug that had silently eaten every programme click since
 v0.12.0.
-- **A browser smoke check for the CSP.** *Open (small; the cheapest check that would have caught the
-  worst bug of 2026-09-17).* hls.js runs its demuxer in a `blob:` worker, and a policy without
+- **A browser smoke check for the CSP.** *Shipped 2026-09-18* as `scripts/verify-csp-worker.mjs` (in the
+  agent workspace, beside `verify-catchup.mjs`): it launches a real browser against a deployment, creates
+  a `blob:` worker, and asserts it answers. Verified both ways — it passes against this app, and fails
+  against a page carrying the old policy, quoting the browser's own "'worker-src' was not explicitly set"
+  line. The original note: hls.js runs its demuxer in a `blob:` worker, and a policy without
   `worker-src` makes the browser refuse it — after which hls.js never starts and *every* stream hangs
   with one console line and no other symptom. Every server-side check passed while that was true. A
   script that loads the app in a real browser and asserts a `blob:` worker can be created **and answer**
