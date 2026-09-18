@@ -159,6 +159,36 @@ async function directorySize(dir: string): Promise<number> {
  * leaves the last session's segments sitting on disk indefinitely. Nothing can be mid-transcode
  * at boot, so every directory carrying this app's own prefix is garbage by definition.
  */
+/** True when the first bytes are an HLS playlist rather than a raw TS stream. Pure, so it is testable. */
+export function looksLikePlaylist(bytes: Uint8Array | undefined): boolean {
+  if (!bytes || bytes.length === 0) return false
+  return new TextDecoder().decode(bytes.slice(0, 7)) === '#EXTM3U'
+}
+
+/**
+ * Ask the source itself what it is, reading no more than the first chunk.
+ *
+ * Any failure — a slow provider, a refused connection — deliberately answers "yes, treat it as a
+ * playlist": that is the shape the URL claimed, so the worst case is today's behaviour rather than a
+ * transcode that refuses to start.
+ */
+async function sniffsAsPlaylist(url: string): Promise<boolean> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5000)
+  try {
+    const res = await fetch(url, { signal: controller.signal })
+    if (!res.ok || !res.body) return true
+    const reader = res.body.getReader()
+    const { value } = await reader.read()
+    return looksLikePlaylist(value)
+  } catch {
+    return true
+  } finally {
+    clearTimeout(timer)
+    controller.abort()
+  }
+}
+
 export async function sweepStaleTranscodeDirs(dir: string): Promise<number> {
   let entries: string[]
   try {
@@ -358,9 +388,16 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       throw new Error('Transcode cancelled')
     }
     // Live HLS arrives as a playlist; a movie or episode is one file. The distinction decides which
-    // input options are legal (see the spawn args below) — and it is made on the URL shape, because
-    // that is what ffmpeg itself will sniff.
-    const isHlsSource = /\.m3u8(\?|#|$)/i.test(sourceUrl)
+    // input options are legal (see the spawn args below).
+    //
+    // It must be made on the *content*, not the URL shape. This provider answers a `.m3u8` URL with raw
+    // MPEG-TS for some channels — and flips between the two shapes depending on the moment — while
+    // ffmpeg picks its demuxer by sniffing. Handed a TS stream it selects the mpegts demuxer, so the
+    // HLS-only `-live_start_index` is not a valid option at all and ffmpeg exits with
+    //     Option live_start_index not found.
+    // before reading a single frame. That is the error this guards against; the URL is only a hint.
+    const looksHls = /\.m3u8(\?|#|$)/i.test(sourceUrl)
+    const isHlsSource = looksHls && (await sniffsAsPlaylist(sourceUrl))
     const isHttpSource = /^https?:\/\//i.test(sourceUrl)
 
     const dir = await mkdtemp(join(tmpDir, TRANSCODE_DIR_PREFIX))

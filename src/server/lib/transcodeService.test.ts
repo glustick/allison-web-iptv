@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { spawn } from 'child_process'
 import { createRequire } from 'module'
-import { createTranscodeService, type TranscodeService, type TranscodeServiceDeps } from './transcodeService.js'
+import { createTranscodeService, type TranscodeService, type TranscodeServiceDeps, looksLikePlaylist } from './transcodeService.js'
 
 // See src/server/index.ts's own comment on this same pattern — ffmpeg-static's lack of an
 // "exports" map trips up NodeNext's default-import interop.
@@ -1045,5 +1045,20 @@ describe('idle session sweep', () => {
     expect(session?.idleSeconds).toBeLessThan(1)
 
     await service.stopTranscode('watched-session')
+  })
+})
+
+describe('looksLikePlaylist', () => {
+  it('recognises a playlist', () => {
+    expect(looksLikePlaylist(new TextEncoder().encode('#EXTM3U\n#EXT-X-VERSION:3\n'))).toBe(true)
+  })
+
+  it('rejects a raw MPEG-TS stream — the case that produced "Option live_start_index not found"', () => {
+    expect(looksLikePlaylist(new Uint8Array([0x47, 0x00, 0x11, 0x20, 0xb7, 0x80]))).toBe(false)
+  })
+
+  it('says no to nothing at all', () => {
+    expect(looksLikePlaylist(new Uint8Array([]))).toBe(false)
+    expect(looksLikePlaylist(undefined)).toBe(false)
   })
 })
