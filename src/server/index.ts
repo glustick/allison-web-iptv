@@ -36,6 +36,7 @@ import {
 } from './lib/providerWatch.js'
 import { createAuthAudit } from './lib/authAudit.js'
 import { createAuthAuditStore } from './lib/authAuditStore.js'
+import { createAuthSessionStore } from './lib/authSessionStore.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
 import {
   applyPendingRestore,
@@ -110,6 +111,15 @@ const AUTH_IDLE_TTL_MS = Number(process.env.AUTH_IDLE_TTL_HOURS ?? 24) * 60 * 60
 
 const authSessions = new Map<string, AuthSession>()
 
+// Sessions are mirrored into SQLite so a deploy stops signing everybody out. The map stays the hot
+// path — every authenticated request reads it, never the database — while the store is written on
+// login, refreshed (throttled) as a session is used, and removed when the session ends. The token is
+// encrypted at rest with SESSION_SECRET; only its hash is used for lookups. See lib/authSessionStore.
+const authSessionStore = createAuthSessionStore({
+  dataDir: DATA_DIR,
+  ttlMs: AUTH_IDLE_TTL_MS
+})
+
 // Proxy targets keyed by auth-session token (the auth cookie value) — the direct replacement
 // for the old anonymous browser-session map. One login = one upstream context.
 const sessionProxyTargets = new Map<string, string>()
@@ -126,9 +136,13 @@ function getAuthSession(req: { headers?: IncomingMessage['headers'] }): AuthSess
   const token = parseCookieValue(cookieHeader, AUTH_COOKIE_NAME)
   if (!token) return null
   const session = authSessions.get(token)
+  // Throttled inside the store (one write a minute at most), so this does not turn every
+  // authenticated request into a database write.
+  if (session) authSessionStore.touch(token, Date.now())
   if (!session) return null
   if (Date.now() - session.lastSeenAt > AUTH_IDLE_TTL_MS) {
     authSessions.delete(token)
+  authSessionStore.remove(token)
     return null
   }
   return session
@@ -144,6 +158,12 @@ function createAuthSession(username: string, role: UserRole): AuthSession {
     nowPlaying: null
   }
   authSessions.set(session.token, session)
+    authSessionStore.save(session.token, {
+      username: session.username,
+      role: session.role,
+      loginAt: session.loginAt,
+      lastSeenAt: session.lastSeenAt
+    })
   return session
 }
 
@@ -176,6 +196,7 @@ setInterval(() => {
   for (const [token, session] of authSessions) {
     if (now - session.lastSeenAt > AUTH_IDLE_TTL_MS) destroyAuthSession(token)
   }
+  authSessionStore.prune(now)
 }, 10 * 60 * 1000).unref()
 
 // SESSION_SECRET encrypts every account's stored IPTV credentials; a missing or too-short
@@ -1679,6 +1700,21 @@ app.use(express.static(publicDir))
 app.get('*', (_req, res) => {
   res.sendFile(path.join(publicDir, 'index.html'))
 })
+
+// Bring back every session that is still inside its idle window. This is the whole point of the
+// store: a deploy recreates the container, and without this everyone would be signed out — which cost
+// real time on 2026-09-17 when a sequence of releases meant signing in again after each one.
+for (const restored of authSessionStore.load(Date.now())) {
+  authSessions.set(restored.token, {
+    token: restored.token,
+    username: restored.session.username,
+    role: restored.session.role as UserRole,
+    loginAt: restored.session.loginAt,
+    lastSeenAt: restored.session.lastSeenAt,
+    nowPlaying: null
+  })
+}
+if (authSessions.size > 0) console.log(`[auth] restored ${authSessions.size} session(s) from disk`)
 
 createHttpServer(app).listen(PUBLIC_PORT, () => {
   console.log(`[server] Allison Web IPTV v${pkg.version} listening on http://localhost:${PUBLIC_PORT}`)

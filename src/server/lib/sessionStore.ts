@@ -36,6 +36,37 @@ function getSecret(): Buffer {
   return createHash('sha256').update(secret, 'utf8').digest()
 }
 
+/**
+ * The same AES-256-GCM envelope, for a single opaque string rather than a credentials object.
+ *
+ * Added for authSessionStore: a session token has to survive a restart so a deploy stops signing
+ * everybody out, and it must not sit in the database in plaintext — it is a bearer credential. The
+ * format is identical to the credentials bundle above, so there is one cipher in this app, not two.
+ */
+export function encryptSecret(plain: string): string {
+  const iv = randomBytes(IV_LENGTH)
+  const cipher = createCipheriv(ALGORITHM, getSecret(), iv)
+  const ciphertext = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()])
+  return JSON.stringify({
+    version: 1,
+    payload: Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString('base64url')
+  } satisfies EncryptedSessionPayload)
+}
+
+export function decryptSecret(encoded: string): string {
+  const parsed = JSON.parse(encoded) as EncryptedSessionPayload
+  if (!parsed || parsed.version !== 1 || typeof parsed.payload !== 'string') {
+    throw new Error('Invalid encrypted payload')
+  }
+  const bundle = Buffer.from(parsed.payload, 'base64url')
+  if (bundle.length < IV_LENGTH + TAG_LENGTH) throw new Error('Invalid encrypted payload')
+  const iv = bundle.subarray(0, IV_LENGTH)
+  const tag = bundle.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH)
+  const decipher = createDecipheriv(ALGORITHM, getSecret(), iv)
+  decipher.setAuthTag(tag)
+  return Buffer.concat([decipher.update(bundle.subarray(IV_LENGTH + TAG_LENGTH)), decipher.final()]).toString('utf8')
+}
+
 export function encryptSessionCredentials(credentials: SessionCredentials): string {
   const json = JSON.stringify(credentials)
   const iv = randomBytes(IV_LENGTH)

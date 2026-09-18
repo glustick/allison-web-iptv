@@ -127,6 +127,14 @@ function createSchema(db: Database.Database): void {
       value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      token_hash TEXT PRIMARY KEY,
+      token_enc  TEXT NOT NULL,
+      username TEXT NOT NULL,
+      role TEXT NOT NULL,
+      login_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS auth_audit (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       at TEXT NOT NULL,
@@ -150,6 +158,21 @@ function createSchema(db: Database.Database): void {
  * fail against a database that looks fine.
  */
 function migrateSchema(db: Database.Database): void {
+  const addColumnOrNothing = (table: string, column: string, ddl: string): void => {
+    try {
+      const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+      if (columns.length > 0 && !columns.some((entry) => entry.name === column)) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`)
+        console.log(`[db] added ${table}.${column}`)
+      }
+    } catch (err) {
+      console.error(`[db] could not add ${table}.${column}:`, err instanceof Error ? err.message : err)
+    }
+  }
+
+  // auth_sessions gained an encrypted token after the table shipped, so an existing database needs
+  // the column added explicitly — CREATE TABLE IF NOT EXISTS would silently leave it out.
+  addColumnOrNothing('auth_sessions', 'token_enc', 'token_enc TEXT NOT NULL DEFAULT \'\'')
   const addColumn = (table: string, column: string, ddl: string): boolean => {
     const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
     if (columns.some((entry) => entry.name === column)) return false
