@@ -316,7 +316,15 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
               networkRetryTimer = setTimeout(() => instance.startLoad(), NETWORK_RETRY_DELAY_MS)
             } else {
               fatalErrorShown = true
-              setError(`Playback error: ${data.details} (gave up after ${MAX_NETWORK_RETRIES} retries)`)
+              // A silent provider is the common failure here, and it reaches the player as a 502/504
+              // from this app's own relay. Say that, rather than hls.js's internal error name — the
+              // movie player has done exactly this since v0.31.0; the live one had not.
+              const code = (data as { response?: { code?: number } }).response?.code
+              setError(
+                code === 502 || code === 504
+                  ? 'The provider is not responding — it may be down. Try again in a few minutes.'
+                  : `Playback error: ${data.details} (gave up after ${MAX_NETWORK_RETRIES} retries)`
+              )
               instance.destroy()
             }
             break

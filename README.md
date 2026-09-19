@@ -514,6 +514,28 @@ distinct destination is told exactly once even with several accounts configured.
 what to do, including the container restart that an unwritable database needs after its permissions
 are fixed.
 
+## What this provider actually does (measured, not assumed)
+
+Worth reading before debugging anything that looks like a playback bug. Every item here cost real time to
+establish and none of it is documented by the provider — and each one has been mistaken for a bug in this
+app at least once.
+
+- **A `.m3u8` URL may return a playlist *or* raw MPEG-TS**, and which one changes from moment to moment.
+  Sky News (FHD and HD) does both. Nothing in the app trusted the extension after that was measured: the
+  client sniffs the first bytes before choosing a player, and the transcoder sniffs before choosing its
+  input options.
+- **Stream ids are renumbered.** BBC One FHD was 37237 in one week's notes and 42783 in live data the
+  next, and *both ids still answer* — so a stale id fails quietly rather than loudly. Saved favourites,
+  history and custom categories resolve against the provider's current list for exactly this reason.
+- **Live playlists carry absolute CDN URLs containing the account credentials**, signed for roughly 25
+  seconds. Live segments are therefore relayed through this app rather than fetched by the browser, which
+  is what keeps those credentials out of it.
+- **The panel flaps.** DNS resolves, TCP connects in ~0.3 s, and then there is no HTTP response at all.
+  That signature is the provider rather than this app: the watchdog reports it, and a request that never
+  answers becomes a 504 with a sentence instead of a hang.
+- **`max_connections` is 2.** Anything that opens a second connection on the same account can starve
+  playback, which is why transcode sessions are never pre-warmed.
+
 ## Backup, restore and system health (admin → **System** tab)
 
 - **Health**: version, uptime, memory, database size and row counts, provider reachability with

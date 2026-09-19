@@ -260,7 +260,9 @@ make that automatic and stop it depending on remembering.
 
 - **Reverse-proxy / TLS docs for non-Synology hosts.** *Open.* Document a Caddy or nginx setup
   for self-hosters running anywhere other than a Synology box with its own reverse proxy.
-- **Write down what this provider actually does.** *Open (small).* Several hours went into behaviour
+- **Write down what this provider actually does.** *Shipped 2026-09-19*, as a "What this provider
+  actually does" section in the README covering the HLS-or-TS flip, the renumbered ids, the credentials
+  in CDN URLs, the flapping panel and the two-connection limit. The original note: Several hours went into behaviour
   documented nowhere: channels answer their `.m3u8` URL with **either** a real playlist **or** raw
   MPEG-TS depending on the moment (Sky News does both); playlists contain **absolute CDN URLs carrying
   the account credentials**, signed for roughly 25 seconds; and the panel flaps with DNS and TCP fine

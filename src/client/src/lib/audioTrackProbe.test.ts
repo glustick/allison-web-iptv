@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
-import { probeAudioTracks } from './audioTrackProbe'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { forgetProbedTracks, probeAudioTracks } from './audioTrackProbe'
+
+afterEach(() => { forgetProbedTracks() })
 
 function jsonResponse(body: unknown, ok = true) {
   return { ok, status: ok ? 200 : 500, json: async () => body } as unknown as Response
@@ -34,5 +36,21 @@ describe('probeAudioTracks', () => {
   it('copes with a response that has no audio tracks at all', async () => {
     const f = vi.fn(async () => jsonResponse({ subtitleTracks: [] })) as unknown as typeof fetch
     expect(await probeAudioTracks('/x.m3u8', f)).toEqual([])
+  })
+})
+
+describe('the probe cache', () => {
+  it('asks once per channel per session', async () => {
+    const f = vi.fn(async () => jsonResponse({ audioTracks: [{ index: 0, codec: 'eac3' }] })) as unknown as typeof fetch
+    await probeAudioTracks('/api/stream/live/42801.m3u8', f)
+    await probeAudioTracks('/api/stream/live/42801.m3u8', f)
+    expect(f).toHaveBeenCalledTimes(1)
+  })
+
+  it('still probes a different channel', async () => {
+    const f = vi.fn(async () => jsonResponse({ audioTracks: [{ index: 0, codec: 'aac' }] })) as unknown as typeof fetch
+    await probeAudioTracks('/api/stream/live/1.m3u8', f)
+    await probeAudioTracks('/api/stream/live/2.m3u8', f)
+    expect(f).toHaveBeenCalledTimes(2)
   })
 })

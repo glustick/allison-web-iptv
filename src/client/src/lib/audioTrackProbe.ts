@@ -18,10 +18,19 @@ export interface ProbedAudioTrack {
   codec: string
 }
 
+/** Per session: a channel's audio tracks do not change from one play to the next. */
+const probed = new Map<string, ProbedAudioTrack[]>()
+
+export function forgetProbedTracks(): void {
+  probed.clear()
+}
+
 export async function probeAudioTracks(
   url: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<ProbedAudioTrack[]> {
+  const cached = probed.get(url)
+  if (cached) return cached
   try {
     const res = await fetchImpl('/api/transcode/probeTracks', {
       method: 'POST',
@@ -30,9 +39,11 @@ export async function probeAudioTracks(
     })
     if (!res.ok) return []
     const data = (await res.json()) as { audioTracks?: { index?: number; codec?: string }[] }
-    return (data.audioTracks ?? [])
+    const tracks = (data.audioTracks ?? [])
       .map((track, position) => ({ index: track.index ?? position, codec: track.codec ?? '' }))
       .sort((a, b) => a.index - b.index)
+    probed.set(url, tracks)
+    return tracks
   } catch {
     // A failed probe is not evidence of anything: play the stream as we would have anyway.
     return []
