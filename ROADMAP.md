@@ -208,6 +208,17 @@ failures live, name them plainly, and let the operator fix them from just the me
   not play silently on Safari. That probe costs a round trip on every play of every channel; the
   verdict could be remembered per channel the way `lib/transcodeHints.ts` already remembers "this needs
   converting" — bounded, expiring, per device.
+- **Retry a refused segment with a fresh playlist — the thorough fix for expired signatures.** *Open; the
+  pragmatic version shipped in v0.42.1.* Heavy channels (the ~6 Mbps EPL club feeds) relay their first
+  segment and then get **400** for the rest of the same playlist: the provider's URLs are signed for
+  roughly 25 seconds, and relaying makes each segment slow enough to fetch that the next one's signature
+  has gone. v0.42.1 detects that and converts the channel, which sidesteps the cause rather than removing
+  it. The real fix is to re-fetch the upstream playlist and retry the refused segment **once**, inside the
+  relay where the tokens are actually consumed — then any channel relays like the light ones.
+- **Widen the undecodable-audio check beyond Dolby.** *Open.* The check that decides whether to convert a
+  stream for audio reasons only considers `ac3`/`eac3`. Sunderland's feed carries **aac HE-AACv2**, which
+  is a different question entirely and is not covered — the same blind spot the E-AC-3 fix closed for
+  Dolby codecs, still open for everything else.
 - **Say "the provider isn't responding" in the live player too.** *Partly done.* v0.31.0 made the
   server answer **504** with a sentence when the provider goes silent, and the *movie* player shows it.
   The live player still surfaces hls.js's own generic network error for the same condition, so a
@@ -246,6 +257,19 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
   for 60+ seconds was a session nobody was watching. The server tracks `idleSeconds` and the admin health
   endpoint reports it; surfacing it in the UI would let the *user* see a stuck transcode rather than
   report a black screen.
+- **The guide parse blocks the event loop for about four seconds.** *Open (measured).* A refresh keeps the
+  app responsive at 12–20 ms, then stalls once for **3.9 s** while the parser runs. Not enough to explain
+  the 502s of 2026-09-19 — those were an OOM crash loop — but on a slow day it is the difference between a
+  spinner and a timeout. Parsing in chunks, or in a worker thread, removes it.
+- **Parsing a ~97 MB gzipped guide into memory is the wrong shape.** *Open (design).* Node's default heap
+  could not hold it, so the app died in an OOM restart loop that presented as *"the EPG is failing to
+  load"* plus a 502 from the reverse proxy. The immediate fix was a 6 GB heap (v0.40.1), which is
+  headroom rather than a fix: a streaming parse keeping only the channels it will match removes both the
+  memory ceiling and the stall above.
+- **A slow provider response reads as a failure.** *Open.* One category (`USA | Local Univision`) took
+  **52 seconds** from a cold cache while its eight siblings answered in under four. The UI gives up and
+  reports an error instead of *"this category is slow — still trying"*. A longer timeout for category
+  fetches, with the loading state kept alive, is the same shape as the v0.31.0 fix for provider stalls.
 - **The host now carries live video bandwidth.** *Worth documenting and measuring.* Live segments are
   relayed through the app (v0.33.0) rather than fetched by the browser from the provider's CDN, which is
   what removed the provider credentials from the browser and the dependence on the CDN accepting the
