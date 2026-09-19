@@ -142,6 +142,8 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     // The effect closure would otherwise keep the `error` state from this render forever — the
     // watchdog needs to see fatal give-ups that happen later in this same effect's lifetime.
     let fatalErrorShown = false
+// stalls are counted per stream; two of them mean this one cannot be relayed reliably
+let stallCount = 0
     const recoveryTimer = setInterval(() => {
       if (!hls || gaveUp || fatalErrorShown) return
       const actions = liveRecoveryActions({
@@ -332,6 +334,24 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
           )
         ) {
           return
+        }
+        // A stall is not an error: hls.js raises it as a non-fatal warning, which is why a frozen
+        // picture can leave an entirely empty console — no failed request, nothing red. This is the
+        // failure the heavy club channels show: the app serves their segments correctly (verified from
+        // the server: no provider errors, the browser reporting it is playing) and the player simply
+        // stops receiving usable data. Watching for an HTTP status, as v0.42.1 did, can never catch it.
+        //
+        // Converted only after two stalls. A single one is usually a transient hiccup, and converting a
+        // healthy channel would remember it as needing conversion for ever.
+        if (!data.fatal && data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR && !url.startsWith('/__transcode/')) {
+          stallCount += 1
+          if (stallCount >= 2) {
+            noteStreamNeedsTranscode(url)
+            setError(null)
+            instance.destroy()
+            tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
+            return
+          }
         }
         if (!data.fatal) return
         console.error('[player] fatal hls error', data.type, data.details)
