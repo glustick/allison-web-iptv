@@ -73,6 +73,7 @@ function sourceLabel(url: string, sources: EpgConfigResponse['sources']): string
   }
 }
 
+import { sourceUrlWithoutCredentials } from '../lib/sourceLabel'
 export function EpgSettings({ session }: { session: Session }): JSX.Element {
   const [config, setConfig] = useState<EpgConfigResponse | null>(null)
   const [newUrl, setNewUrl] = useState('')
@@ -300,7 +301,10 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
                 <tr>
                   <td>
                     <span className="epg-source-name">Provider guide</span>
-                    <span className="epg-source-url">{shortUrl(provider.url)}</span>
+                    {/* No query: it carries the account credentials. */}
+                    <span className="epg-source-url" title="The provider's own guide">
+                      {sourceUrlWithoutCredentials(provider.url)}
+                    </span>
                   </td>
                   <td><span className={`epg-status epg-status-${provider.status}`}>{statusLabel(provider)}</span></td>
                   <td>{formatCount(provider.channelCount)}</td>
@@ -313,7 +317,8 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
                 <tr key={source.url}>
                   <td>
                     <span className="epg-source-name">External XMLTV</span>
-                    <span className="epg-source-url">{shortUrl(source.url)}</span>
+                    {/* In full. Truncating it in code meant a wider column could never reveal the rest. */}
+                    <span className="epg-source-url" title={source.url}>{source.url}</span>
                   </td>
                   <td><span className={`epg-status epg-status-${source.status}`}>{statusLabel(source)}</span></td>
                   <td>{formatCount(source.channelCount)}</td>

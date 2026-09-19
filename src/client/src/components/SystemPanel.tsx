@@ -22,6 +22,7 @@ function formatBytesShort(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+import { sourceLabel } from '../lib/sourceLabel'
 export function SystemPanel(): JSX.Element {
   const [health, setHealth] = useState<HealthReport | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -214,7 +215,11 @@ export function SystemPanel(): JSX.Element {
             <tbody>
               {(health?.guide ?? []).map((source, index) => (
                 <tr key={`${source.kind}-${index}`}>
-                  <td>{source.kind === 'provider' ? 'Provider guide' : source.url.slice(0, 60)}</td>
+                  <td title={source.kind === 'provider' ? undefined : source.url}>
+                  {/* In full, so a wider column actually reveals it; the provider's own guide is named
+                      because its URL carries the account credentials in the query. */}
+                  {sourceLabel(source.url, source.kind)}
+                </td>
                   <td>
                     <span className={`epg-status epg-status-${source.status}`}>{source.status}</span>
                   </td>
