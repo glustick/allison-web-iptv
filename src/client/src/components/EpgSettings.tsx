@@ -31,6 +31,8 @@ interface MatchSummary {
   matched: number
   unmatched: number
   byStrategy: Record<string, number>
+  /** How many channels each guide source answered for, most useful first. */
+  bySource?: { url: string; matched: number }[]
   buildMs: number
   builtAt: number
 }
@@ -57,6 +59,18 @@ function statusLabel(source: EpgSourceStatus): string {
 
 function shortUrl(url: string): string {
   return url.length > 68 ? `${url.slice(0, 65)}…` : url
+}
+
+// A source is a long URL; name what it is where the shape allows it, and trim where it does not.
+function sourceLabel(url: string, sources: EpgConfigResponse['sources']): string {
+  const match = sources.find((source) => source.url === url)
+  if (match?.kind === 'provider') return 'Provider guide'
+  try {
+    const parsed = new URL(url)
+    return `${parsed.host}${parsed.pathname}`.slice(0, 62)
+  } catch {
+    return url.slice(0, 62)
+  }
 }
 
 export function EpgSettings({ session }: { session: Session }): JSX.Element {
@@ -213,6 +227,36 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
           <p className="setup-hint">Matching is running — open Live TV once and this fills in.</p>
         )}
       </section>
+
+      {/* Which guide each match came from. The totals say how well matching went; this says who did it,
+          which is what you need when a source you added contributes nothing — or everything. */}
+      {summary && (summary.bySource?.length ?? 0) > 0 && (
+        <section className="admin-section">
+          <div className="epg-section-head">
+            <h2>Where the matches came from</h2>
+          </div>
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Guide source</th>
+                  <th>Channels matched</th>
+                  <th>Share of matches</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.bySource?.map((entry) => (
+                  <tr key={entry.url}>
+                    <td>{sourceLabel(entry.url, config?.sources ?? [])}</td>
+                    <td>{formatCount(entry.matched)}</td>
+                    <td>{summary.matched > 0 ? Math.round((entry.matched / summary.matched) * 100) : 0}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <section className="admin-section">
         <div className="epg-section-head">

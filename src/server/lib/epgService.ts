@@ -75,6 +75,14 @@ export interface EpgMatchSummary {
   matched: number
   unmatched: number
   byStrategy: Record<MatchStrategy, number>
+  /**
+   * How many channels each guide source answered for, most useful first.
+   *
+   * The overall totals say how well matching went; this says *who* did the matching, which is what you
+   * need when one source covers a whole region and another contributes almost nothing — or when a
+   * source you added is not being consulted at all.
+   */
+  bySource: { url: string; matched: number }[]
   buildMs: number
   builtAt: number
 }
@@ -384,6 +392,8 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       'exact-name': 0,
       'fuzzy-name': 0
     }
+    // Which source answered, per source: the same matches, attributed to the guide they came from.
+    const matchesBySource = new Map<string, number>()
     for (const stream of streams) {
       for (const candidate of candidates) {
         const result = matchStreamToGuideChannelDetailed(stream, candidate.index)
@@ -395,6 +405,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
           score: result.score
         })
         byStrategy[result.strategy]++
+        matchesBySource.set(candidate.url, (matchesBySource.get(candidate.url) ?? 0) + 1)
         break
       }
     }
@@ -407,6 +418,9 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
         matched: mapping.size,
         unmatched: streams.length - mapping.size,
         byStrategy,
+        bySource: [...matchesBySource.entries()]
+          .map(([url, matched]) => ({ url, matched }))
+          .sort((a, b) => b.matched - a.matched),
         buildMs: Math.max(0, now() - startedAt),
         builtAt: now()
       }
