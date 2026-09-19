@@ -184,13 +184,20 @@ export function LiveTv({
     if (selection.type === 'favourites') {
       return liveFavourites.map((favourite) => ({ streamId: favourite.streamId, name: favourite.name, category: favourite.category }))
     }
+    // History rows are the same shape of problem as favourites — an id from the day of the visit — and
+    // they do carry their category, so the same per-category load and resolver apply unchanged.
+    if (selection.type === 'history') {
+      return prefs.history
+        .filter((entry) => entry.kind === 'live')
+        .map((entry) => ({ streamId: entry.streamId, name: entry.name, category: entry.category }))
+    }
     if (selection.type === 'custom') {
       return (selectedCustom?.channels ?? [])
         .filter((channel) => channel.kind === 'live')
         .map((channel) => ({ streamId: channel.streamId, name: channel.name, category: channel.sourceCategory }))
     }
     return []
-  }, [selection, liveFavourites, selectedCustom])
+    }, [selection, liveFavourites, selectedCustom, prefs.history])
 
   const [libraryChannels, setLibraryChannels] = useState<LiveStream[]>([])
   const libraryCategoriesRef = useRef<Map<string, LiveStream[]>>(new Map())
@@ -235,7 +242,15 @@ export function LiveTv({
           ) ?? synthesizeStream(favourite.streamId, favourite.name, favourite.category)
       )
     }
-    if (selection.type === 'history') return historyChannels
+    if (selection.type === 'history') {
+      return historyChannels.map(
+        (row) =>
+          resolveLibraryEntry(
+            { streamId: row.stream_id, name: row.name, category: row.category_id || null },
+            libraryLookup
+          ) ?? row
+      )
+    }
     if (selection.type === 'custom') {
       return (selectedCustom?.channels ?? [])
         .filter((channel) => channel.kind === 'live')
@@ -282,38 +297,25 @@ export function LiveTv({
       ),
     [channels, providerIconById]
   )
-  const libraryRows: ReorderableRow[] = useMemo(() => {
-    if (selection.type === 'favourites') {
-      return liveFavourites.map((favourite) => ({
-        key: `live:${favourite.streamId}`,
-        streamId: favourite.streamId,
-        name: favourite.name,
-        kind: 'live' as const,
-        icon: favourite.icon ?? providerIconById.get(favourite.streamId) ?? null
-      }))
-    }
-    if (selection.type === 'history') {
-      return historyChannels.map((channel) => ({
-        key: `live:${channel.stream_id}`,
-        streamId: channel.stream_id,
-        name: channel.name,
-        kind: 'live' as const,
-        icon: providerIconById.get(channel.stream_id) ?? null
-      }))
-    }
-    if (selection.type === 'custom') {
-      return (selectedCustom?.channels ?? [])
-        .filter((channel) => channel.kind === 'live')
-        .map((channel) => ({
-          key: `live:${channel.streamId}`,
-          streamId: channel.streamId,
-          name: channel.name,
-          kind: 'live' as const,
-          icon: channel.icon ?? providerIconById.get(channel.streamId) ?? null
-        }))
-    }
-    return []
-  }, [selection, liveFavourites, historyChannels, selectedCustom, providerIconById])
+  // Rows are derived from `channels`, which has already been resolved against the provider — so a row
+  // carries the id the channel *has*, not the one it had when it was saved. Passing the stored id here
+  // was enough to defeat the resolution above: the click looks the row up in `channels` by that id,
+  // misses, and falls back to a synthesised stream carrying the dead one. That is why a favourite could
+  // still report "channel unavailable" after the fix meant to prevent it.
+  const isLibraryView = selection.type === 'favourites' || selection.type === 'history' || selection.type === 'custom'
+  const libraryRows: ReorderableRow[] = useMemo(
+    () =>
+      isLibraryView
+        ? channels.map((channel) => ({
+            key: `live:${channel.stream_id}`,
+            streamId: channel.stream_id,
+            name: channel.name,
+            kind: 'live' as const,
+            icon: providerIconById.get(channel.stream_id) ?? null
+          }))
+        : [],
+    [isLibraryView, channels, providerIconById]
+  )
 
   // Entries saved before artwork was stored have none. Rather than asking anyone to re-add them,
   // fetch the provider's channel list once per session, match by stream id, and persist what we
