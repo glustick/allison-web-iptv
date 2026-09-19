@@ -11,6 +11,15 @@ export interface ReorderableRow {
   /** Stable identity for React and for the reorder payload. */
   key: string
   streamId: number
+  /**
+   * The id the *saved entry* uses, when it differs from the channel's current one.
+   *
+   * This provider renumbers stream ids, so a favourite can point at an id the provider no longer lists
+   * while the channel itself still resolves — by name. Playback wants the resolved id; reordering and
+   * removing want the id the entry is actually stored under, because those are matched against the saved
+   * list. Carrying only the resolved one made both silently do nothing.
+   */
+  storedStreamId?: number
   name: string
   kind: 'live' | 'movie' | 'series'
   /** Channel artwork, when the entry (or a loaded channel list) has it. */

@@ -306,15 +306,18 @@ export function LiveTv({
   const libraryRows: ReorderableRow[] = useMemo(
     () =>
       isLibraryView
-        ? channels.map((channel) => ({
+        ? channels.map((channel, index) => ({
             key: `live:${channel.stream_id}`,
+            // playback uses the channel as the provider lists it now
             streamId: channel.stream_id,
+            // reordering and removing use the id the saved entry is stored under
+            storedStreamId: libraryEntries[index]?.streamId ?? channel.stream_id,
             name: channel.name,
             kind: 'live' as const,
             icon: providerIconById.get(channel.stream_id) ?? null
           }))
         : [],
-    [isLibraryView, channels, providerIconById]
+    [isLibraryView, channels, libraryEntries, providerIconById]
   )
 
   // Entries saved before artwork was stored have none. Rather than asking anyone to re-add them,
@@ -360,7 +363,8 @@ export function LiveTv({
 
   const handleLibraryReorder = useCallback(
     (ordered: ReorderableRow[]): void => {
-      const payload = ordered.map((row) => ({ kind: row.kind, streamId: row.streamId }))
+      // The saved entry's id, not the channel's current one: these are matched against the stored list.
+      const payload = ordered.map((row) => ({ kind: row.kind, streamId: row.storedStreamId ?? row.streamId }))
       if (selection.type === 'favourites') {
         void setFavouriteOrder(payload)
           .then((favourites) => applyPrefs({ ...prefs, favourites }))
@@ -853,7 +857,7 @@ export function LiveTv({
                   className="admin-small-btn"
                   title="Remove from favourites"
                   onClick={() => {
-                    void setFavourite({ kind: 'live', streamId: row.streamId, name: row.name }, false)
+                    void setFavourite({ kind: 'live', streamId: row.storedStreamId ?? row.streamId, name: row.name }, false)
                       .then((favourites) => applyPrefs({ ...prefs, favourites }))
                       .catch((err) => handlePrefsError(err, 'Could not update favourites'))
                   }}
