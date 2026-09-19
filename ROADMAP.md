@@ -7,6 +7,37 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.43.2 — fatal media errors convert instead of freezing.**
+
+*Handoff note for AutoClaw, whose uncommitted `LivePlayer.tsx` work this release completes.*
+Your change was recovered exactly as left — a new `case Hls.ErrorTypes.MEDIA_ERROR` routing
+fatal media errors to the transcoder — and it was close, but it could never run: it was pasted
+*below* the existing `MEDIA_ERROR` case in the same switch, and JavaScript dispatches to the
+first matching label, so the whole branch was unreachable dead code (it type-checked, linted,
+and passed the suite while doing nothing). The completed version merges the two into one
+ladder: the bounded `recoverMediaError()` attempts (with the 2nd-attempt audio-codec swap) run
+first, because transient decode hiccups elsewhere must not spin up ffmpeg; only when those are
+exhausted — your diagnosed case, the stream provably valid but un-decodable — does it note the
+transcode hint (`noteStreamNeedsTranscode`) and hand off via `tryFallbackForSilentAudio`,
+mirroring the three sibling conversion branches (EC-3 audio, refused 400/403 segments,
+double-stall). One correction to your guard: `url.startsWith('/__transcode/')` never fires in
+LivePlayer (the prop is always the original `/live/...` path; the transcoded URL only ever
+exists inside `getSourceUrl`), so the "already converted" check is `hasSession()` instead. A
+run that is *already* on transcoder output and still exhausts recoveries shows "This channel
+cannot be decoded on this device, and automatic transcoding failed." — no loop is possible
+(the fallback's `triedRef` refuses a second conversion of the same run).
+
+Verified live on the real failing channels (2026-09-19): "Newcastle United" raised four fatal
+`mediaSourceRequiresReset` errors in two seconds, exhausted its recoveries, converted, and
+played at 1080p through the transcoder — exactly one `/api/transcode/start`, no loop;
+"Sunderland" in the same category plays directly and never triggers the path. **The natural
+next thing for you to pick up, found during that verification:** the converted Newcastle
+session's output later stopped advancing (ffmpeg process alive, no new segments for minutes,
+the provider's own playlist still updating with live segments) while the tab sat backgrounded,
+and the existing stalled-transcode machinery (`restartFallback`, the idle surfacing from
+v0.36.0) did not appear to recover it unprompted — worth a deliberate pass with the tab in the
+foreground to decide whether that path needs its own watchdog.
+
 **v0.42.1 — "Sessions that survive a deploy, and regressions paid off."** Nine releases (v0.35.0–v0.42.1)
 of follow-up work, in the order it was needed:
 

@@ -6,7 +6,21 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.42.1 — sessions that survive a deploy, and regressions paid off)
+## Current state (v0.43.2 — fatal media errors convert instead of freezing)
+
+**v0.43.2** completes the club-channel ladder: a fatal `MEDIA_ERROR` that exhausts hls.js's
+bounded `recoverMediaError()` attempts now notes the transcode hint and converts the channel
+through the transcoder — the same route EC-3 audio, refused segments, and double-stalls already
+take — instead of freezing on "gave up after 3 recovery attempts". (The branch had been left as
+unreachable dead code: a duplicated switch case below the live one, which JavaScript never
+reaches.) Verified live on the real failing channels: "Newcastle United" raised four fatal
+`mediaSourceRequiresReset` errors, converted, and played at 1080p; "Sunderland" plays directly
+and never needed it.
+
+**v0.42.2–v0.43.1** — favourite reordering actually drags in Safari (v0.42.2); a stream that
+stalls twice without an HTTP error converts rather than freezing, since a frozen picture raises
+nothing but a non-fatal stall warning (v0.43.0); and the reordering UI points at where
+reordering lives and offers to switch there (v0.43.1).
 
 Nine more releases since v0.34.1, mostly cleaning up after the work that made every channel type play —
 and one that finally removes an irritation present since the first deploy.

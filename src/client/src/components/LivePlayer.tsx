@@ -397,8 +397,25 @@ let stallCount = 0
             // escalate instead of looping forever, matching hls.js's own recommended pattern.
             mediaErrorRecoveryCount += 1
             if (mediaErrorRecoveryCount > MAX_MEDIA_ERROR_RECOVERIES) {
+              // The recoveries only ever fix transient decode hiccups. A stream that exhausts
+              // all of them is one the decoder or hls.js's remuxer genuinely cannot cope with —
+              // measured on the heavy club channels (1080p50 at ~6 Mbps): served correctly
+              // through this app's own relay (200, video/mp2t, first byte 0x47 — real MPEG-TS,
+              // not an error body, not truncated) and still fatally media-erroring. Hand it to
+              // the transcoder, which re-encodes to 25 fps H.264 — the shape every channel that
+              // already plays uses — and note the hint so the next play converts before playing
+              // (the load-time check at the top of this effect). The fallback refuses to convert
+              // a run that already converted, so this cannot loop; arriving here *with* a
+              // session means transcoding itself has failed, and that is the end of the road.
+              if (!hasSession()) {
+                noteStreamNeedsTranscode(url)
+                setError(null)
+                instance.destroy()
+                tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
+                break
+              }
               fatalErrorShown = true
-              setError(`Playback error: ${data.details} (gave up after ${MAX_MEDIA_ERROR_RECOVERIES} recovery attempts)`)
+              setError('This channel cannot be decoded on this device, and automatic transcoding failed.')
               instance.destroy()
             } else if (mediaErrorRecoveryCount === 2) {
               instance.swapAudioCodec()
