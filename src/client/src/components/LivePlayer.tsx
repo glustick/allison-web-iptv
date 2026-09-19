@@ -139,6 +139,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     let lastFragmentAt: number | null = null
     let kicksSinceLastFragment = 0
     let gaveUp = false
+    const runStartedAt = Date.now()
     // The effect closure would otherwise keep the `error` state from this render forever — the
     // watchdog needs to see fatal give-ups that happen later in this same effect's lifetime.
     let fatalErrorShown = false
@@ -149,9 +150,11 @@ let stallCount = 0
       const actions = liveRecoveryActions({
         now: Date.now(),
         lastFragmentAt,
+        runStartedAt,
         playheadAtBufferEnd: isPlayheadAtBufferEnd(video),
         hasFatalError: fatalErrorShown,
         ended: video.ended,
+        paused: video.paused,
         kicksSinceLastFragment
       })
       if (actions.reloadSource) {
@@ -164,18 +167,21 @@ let stallCount = 0
         // *stream*: 1) rebuild the source; 2) switch engines (start a transcode, or replace a
         // dead transcode session — reloading the same dead session id just re-freezes);
         // 3) stop pretending and offer a visible retry instead of a silent frozen frame.
-        if (attempt === 2) {
-          const escalated = hasSession()
-            ? restartFallback(
-                url,
-                () => setReloadTick((t) => t + 1),
-                (message) => {
-                  fatalErrorShown = true
-                  setError(`Playback stalled and restarting the transcode failed: ${message}`)
-                }
-              )
-            : false
-          if (escalated) return
+        //
+        // On a transcode session, skip straight to replacing the session (v0.28's own lesson,
+        // relearned live on the club channels on 2026-09-19): a plain reload re-attaches the
+        // same dead session id and provably re-freezes, so spending attempt 1 on it just adds
+        // a doomed 60s-staleness cycle before the restart that was always going to be needed.
+        if (hasSession()) {
+          const restarted = restartFallback(
+            url,
+            () => setReloadTick((t) => t + 1),
+            (message) => {
+              fatalErrorShown = true
+              setError(`Playback stalled and restarting the transcode failed: ${message}`)
+            }
+          )
+          if (restarted) return
         }
         if (attempt >= 3) {
           fatalErrorShown = true
@@ -381,6 +387,26 @@ let stallCount = 0
                 setError(null)
                 instance.destroy()
                 tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
+                break
+              }
+              // A session playlist that exhausts its network retries is a dead transcode session
+              // (ffmpeg gone or wedged — measured live: killing ffmpeg produces exactly five
+              // levelLoadErrors then this terminal state). Replaying the same session id can
+              // only re-freeze (v0.28's own lesson), so replace the session outright instead of
+              // erroring — the same move the recovery ladder makes, taken at the moment of
+              // failure rather than three watchdog cycles later.
+              if (hasSession()) {
+                console.warn('[player] transcode session failed its network retries; replacing the session')
+                setError(null)
+                instance.destroy()
+                restartFallback(
+                  url,
+                  () => setReloadTick((t) => t + 1),
+                  (message) => {
+                    fatalErrorShown = true
+                    setError(`Playback stalled and restarting the transcode failed: ${message}`)
+                  }
+                )
                 break
               }
               setError(

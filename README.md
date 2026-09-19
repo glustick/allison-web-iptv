@@ -6,7 +6,17 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.43.2 — fatal media errors convert instead of freezing)
+## Current state (v0.43.3 — a dead transcode session no longer freezes the channel)
+
+**v0.43.3** closes the recovery holes found when the converted club channels still froze in
+real testing: a transcode session whose playlist exhausts its network retries is now replaced
+immediately at the moment of failure (a dead session replayed can only re-freeze — verified
+live by killing ffmpeg under a playing session: five errors, session replaced, playback
+material restored within ~25 seconds); a stream that stops loading while the viewer has it
+paused is detected and repaired in the background after three minutes of zero fragments
+(pausing mid-buffer used to hide the stall until the buffer played out); and a player run that
+never produces a fragment is treated as dead after 90 seconds instead of being ignored as
+"startup" forever.
 
 **v0.43.2** completes the club-channel ladder: a fatal `MEDIA_ERROR` that exhausts hls.js's
 bounded `recoverMediaError()` attempts now notes the transcode hint and converts the channel

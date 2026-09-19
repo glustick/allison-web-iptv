@@ -7,6 +7,35 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.43.3 — a dead transcode session no longer freezes the channel.** Found live the same
+morning, by the user, as "Newcastle and Sunderland both still not working": the v0.43.2
+conversion worked, but the converted session could die quietly (the provider's intermittent
+30-second no-response windows expire ffmpeg's signed segment URLs; killing ffmpeg reproduces
+it exactly), and every layer of recovery had a hole. Three fixes, all verified live by killing
+ffmpeg under a playing session:
+
+- **The network ladder now replaces a dead session at the moment of failure.** A session
+  playlist that exhausts its network retries *is* a dead session (measured: exactly five
+  `levelLoadError`s, then a terminal state), so the terminal branch calls `restartFallback`
+  immediately — fresh session, fresh playlist — instead of erroring out or leaving the dead
+  session URL to be replayed (v0.28's own lesson, relearned). Verified: kill → five errors
+  over 20s → "[player] transcode session failed its network retries; replacing the session" →
+  replacement producing within ~25s, buffer rebuilt, playback material restored, no overlay.
+- **A paused stream that stops loading is detected and repaired in the background.** Pausing
+  mid-buffer hides the starvation signal the stall watchdog keys on (the playhead stops, so
+  "buffer ahead" stops meaning healthy), so a source that died while the viewer was away was
+  only noticed when they pressed play and the leftover buffer ran out. Three minutes of zero
+  fragments on a paused live stream now recovers the source — without resuming playback,
+  which was the viewer's choice (`LIVE_STALE_WHILE_PAUSED_MS` in `liveStreamRecovery.ts`).
+- **"Startup" has a deadline.** The watchdog deliberately ignored runs with zero fragments
+  ever appended (hls.js owns loading) — but a run that produces nothing for 90s is dead, not
+  starting, and without this escape the watchdog stayed blind to exactly the state a dead
+  session leaves (`LIVE_STARTUP_ABANDON_MS`). Session runs also skip the doomed plain-reload
+  attempt in the stall ladder and go straight to session replacement.
+
+Sunderland, for the record, plays directly — its encode never trips any of this; the
+`levelLoadTimeOut` seen while testing it was the provider's flaky window, not the player.
+
 **v0.43.2 — fatal media errors convert instead of freezing.**
 
 *Handoff note for AutoClaw, whose uncommitted `LivePlayer.tsx` work this release completes.*
@@ -30,13 +59,9 @@ cannot be decoded on this device, and automatic transcoding failed." — no loop
 Verified live on the real failing channels (2026-09-19): "Newcastle United" raised four fatal
 `mediaSourceRequiresReset` errors in two seconds, exhausted its recoveries, converted, and
 played at 1080p through the transcoder — exactly one `/api/transcode/start`, no loop;
-"Sunderland" in the same category plays directly and never triggers the path. **The natural
-next thing for you to pick up, found during that verification:** the converted Newcastle
-session's output later stopped advancing (ffmpeg process alive, no new segments for minutes,
-the provider's own playlist still updating with live segments) while the tab sat backgrounded,
-and the existing stalled-transcode machinery (`restartFallback`, the idle surfacing from
-v0.36.0) did not appear to recover it unprompted — worth a deliberate pass with the tab in the
-foreground to decide whether that path needs its own watchdog.
+"Sunderland" in the same category plays directly and never triggers the path. (The follow-on
+originally flagged here — the converted session's output later stalling with nothing recovering
+it — is what v0.43.3 above fixed and then verified by killing ffmpeg under a playing session.)
 
 **v0.42.1 — "Sessions that survive a deploy, and regressions paid off."** Nine releases (v0.35.0–v0.42.1)
 of follow-up work, in the order it was needed:
