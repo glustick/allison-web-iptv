@@ -1,11 +1,34 @@
 # Roadmap
 
-Recommended enhancements for future development, refreshed **2026-09-17 against v0.34.1**.
+Recommended enhancements for future development, refreshed **2026-09-19 against v0.42.1**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.42.1 — "Sessions that survive a deploy, and regressions paid off."** Nine releases (v0.35.0–v0.42.1)
+of follow-up work, in the order it was needed:
+
+- **v0.35.0** — sessions mirrored into SQLite so a recreate stops signing everyone out. Verified by
+  signing in, forcing a recreate, and reusing the same cookie.
+- **v0.36.0–v0.38.0** — a stalled transcode's `idle` shown in the System tab; a silent provider answering
+  504 with a sentence on live as well as movies; the audio probe cached; and the provider's behaviour
+  finally written down.
+- **v0.39.0** — the audio/subtitle choice remembered per device, by language, applied once per stream.
+- **v0.40.0** — four public guide presets, each fetched and verified; three of eight candidates were dead.
+- **v0.41.0/v0.41.1** — the guide match broken down by source; source URLs shown in full after being
+  truncated in code where no column width could reveal them.
+- **v0.42.0** — favourite reordering and removal, both silently broken by v0.37.0's row change: the
+  operations are matched against the *stored* list and were being given the resolved id.
+- **v0.42.1** — a channel whose segments the provider refuses is converted rather than freezing.
+
+**The lesson of the day**, worth more than any individual fix: of the four bugs found, **three were
+regressions I had introduced** — the guide-URL truncation, and both favourites operations — and each was
+found by the user rather than by me. The row that carried only the resolved id looked correct in every
+test I wrote, because I tested the resolver and not the path from a row to a click or a drag.
+
+### The stretch before it (v0.34.1 and back)
 
 **v0.34.1 — "Every channel type plays."** Fourteen releases (v0.24.0–v0.34.1) that began with a report of
 *"the catchup is not playing"* and ended with every playback route confirmed on a real deployment:

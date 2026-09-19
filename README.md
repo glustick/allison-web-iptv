@@ -6,7 +6,36 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.34.1 — every channel type plays, on Safari, with no credentials in the browser)
+## Current state (v0.42.1 — sessions that survive a deploy, and regressions paid off)
+
+Nine more releases since v0.34.1, mostly cleaning up after the work that made every channel type play —
+and one that finally removes an irritation present since the first deploy.
+
+**v0.35.0 — sessions survive a restart.** They lived only in a memory map, so every recreate signed
+everyone out; on the day above that cost real time repeatedly. `auth_sessions` now mirrors the map into
+SQLite, with the token encrypted under `SESSION_SECRET` and only its hash indexed. The map is still the
+hot path and the store is touched at most once a minute.
+
+**v0.36.0–v0.38.0 — finishers.** A stalled transcode's `idle` reading is visible in the System tab (the
+number that explained every hard bug on 2026-09-17); a provider that goes silent answers **504 with a
+sentence** on live channels as well as movies; the audio-track probe is cached per session; and the
+README gained the *"what this provider actually does"* section that would have saved most of that week.
+
+**v0.39.0 — the audio and subtitle choice is remembered**, per device (which browser can decode what is a
+property of the browser), by language rather than index, applied once per stream, and with *subtitles off*
+stored as the choice it is.
+
+**v0.40.0 — public guide presets, verified rather than remembered.** Four URLs, each fetched and checked;
+of eight obvious candidates, three were dead and one answered 200 with an empty body.
+
+**v0.41.0/v0.41.1 — the guide match broken down by source**, and source URLs shown in full: they had been
+truncated *in code*, so widening the column could never reveal the rest.
+
+**v0.42.0/v0.42.1 — favourites reordering and removal fixed**, both silently broken by the row change that
+made a renumbered favourite play; and heavy channels (~6 Mbps club feeds) whose segments the provider
+refuses are converted automatically rather than freezing a second in.
+
+### Earlier (v0.34.1 and back)
 
 **v0.34.1** closes the last gap in the playback path. Channels the provider serves as **raw MPEG-TS**
 rather than HLS — Sky News FHD and HD — now play: the client sniffs the first bytes, recognises the TS
