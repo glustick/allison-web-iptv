@@ -13,6 +13,10 @@ services:
     ports:
       - "8085:8085"
     environment:
+      # The provider's XMLTV is ~97 MB gzipped and far larger parsed; Node's default heap could not
+      # hold it, so the app died with "Ineffective mark-compacts near heap limit" in a restart loop.
+      # That surfaced as the guide never loading plus a 502 from the proxy while it restarted.
+      - NODE_OPTIONS=--max-old-space-size=6144
       - PORT=8085
       # REQUIRED: 16+ characters. Generate one with:  openssl rand -hex 24
       - SESSION_SECRET=REPLACE_WITH_YOUR_OWN_SECRET
