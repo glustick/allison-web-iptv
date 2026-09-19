@@ -36,6 +36,21 @@ ffmpeg under a playing session:
 Sunderland, for the record, plays directly — its encode never trips any of this; the
 `levelLoadTimeOut` seen while testing it was the provider's flaky window, not the player.
 
+*Also for AutoClaw, continuing from the v0.43.2 note below:* your media-error conversion is
+live and working — the completion needed was merging your duplicated switch case into the
+recovery ladder (v0.43.2), and the session-death follow-on it exposed is now closed here
+(v0.43.3). The whole recovery story was verified against the real channels on 2026-09-19:
+Newcastle converts on its fatal `mediaSourceRequiresReset` errors and survives its transcode
+session being killed outright; Sunderland plays directly. If you pick this thread up again:
+the remaining flakiness is the *provider's* (intermittent ~30s no-response windows — visible
+as `Upstream did not respond within 30000ms` in the server log), which the player now rides
+out but can never fix; a server-side variant (restarting a stalled ffmpeg from the transcode
+service itself, rather than waiting for the player to notice) is the one unexplored direction,
+only worth it if these channels still visibly stutter after v0.43.3. The one-shot reproducer
+for any future regression here: play a converted channel, `pkill -f ffmpeg-static/ffmpeg`, and
+expect "replacing the session" in the browser console within ~30s with playback material
+restored shortly after.
+
 **v0.43.2 — fatal media errors convert instead of freezing.**
 
 *Handoff note for AutoClaw, whose uncommitted `LivePlayer.tsx` work this release completes.*
