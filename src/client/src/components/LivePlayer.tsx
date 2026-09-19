@@ -7,6 +7,7 @@ import { probeAudioTracks } from '../lib/audioTrackProbe'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
+import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
 // Matches the desktop app's own Player.tsx recovery tuning (see its ROADMAP): a fatal
@@ -67,6 +68,10 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const [audioTracks, setAudioTracks] = useState<PlayerTrack[]>([])
   const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
   const [audioTrack, setAudioTrack] = useState(-1)
+  // Applied once per stream: hls.js re-fires the track events on reloads, and re-applying would
+  // fight a choice the viewer made a moment ago.
+  const audioPrefAppliedRef = useRef(false)
+  const subtitlePrefAppliedRef = useRef(false)
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
   const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback } = useTranscodeFallback()
   // Recovery ladder state, deliberately on the component (not in the effect): the effect is
@@ -281,6 +286,16 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
           lang: track.lang,
           default: track.default
         })))
+        // Apply the remembered choice once per stream. hls.js re-fires these events on reloads, and
+        // re-applying on every one would fight a choice the viewer made a moment ago.
+        if (!audioPrefAppliedRef.current) {
+          audioPrefAppliedRef.current = true
+          const preferred = pickTrackIndex(
+            data.audioTracks.map((track, index) => ({ index, name: track.name, lang: track.lang, default: track.default })),
+            loadPlayerPrefs().audioTrack
+          )
+          if (preferred !== null) instance.audioTrack = preferred
+        }
         setAudioTrack(instance.audioTrack)
       })
       instance.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_event, data) => {
@@ -290,6 +305,18 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
           lang: track.lang,
           default: track.default
         })))
+        if (!subtitlePrefAppliedRef.current) {
+          subtitlePrefAppliedRef.current = true
+          const saved = loadPlayerPrefs()
+          if (saved.subtitlesOff) instance.subtitleTrack = -1
+          else {
+            const preferred = pickTrackIndex(
+              data.subtitleTracks.map((track, index) => ({ index, name: track.name, lang: track.lang, default: track.default })),
+              saved.subtitleTrack
+            )
+            if (preferred !== null) instance.subtitleTrack = preferred
+          }
+        }
         setSubtitleTrack(instance.subtitleTrack)
       })
       instance.on(Hls.Events.ERROR, (_event, data) => {
@@ -443,12 +470,20 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
         onAudioChange={(index) => {
           setAudioTrack(index)
           if (hlsRef.current) hlsRef.current.audioTrack = index
+          const chosen = audioTracks.find((track) => track.index === index)
+          if (chosen) savePlayerPrefs({ ...loadPlayerPrefs(), audioTrack: trackKey(chosen) })
         }}
         subtitleTracks={subtitleTracks}
         subtitleTrack={subtitleTrack}
         onSubtitleChange={(index) => {
           setSubtitleTrack(index)
           if (hlsRef.current) hlsRef.current.subtitleTrack = index
+          const chosen = subtitleTracks.find((track) => track.index === index)
+          savePlayerPrefs({
+            ...loadPlayerPrefs(),
+            subtitleTrack: chosen ? trackKey(chosen) : null,
+            subtitlesOff: index < 0
+          })
         }}
       />
       {sessionExpired && (

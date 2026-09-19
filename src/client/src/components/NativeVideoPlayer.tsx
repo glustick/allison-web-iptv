@@ -4,6 +4,7 @@ import { useTranscodeFallback } from '../lib/transcodeFallback'
 import { streamNeedsTranscode } from '../lib/transcodeHints'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { evaluatePlaybackSample, type PlaybackWatchState } from '../lib/playbackRecovery'
+import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
 const SILENT_AUDIO_CHECK_INTERVAL_MS = 1000
@@ -62,6 +63,10 @@ export function NativeVideoPlayer({
   const [audioTracks, setAudioTracks] = useState<PlayerTrack[]>([])
   const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
   const [audioTrack, setAudioTrack] = useState(-1)
+  // Applied once per stream: hls.js re-fires the track events on reloads, and re-applying would
+  // fight a choice the viewer made a moment ago.
+  const audioPrefAppliedRef = useRef(false)
+  const subtitlePrefAppliedRef = useRef(false)
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
   const { getSourceUrl, tryFallbackForSilentAudio, reset, beginRun } = useTranscodeFallback()
 
@@ -135,10 +140,31 @@ export function NativeVideoPlayer({
       hls.attachMedia(video)
       hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_event, data) => {
         setAudioTracks(data.audioTracks.map((track, index) => ({ index, name: track.name, lang: track.lang, default: track.default })))
+        // Apply the remembered choice once per stream; hls.js re-fires these on reloads.
+        if (!audioPrefAppliedRef.current) {
+          audioPrefAppliedRef.current = true
+          const preferred = pickTrackIndex(
+            data.audioTracks.map((track, index) => ({ index, name: track.name, lang: track.lang, default: track.default })),
+            loadPlayerPrefs().audioTrack
+          )
+          if (preferred !== null) hls.audioTrack = preferred
+        }
         setAudioTrack(hls.audioTrack)
       })
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_event, data) => {
         setSubtitleTracks(data.subtitleTracks.map((track, index) => ({ index, name: track.name, lang: track.lang, default: track.default })))
+        if (!subtitlePrefAppliedRef.current) {
+          subtitlePrefAppliedRef.current = true
+          const saved = loadPlayerPrefs()
+          if (saved.subtitlesOff) hls.subtitleTrack = -1
+          else {
+            const preferred = pickTrackIndex(
+              data.subtitleTracks.map((track, index) => ({ index, name: track.name, lang: track.lang, default: track.default })),
+              saved.subtitleTrack
+            )
+            if (preferred !== null) hls.subtitleTrack = preferred
+          }
+        }
         setSubtitleTrack(hls.subtitleTrack)
       })
       hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -259,12 +285,20 @@ export function NativeVideoPlayer({
         onAudioChange={(index) => {
           setAudioTrack(index)
           if (hlsRef.current) hlsRef.current.audioTrack = index
+          const chosen = audioTracks.find((track) => track.index === index)
+          if (chosen) savePlayerPrefs({ ...loadPlayerPrefs(), audioTrack: trackKey(chosen) })
         }}
         subtitleTracks={subtitleTracks}
         subtitleTrack={subtitleTrack}
         onSubtitleChange={(index) => {
           setSubtitleTrack(index)
           if (hlsRef.current) hlsRef.current.subtitleTrack = index
+          const chosen = subtitleTracks.find((track) => track.index === index)
+          savePlayerPrefs({
+            ...loadPlayerPrefs(),
+            subtitleTrack: chosen ? trackKey(chosen) : null,
+            subtitlesOff: index < 0
+          })
         }}
       />
       {sessionExpired && (
