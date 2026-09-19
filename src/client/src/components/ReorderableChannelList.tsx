@@ -86,7 +86,15 @@ export function ReorderableChannelList({
           key={row.key}
           className={`reorder-row${activeKey === row.key ? ' active' : ''}${overKey === row.key ? ' drag-over' : ''}`}
           draggable={reorderable}
-          onDragStart={() => setDragKey(row.key)}
+          onDragStart={(event) => {
+            // Safari will not start a drag unless the gesture carries data. Chrome is lenient about
+            // this, which is why it tested clean and failed in the user's browser every time. The
+            // payload is never read — the reorder uses component state — it exists to make the drag
+            // legal, and 'move' shows the right cursor while it runs.
+            event.dataTransfer.setData('text/plain', row.key)
+            event.dataTransfer.effectAllowed = 'move'
+            setDragKey(row.key)
+          }}
           onDragEnd={() => {
             setDragKey(null)
             setOverKey(null)
@@ -99,6 +107,7 @@ export function ReorderableChannelList({
           onDrop={(event) => {
             if (!reorderable) return
             event.preventDefault()
+            event.dataTransfer.dropEffect = 'move'
             handleDrop(row)
           }}
         >
