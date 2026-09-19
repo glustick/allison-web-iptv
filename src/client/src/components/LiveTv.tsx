@@ -820,6 +820,16 @@ export function LiveTv({
         </div>
 
         {(selection.type === 'favourites' || selection.type === 'custom') && !picking && libraryView === 'guide' ? (
+        <>
+          {/* Reordering channels lives in the List view — the guide is a grid and has no drag, by
+              design. Saying so, with a way to switch, beats a feature that looks missing: the view
+              is remembered, so once it is Guide it stays Guide and the arrows never appear. */}
+          <p className="list-hint">
+            Reordering channels works in the List view.{' '}
+            <button type="button" className="admin-small-btn" onClick={() => chooseLibraryView('list')}>
+              Switch to List
+            </button>
+          </p>
           <EpgGrid
             session={session}
             channels={guideChannels}
@@ -832,6 +842,7 @@ export function LiveTv({
               selection.type === 'favourites' ? 'No favourites yet — press ☆ on a channel while it plays.' : undefined
             }
           />
+        </>
         ) : (selection.type === 'favourites' || selection.type === 'history' || selection.type === 'custom') && !picking ? (
           <ReorderableChannelList
             rows={libraryRows}
