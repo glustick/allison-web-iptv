@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
+import { EPG_PRESETS, guideUrlsWithPreset, presetById } from '../lib/epgPresets'
 import { backupDownloadUrl, fetchHealth, reindexSearch, uploadRestore, type HealthReport } from '../lib/system'
 
 // System tab (admins): the questions that used to take a dozen messages to answer — is the
@@ -26,6 +27,7 @@ export function SystemPanel(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [presetId, setPresetId] = useState(EPG_PRESETS[0]?.id ?? '')
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -76,6 +78,34 @@ export function SystemPanel(): JSX.Element {
 
   const provider = health?.provider ?? {}
   const providerDown = provider.reachable === false
+
+  // Public guides, verified rather than remembered (see lib/epgPresets.ts). The endpoint replaces
+  // the external list, so the existing sources are carried through with the new one appended.
+  const addPreset = async (): Promise<void> => {
+    const preset = presetById(presetId)
+    if (!preset) return
+    setBusy(true)
+    setNote(null)
+    try {
+      const current = (health?.guide ?? []).filter((source) => source.kind !== 'provider').map((source) => source.url)
+      const res = await fetch('/api/epg/sources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ epgUrls: guideUrlsWithPreset(current, preset) })
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `Could not add it (HTTP ${res.status})`)
+      }
+      await fetch('/api/epg/refresh', { method: 'POST' })
+      setNote(`${preset.label} added — the guide is refreshing now.`)
+      await refresh()
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : 'Could not add the guide')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <div className="admin-console">
@@ -201,6 +231,27 @@ export function SystemPanel(): JSX.Element {
               )}
             </tbody>
           </table>
+
+          {/* Public guides that were verified working, so nobody has to hunt for a URL and discover
+              it is dead. Short on purpose — see lib/epgPresets.ts for the date each was checked. */}
+          <div className="epg-preset-row">
+            <label htmlFor="epg-preset">Add a public guide</label>
+            <select
+              id="epg-preset"
+              value={presetId}
+              onChange={(event) => setPresetId(event.target.value)}
+              disabled={busy}
+            >
+              {EPG_PRESETS.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.label} — checked {preset.verified}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={() => void addPreset()} disabled={busy}>
+              {busy ? 'Adding…' : 'Add as a guide source'}
+            </button>
+          </div>
         </div>
       </section>
 

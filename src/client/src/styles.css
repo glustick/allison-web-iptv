@@ -855,6 +855,18 @@ body.resizing-row {
 
 /* --- EPG settings section ---------------------------------------------------------------- */
 
+.epg-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.epg-preset-row select {
+  max-width: 22rem;
+}
+
 .epg-section-head {
   display: flex;
   align-items: center;
