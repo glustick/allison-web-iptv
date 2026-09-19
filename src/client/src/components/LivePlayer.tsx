@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
-import { streamNeedsTranscode } from '../lib/transcodeHints'
+import { noteStreamNeedsTranscode, streamNeedsTranscode } from '../lib/transcodeHints'
 import { sniffStreamKind } from '../lib/streamKind'
 import { probeAudioTracks } from '../lib/audioTrackProbe'
 import { useSessionExpired } from '../lib/sessionWatch'
@@ -347,6 +347,22 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
               // from this app's own relay. Say that, rather than hls.js's internal error name — the
               // movie player has done exactly this since v0.31.0; the live one had not.
               const code = (data as { response?: { code?: number } }).response?.code
+              // A refused segment (400/403) means the provider's signed URL expired before we could use
+              // it — a property of relaying a heavy stream, where the segment itself takes long enough
+              // that the next one's signature has gone. Measured on the 6 Mbps club channels: the first
+              // segment relays fine and the rest of the same playlist is refused.
+              //
+              // Such a channel cannot be relayed reliably, so convert it instead, and remember it so the
+              // next play goes straight there. The transcoder follows the playlist itself and never
+              // reuses a cached URL, which is why it does not have this problem. (The fallback refuses
+              // /__transcode/ URLs, so this cannot loop.)
+              if (code === 400 || code === 403) {
+                noteStreamNeedsTranscode(url)
+                setError(null)
+                instance.destroy()
+                tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
+                break
+              }
               setError(
                 code === 502 || code === 504
                   ? 'The provider is not responding — it may be down. Try again in a few minutes.'
