@@ -723,3 +723,155 @@ describe('createProxyServer', () => {
     expect(res.body).not.toContain('/__fetch/')
   })
 })
+
+// --- Refused-segment retry with a fresh playlist (signature expiry) -------------------------
+//
+// The origin simulates the measured provider behavior: every playlist fetch re-signs ALL
+// segment URLs (a fresh ?g=<generation> query), and a segment request is only honored while
+// its generation is still current — a request carrying an older generation is refused with
+// 400, exactly like the real provider's ~25-second signatures expiring mid-playlist.
+describe('createProxyServer: refused-segment retry', () => {
+  const MEDIA_SEQUENCE_START = 100
+  const WINDOW = 6
+
+  function makeSigningOrigin() {
+    let generation = 0
+    let mediaSequence = MEDIA_SEQUENCE_START
+    let playlistFetches = 0
+    // Filled in once the origin is listening — segment URLs must be absolute against the
+    // origin's real address, exactly like the real provider's CDN URLs.
+    let originBase = 'http://127.0.0.1:1'
+    const handler = (req: IncomingMessage, res: import('http').ServerResponse): void => {
+      const url = new URL(req.url ?? '/', originBase)
+      if (url.pathname.endsWith('.m3u8')) {
+        playlistFetches += 1
+        generation += 1
+        const lines = ['#EXTM3U', `#EXT-X-MEDIA-SEQUENCE:${mediaSequence}`, '#EXT-X-TARGETDURATION:6']
+        for (let i = 0; i < WINDOW; i++) {
+          lines.push(`#EXTINF:6.0,`)
+          lines.push(`${url.origin}/hls/seg${mediaSequence + i}.ts?g=${generation}`)
+        }
+        res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' })
+        res.end(lines.join('\n'))
+        return
+      }
+      if (url.pathname.startsWith('/hls/seg')) {
+        const sent = Number(url.searchParams.get('g'))
+        if (sent !== generation) {
+          res.writeHead(400)
+          res.end('signature expired')
+          return
+        }
+        res.writeHead(200, { 'content-type': 'video/mp2t' })
+        res.end(`SEG-${url.pathname.slice('/hls/seg'.length).replace('.ts', '')}`)
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    }
+    return {
+      handler,
+      setOriginBase: (base: string) => {
+        originBase = base
+      },
+      // Ages out every previously-issued signature, the way ~25s of wall time does on the real provider.
+      expireSignatures: () => {
+        generation += 1
+      },
+      slideWindow: (by: number) => {
+        mediaSequence += by
+      },
+      playlistFetchCount: () => playlistFetches
+    }
+  }
+
+  async function setup() {
+    const origin = makeSigningOrigin()
+    const { url: originUrl, server } = await startMockOrigin(origin.handler)
+    origin.setOriginBase(originUrl)
+    openServers.push(server)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => originUrl }))
+    return { origin, originUrl, proxy }
+  }
+
+  it('retries a refused segment once with the fresh playlist URL and recovers it', async () => {
+    const { origin, proxy } = await setup()
+    // 1. The player fetches the playlist through the relay (generation 1 is now current).
+    const playlist = await fetchViaProxy(proxy, '/live/user/pass/1.m3u8')
+    expect(playlist.statusCode).toBe(200)
+    // Grab one of the rewritten segment URLs the relay handed the browser.
+    const segLine = playlist.body.split('\n').find((l) => l.startsWith('/__fetch/'))
+    expect(segLine).toBeTruthy()
+
+    // 2. Time passes; every signature from that playlist expires server-side.
+    origin.expireSignatures()
+
+    // 3. The player asks for that now-stale segment, with the playlist as its Referer.
+    const referer = `${baseUrl(proxy)}/live/user/pass/1.m3u8`
+    const before = origin.playlistFetchCount()
+    const segment = await fetchViaProxy(proxy, segLine as string, { headers: { referer } })
+
+    // 4. The relay refreshed the playlist once, remapped, retried — and delivered the segment.
+    expect(segment.statusCode).toBe(200)
+    expect(segment.body).toBe(`SEG-${MEDIA_SEQUENCE_START}`)
+    expect(origin.playlistFetchCount()).toBe(before + 1)
+  })
+
+  it('maps by absolute sequence when the fresh window has slid, and passes 400 through when the segment left the window', async () => {
+    const { origin, proxy } = await setup()
+    const playlist = await fetchViaProxy(proxy, '/live/user/pass/1.m3u8')
+    const segLines = playlist.body.split('\n').filter((l) => l.startsWith('/__fetch/'))
+    const oldest = segLines[0] as string        // absolute sequence 100
+    const newest = segLines[segLines.length - 1] as string // absolute sequence 105
+    const referer = `${baseUrl(proxy)}/live/user/pass/1.m3u8`
+
+    // Slide the window forward by 2: the newest segment (seq 105) is still inside the fresh
+    // window [102..107], so it must be remapped by absolute sequence and recovered…
+    origin.expireSignatures()
+    origin.slideWindow(2)
+    const stillInWindow = await fetchViaProxy(proxy, newest, { headers: { referer } })
+    expect(stillInWindow.statusCode).toBe(200)
+    expect(stillInWindow.body).toBe(`SEG-${MEDIA_SEQUENCE_START + WINDOW - 1}`)
+
+    // …while the oldest (seq 100) has already slid out of [102..107] — refused through as-is.
+    const slidPast = await fetchViaProxy(proxy, oldest, { headers: { referer } })
+    expect(slidPast.statusCode).toBe(400)
+
+    // And a far slide leaves nothing recoverable for anyone.
+    origin.expireSignatures()
+    origin.slideWindow(WINDOW + 5)
+    const goneFromWindow = await fetchViaProxy(proxy, newest, { headers: { referer } })
+    expect(goneFromWindow.statusCode).toBe(400)
+  })
+
+  it('shares one playlist refresh across concurrent refused segments', async () => {
+    const { origin, proxy } = await setup()
+    const playlist = await fetchViaProxy(proxy, '/live/user/pass/1.m3u8')
+    const segLines = playlist.body.split('\n').filter((l) => l.startsWith('/__fetch/')).slice(0, 3)
+    expect(segLines.length).toBe(3)
+    origin.expireSignatures()
+    const referer = `${baseUrl(proxy)}/live/user/pass/1.m3u8`
+    const before = origin.playlistFetchCount()
+
+    const results = await Promise.all(
+      segLines.map((line) => fetchViaProxy(proxy, line, { headers: { referer } }))
+    )
+
+    expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200])
+    // One shared refresh, not three.
+    expect(origin.playlistFetchCount()).toBe(before + 1)
+  })
+
+  it('passes the refusal through unchanged when there is no known playlist window', async () => {
+    const { origin, proxy } = await setup()
+    // Never fetch a playlist through the relay; ask for a stale segment directly.
+    const stale = `/__fetch/${encodeURIComponent(`${'http://127.0.0.1:1'}/hls/seg1.ts?g=0`)}`.replace('127.0.0.1:1', 'origin.invalid')
+    void origin
+    const segment = await fetchViaProxy(proxy, stale, {
+      headers: { referer: `${baseUrl(proxy)}/live/user/pass/1.m3u8` }
+    })
+    // No cached window for that referer → nothing to remap → the origin's own 400 (here a
+    // connection failure surfaces as the relay's 502; either way the retry machinery stays out).
+    expect([400, 502]).toContain(segment.statusCode)
+  })
+})

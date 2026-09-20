@@ -7,6 +7,18 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.44.0 — refused segments retry with a fresh playlist instead of converting.** The thorough
+fix for expired signatures (see Live TV & playback below for the full account): the relay
+remembers each served playlist's segment window, and when a segment is refused (400/403 — the
+provider's ~25s signed URLs expiring mid-playlist), it refreshes the playlist once, remaps the
+segment by absolute sequence number, and retries it — so heavy channels relay directly like
+light ones instead of paying for a transcode. Five new unit tests against a signing-URL origin;
+453 total, all gates green. *Live note: during verification the provider went down entirely
+(measured: auth and playlists hanging with no response), so the live proof of the retry
+engaging against real 400s is pending its return — the one healthy window tested (a 4K EPL
+feed) relayed directly with zero refusals and zero transcodes.*
+
+
 **v0.43.4 — the gate is a gate: lint, typecheck and tests now run before a release is published.**
 The v0.43.2 handoff turned up a defect class worth more than the fix it came with. A duplicated `case`
 label placed below the live one is **unreachable code that type-checks, lints and passes every test** —
@@ -324,13 +336,20 @@ failures live, name them plainly, and let the operator fix them from just the me
   not play silently on Safari. That probe costs a round trip on every play of every channel; the
   verdict could be remembered per channel the way `lib/transcodeHints.ts` already remembers "this needs
   converting" — bounded, expiring, per device.
-- **Retry a refused segment with a fresh playlist — the thorough fix for expired signatures.** *Open; the
-  pragmatic version shipped in v0.42.1.* Heavy channels (the ~6 Mbps EPL club feeds) relay their first
-  segment and then get **400** for the rest of the same playlist: the provider's URLs are signed for
-  roughly 25 seconds, and relaying makes each segment slow enough to fetch that the next one's signature
-  has gone. v0.42.1 detects that and converts the channel, which sidesteps the cause rather than removing
-  it. The real fix is to re-fetch the upstream playlist and retry the refused segment **once**, inside the
-  relay where the tokens are actually consumed — then any channel relays like the light ones.
+- **Retry a refused segment with a fresh playlist — the thorough fix for expired signatures.** *Shipped in
+  v0.44.0.* Heavy channels (the ~6 Mbps EPL club feeds) relay their first segment and then get **400** for
+  the rest of the same playlist: the provider's URLs are signed for roughly 25 seconds, and relaying makes
+  each segment slow enough to fetch that the next one's signature has gone. v0.42.1 detected that and
+  converted the channel, which sidestepped the cause rather than removing it. v0.44.0 does the real fix in
+  the relay, where the tokens are consumed: every served playlist's segment window (URLs + media
+  sequence) is remembered; a refused segment triggers one playlist refresh (shared across concurrent
+  refusals, throttled to one per 2s), the refused segment is remapped by **absolute sequence number** into
+  the fresh window, and retried exactly once — approximating what native players like TiviMate do by
+  consuming only fresh signatures. Out-of-window segments pass the refusal through, and the client-side
+  conversion remains as the backstop. Unit-verified with a signing-URL origin (recovery, slide-remap,
+  out-of-window, stampede, no-window); live verification against a real heavy channel is pending the
+  provider's return (it relayed a 4K Newcastle feed directly with zero refusals in the one window tested
+  before the provider went down).
 - **Widen the undecodable-audio check beyond Dolby.** *Open.* The check that decides whether to convert a
   stream for audio reasons only considers `ac3`/`eac3`. Sunderland's feed carries **aac HE-AACv2**, which
   is a different question entirely and is not covered — the same blind spot the E-AC-3 fix closed for

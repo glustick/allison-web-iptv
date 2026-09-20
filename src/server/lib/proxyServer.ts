@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { URL } from 'url'
+import { Writable } from 'stream'
 
 /**
  * The subset of Electron's net.ClientRequest this module actually uses — kept as a local
@@ -138,6 +139,178 @@ export interface ProxyServerDeps {
 export function createProxyServer(deps: ProxyServerDeps): Server {
   const upstreamTimeoutMs = deps.upstreamTimeoutMs ?? 45000
 
+  // --- Refused-segment retry with a fresh playlist (the signature-expiry fix) ----------------
+  //
+  // Heavy channels (the ~6 Mbps EPL club feeds) relay their first segment fine and then get
+  // 400 for the rest of the same playlist: the provider signs each playlist's segment URLs for
+  // roughly 25 seconds, and relaying makes each segment slow enough to fetch that the next
+  // one's signature has already expired. v0.42.1+ detects that client-side and converts the
+  // channel through the transcoder, which works but pays for ffmpeg, the NAS CPU and a
+  // re-encode for what is really a *token refresh* problem. The thorough fix lives here,
+  // where the tokens are actually consumed: when a segment request is refused, re-fetch the
+  // channel's playlist (fresh signatures), map the refused segment to the same absolute
+  // sequence number in the fresh window, and retry exactly once. A channel that only trips
+  // this occasionally then relays like a light one; the client-side conversion remains as the
+  // backstop for channels that trip it on every segment.
+  interface PlaylistWindow {
+    /** Absolute upstream segment URLs, in playlist order. */
+    segments: string[]
+    /** #EXT-X-MEDIA-SEQUENCE — makes indexes absolute across window slides. */
+    mediaSequence: number
+    /** The upstream URL the window was fetched from — what a refresh re-fetches. */
+    upstreamHref: string
+  }
+
+  const PLAYLIST_WINDOW_LIMIT = 32
+  const PLAYLIST_REFRESH_MIN_INTERVAL_MS = 2000
+  /** Keyed by the app-side URL the *browser* fetched the playlist at (matches the segment request's Referer). */
+  const playlistWindows = new Map<string, PlaylistWindow>()
+  const playlistRefreshInFlight = new Map<string, Promise<PlaylistWindow | null>>()
+  const playlistLastRefreshAt = new Map<string, number>()
+
+  /** /__fetch/ keys round-trip through percent-encoding differently in Referer vs req.url — normalize both the same way. */
+  function normalizePlaylistKey(key: string): string {
+    if (key.startsWith('/__fetch/')) {
+      try {
+        return '/__fetch/' + decodeURIComponent(key.slice('/__fetch/'.length))
+      } catch {
+        return key
+      }
+    }
+    return key
+  }
+
+  function parsePlaylistWindow(body: string, playlistUrl: URL): { segments: string[]; mediaSequence: number } | null {
+    let mediaSequence = -1
+    const segments: string[] = []
+    for (const raw of body.split('\n')) {
+      const line = raw.trim()
+      if (!line) continue
+      if (line.startsWith('#')) {
+        const match = line.match(/^#EXT-X-MEDIA-SEQUENCE:\s*(\d+)/)
+        if (match) mediaSequence = Number(match[1])
+        continue
+      }
+      try {
+        segments.push(new URL(line, playlistUrl).href)
+      } catch {
+        // A malformed URI line — the browser would fail on it too; leave it out of the window.
+      }
+    }
+    // Master/variant playlists (no media sequence, no inline segments) aren't segment windows.
+    if (mediaSequence < 0 || segments.length === 0) return null
+    return { segments, mediaSequence }
+  }
+
+  function rememberPlaylistWindow(appSideKey: string, window: PlaylistWindow): void {
+    const key = normalizePlaylistKey(appSideKey)
+    if (!key) return
+    playlistWindows.delete(key)
+    playlistWindows.set(key, window)
+    if (playlistWindows.size > PLAYLIST_WINDOW_LIMIT) {
+      const oldest = playlistWindows.keys().next().value
+      if (oldest !== undefined) playlistWindows.delete(oldest)
+    }
+  }
+
+  /** Collects a text body through the shared upstream machinery (redirects + stall watchdog included). */
+  function fetchTextUpstream(url: string, timeoutMs: number): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let upstreamReq: UpstreamClientRequest
+      try {
+        upstreamReq = deps.createUpstreamRequest({ method: 'GET', url })
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)))
+        return
+      }
+      const timer = setTimeout(() => {
+        upstreamReq.abort()
+        reject(new Error(`Playlist refresh timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      upstreamReq.on('redirect', () => upstreamReq.followRedirect())
+      upstreamReq.on('error', (err) => {
+        clearTimeout(timer)
+        reject(err)
+      })
+      upstreamReq.on('response', (upstreamRes) => {
+        if (upstreamRes.statusCode >= 400) {
+          clearTimeout(timer)
+          upstreamReq.abort()
+          reject(new Error(`Playlist refresh got HTTP ${upstreamRes.statusCode}`))
+          return
+        }
+        const chunks: Buffer[] = []
+        const sink = new Writable({
+          write(chunk: Buffer, _encoding, callback): void {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+            callback()
+          }
+        })
+        let settled = false
+        sink.on('finish', () => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          resolve(Buffer.concat(chunks).toString('utf8'))
+        })
+        sink.on('close', () => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          reject(new Error('Playlist refresh connection closed before completing'))
+        })
+        sink.on('error', (err) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          reject(err)
+        })
+        upstreamRes.pipe(sink as unknown as ServerResponse)
+      })
+      // See nodeUpstreamRequest.test.ts — the "no request body" signal lives outside this type.
+      ;(upstreamReq as unknown as { end: () => void }).end()
+    })
+  }
+
+  /**
+   * Refreshes a playlist at most once per interval (concurrent refused segments share one
+   * fetch — a burst of 400s must not become a burst of playlist downloads), then maps the
+   * refused segment to the fresh window by absolute sequence number. Returns the fresh
+   * absolute URL to retry, or null when a retry is not possible (unknown segment, window
+   * already slid past it, or the refresh itself failed).
+   */
+  async function freshSegmentUrlFor(playlistKey: string, requestedUrl: string): Promise<string | null> {
+    const key = normalizePlaylistKey(playlistKey)
+    const cached = playlistWindows.get(key)
+    if (!cached) return null
+    const index = cached.segments.indexOf(requestedUrl)
+    if (index === -1) return null
+    const absoluteSequence = cached.mediaSequence + index
+
+    const lastRefresh = playlistLastRefreshAt.get(key) ?? 0
+    let inFlight = playlistRefreshInFlight.get(key)
+    if (!inFlight && Date.now() - lastRefresh >= PLAYLIST_REFRESH_MIN_INTERVAL_MS) {
+      playlistLastRefreshAt.set(key, Date.now())
+      inFlight = fetchTextUpstream(cached.upstreamHref, 10000)
+        .then((body) => {
+          const parsed = parsePlaylistWindow(body, new URL(cached.upstreamHref))
+          if (!parsed) return null
+          const fresh: PlaylistWindow = { ...parsed, upstreamHref: cached.upstreamHref }
+          rememberPlaylistWindow(key, fresh)
+          return fresh
+        })
+        .catch(() => null)
+      playlistRefreshInFlight.set(key, inFlight)
+      void inFlight.finally(() => playlistRefreshInFlight.delete(key))
+    }
+
+    const fresh = (await inFlight) ?? playlistWindows.get(key)
+    if (!fresh) return null
+    const freshIndex = absoluteSequence - fresh.mediaSequence
+    if (freshIndex < 0 || freshIndex >= fresh.segments.length) return null
+    return fresh.segments[freshIndex]
+  }
+
   function handleProxyRequest(req: IncomingMessage, res: ServerResponse): void {
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
@@ -226,11 +399,15 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
     // attempts at 45s each (90s worst case) still leaves headroom inside startTranscode's
     // overall 240s deadline.
     let retried = false
+    // The refused-segment retry (see freshSegmentUrlFor) is a separate one-shot from the
+    // timeout/error retry above, so a segment that needed a fresh-signature retry keeps its
+    // full error-retry budget for genuine connection failures.
+    let retriedWithFreshSegment = false
 
-    function attemptUpstream(): void {
+    function attemptUpstream(urlOverride?: URL): void {
       let upstreamReq: UpstreamClientRequest
       try {
-        upstreamReq = deps.createUpstreamRequest({ method: req.method, url: target.href })
+        upstreamReq = deps.createUpstreamRequest({ method: req.method, url: (urlOverride ?? target).href })
       } catch (err) {
         res.writeHead(502)
         res.end(`Could not reach upstream server: ${err instanceof Error ? err.message : String(err)}`)
@@ -341,6 +518,52 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
         gotResponse = true
         settled = true
         clearTimeout(timeout)
+        // Keyed strictly on the .m3u8 extension (the same signal isM3u8/getSourceUrl already
+        // use throughout this app, e.g. Player.tsx/useHlsAttach.ts's sourceUrl.endsWith
+        // ('.m3u8') checks) rather than the response's content-type — a real server can serve
+        // an outer .m3u with the exact same generic audio/x-mpegurl type a media playlist
+        // uses. Computed up here because the refused-segment branch below needs it.
+        const isM3u8Fetch = target.pathname.toLowerCase().endsWith('.m3u8')
+
+        // A refused segment (400/403) is, on providers with ~25s signed URLs, a signature that
+        // expired mid-playlist — see the refused-segment retry block near the top of this
+        // server. Try one refresh-retry before letting the refusal through: the player-side
+        // handling (convert to transcode, v0.42.1+) remains as the backstop for channels this
+        // cannot save. Keyed off the Referer hls.js sends for same-origin segment fetches
+        // (the app-side URL the playlist was served at); without a known playlist window
+        // there is nothing to remap against, so the refusal just passes through as before.
+        if ((upstreamRes.statusCode === 400 || upstreamRes.statusCode === 403) && !isM3u8Fetch && !retriedWithFreshSegment) {
+          const referer = typeof req.headers.referer === 'string' ? req.headers.referer : ''
+          let playlistKey: string | null = null
+          try {
+            const refererUrl = new URL(referer)
+            const candidate = refererUrl.pathname + refererUrl.search
+            if (candidate.toLowerCase().endsWith('.m3u8')) playlistKey = normalizePlaylistKey(candidate)
+          } catch {
+            playlistKey = null
+          }
+          if (playlistKey && playlistWindows.has(playlistKey)) {
+            upstreamRes.on('data', () => {}) // Drain the refusal body — it is of no use to anyone.
+            retriedWithFreshSegment = true
+            const refusedStatus = upstreamRes.statusCode
+            const refusedThrough = (): void => {
+              if (!res.headersSent) res.writeHead(refusedStatus)
+              res.end()
+            }
+            freshSegmentUrlFor(playlistKey, target.href)
+              .then((freshUrl) => {
+                if (!freshUrl) {
+                  refusedThrough()
+                  return
+                }
+                console.warn('[proxy] segment refused (signature expired?); retrying once with a fresh playlist URL')
+                attemptUpstream(new URL(freshUrl))
+              })
+              .catch(refusedThrough)
+            return
+          }
+        }
+
         const headers = { ...upstreamRes.headers }
         headers['access-control-allow-origin'] = '*'
         headers['access-control-allow-headers'] = '*'
@@ -388,7 +611,6 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
   // host the video bandwidth, which is the honest price of not leaking credentials to the browser.
   // The outer .m3u provider playlist is still deliberately untouched — see the note above about
   // double-encoding it into something m3uClient's parser could no longer read.
-  const isM3u8Fetch = target.pathname.toLowerCase().endsWith('.m3u8')
         if (isM3u8Fetch) {
           const chunks: Buffer[] = []
           // Sniff the first chunk before deciding to buffer, because buffering a *stream* is fatal.
@@ -412,7 +634,15 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
     }
     upstreamRes.on('data', onData)
           upstreamRes.on('end', () => {
-            res.end(rewriteM3u8ForProxy(Buffer.concat(chunks).toString('utf8'), target))
+            const body = Buffer.concat(chunks).toString('utf8')
+            // Remember this playlist's segment window (see the refused-segment retry): the
+            // raw, pre-rewrite body is what holds the real upstream URLs + media sequence a
+            // later refused segment needs to be remapped against.
+            const window = parsePlaylistWindow(body, target)
+            if (window) {
+              rememberPlaylistWindow(req.url ?? '', { ...window, upstreamHref: target.href })
+            }
+            res.end(rewriteM3u8ForProxy(body, target))
           })
         } else {
           upstreamRes.pipe(res)

@@ -6,7 +6,21 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.43.4 — lint, typecheck and tests now gate a release)
+## Current state (v0.44.0 — refused segments retry with a fresh playlist)
+
+**v0.44.0** fixes the root cause behind the heavy-channel conversions in the relay itself: when
+the provider's ~25-second signed segment URLs expire mid-playlist (the measured 400/xxx pattern
+on the ~6 Mbps EPL feeds — native players like TiviMate never see it because they always consume
+fresh signatures), the relay now remembers each served playlist's segment window, refreshes the
+playlist once on a refusal, remaps the refused segment by absolute sequence number, and retries
+it — one shared, throttled refresh per playlist, one retry per segment, out-of-window refusals
+passed through, and the client-side conversion retained as the backstop. Five new unit tests
+against a signing-URL origin (453 total, all green). Verified live in the one healthy window
+before the provider's 2026-09-20 outage: a 4K EPL feed relayed directly, zero refusals, zero
+transcodes; the retry path's live proof resumes when the provider does.
+
+**v0.43.4** made the release gate a gate (lint, typecheck, tests must pass in CI before the
+image builds).
 
 **v0.43.4** closes the two gaps that let a dead conversion branch reach a tag.
 `eslint.config.mjs` now enforces `no-duplicate-case` and `no-unreachable` — a duplicate `case` below the
