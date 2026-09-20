@@ -6,7 +6,20 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.44.0 — refused segments retry with a fresh playlist)
+## Current state (v0.44.1 — fMP4 transcode segments; HEVC channels playable)
+
+**v0.44.1** makes the Sky Sports/EPL family (HEVC video + E-AC-3 audio — unplayable natively
+in any browser, native in TiviMate-class players) actually work through the transcode
+fallback: output moved from MPEG-TS to fMP4 segments (a stream-copied HEVC stream is
+undecodable by Chromium's MSE in TS, decodable in fMP4 — measured), the transcode file
+server learned to serve the init segment the playlist references (its absence 404'd the
+player's very first fetch and churned every session), and the audio keeps its source channel
+layout (5.1 stays 5.1 AAC 384k) instead of folding to stereo. One caveat measured live:
+some Chromium builds claim HEVC support and fail the actual decode — on browsers with real
+HEVC support (Safari; Chrome with working hardware decode) these channels now play; a
+video re-encode tier for the rest is the next roadmap item.
+
+**v0.44.0** fixes the root cause behind the heavy-channel conversions in the relay itself: when
 
 **v0.44.0** fixes the root cause behind the heavy-channel conversions in the relay itself: when
 the provider's ~25-second signed segment URLs expire mid-playlist (the measured 400/xxx pattern

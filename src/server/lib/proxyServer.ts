@@ -161,10 +161,19 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
     upstreamHref: string
   }
 
+  // One-deep window history per playlist: a burst of refusals can straddle a refresh (the
+  // first refusal's refresh completes before its neighbors are even handled), and those
+  // later refusals carry URLs from the window *before* the refresh — without the previous
+  // window kept for matching, they would look unknown and pass through un-retried.
+  interface PlaylistWindowEntry {
+    current: PlaylistWindow
+    previous: PlaylistWindow | null
+  }
+
   const PLAYLIST_WINDOW_LIMIT = 32
   const PLAYLIST_REFRESH_MIN_INTERVAL_MS = 2000
   /** Keyed by the app-side URL the *browser* fetched the playlist at (matches the segment request's Referer). */
-  const playlistWindows = new Map<string, PlaylistWindow>()
+  const playlistWindows = new Map<string, PlaylistWindowEntry>()
   const playlistRefreshInFlight = new Map<string, Promise<PlaylistWindow | null>>()
   const playlistLastRefreshAt = new Map<string, number>()
 
@@ -202,15 +211,31 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
     return { segments, mediaSequence }
   }
 
-  function rememberPlaylistWindow(appSideKey: string, window: PlaylistWindow): void {
+  function rememberPlaylistWindow(appSideKey: string, window: PlaylistWindow, rotatePrevious = true): void {
     const key = normalizePlaylistKey(appSideKey)
     if (!key) return
+    const existing = playlistWindows.get(key)
+    const entry: PlaylistWindowEntry = {
+      current: window,
+      previous: rotatePrevious ? (existing?.current ?? null) : (existing?.previous ?? null)
+    }
     playlistWindows.delete(key)
-    playlistWindows.set(key, window)
+    playlistWindows.set(key, entry)
     if (playlistWindows.size > PLAYLIST_WINDOW_LIMIT) {
       const oldest = playlistWindows.keys().next().value
       if (oldest !== undefined) playlistWindows.delete(oldest)
     }
+  }
+
+  /** Finds a requested segment URL in the current or previous window, with its absolute sequence. */
+  function locateSegment(entry: PlaylistWindowEntry, requestedUrl: string): { window: PlaylistWindow; index: number } | null {
+    const currentHit = entry.current.segments.indexOf(requestedUrl)
+    if (currentHit !== -1) return { window: entry.current, index: currentHit }
+    if (entry.previous) {
+      const previousHit = entry.previous.segments.indexOf(requestedUrl)
+      if (previousHit !== -1) return { window: entry.previous, index: previousHit }
+    }
+    return null
   }
 
   /** Collects a text body through the shared upstream machinery (redirects + stall watchdog included). */
@@ -281,21 +306,22 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
    */
   async function freshSegmentUrlFor(playlistKey: string, requestedUrl: string): Promise<string | null> {
     const key = normalizePlaylistKey(playlistKey)
-    const cached = playlistWindows.get(key)
-    if (!cached) return null
-    const index = cached.segments.indexOf(requestedUrl)
-    if (index === -1) return null
-    const absoluteSequence = cached.mediaSequence + index
+    const entry = playlistWindows.get(key)
+    if (!entry) return null
+    const located = locateSegment(entry, requestedUrl)
+    if (!located) return null
+    const { window: known, index } = located
+    const absoluteSequence = known.mediaSequence + index
 
     const lastRefresh = playlistLastRefreshAt.get(key) ?? 0
     let inFlight = playlistRefreshInFlight.get(key)
     if (!inFlight && Date.now() - lastRefresh >= PLAYLIST_REFRESH_MIN_INTERVAL_MS) {
       playlistLastRefreshAt.set(key, Date.now())
-      inFlight = fetchTextUpstream(cached.upstreamHref, 10000)
+      inFlight = fetchTextUpstream(entry.current.upstreamHref, 10000)
         .then((body) => {
-          const parsed = parsePlaylistWindow(body, new URL(cached.upstreamHref))
+          const parsed = parsePlaylistWindow(body, new URL(entry.current.upstreamHref))
           if (!parsed) return null
-          const fresh: PlaylistWindow = { ...parsed, upstreamHref: cached.upstreamHref }
+          const fresh: PlaylistWindow = { ...parsed, upstreamHref: entry.current.upstreamHref }
           rememberPlaylistWindow(key, fresh)
           return fresh
         })
@@ -304,7 +330,8 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
       void inFlight.finally(() => playlistRefreshInFlight.delete(key))
     }
 
-    const fresh = (await inFlight) ?? playlistWindows.get(key)
+    const refreshed = (await inFlight) ?? null
+    const fresh = refreshed ?? playlistWindows.get(key)?.current ?? null
     if (!fresh) return null
     const freshIndex = absoluteSequence - fresh.mediaSequence
     if (freshIndex < 0 || freshIndex >= fresh.segments.length) return null

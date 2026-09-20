@@ -7,6 +7,27 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.44.1 — fMP4 transcode segments: HEVC channels can finally play through the fallback.**
+Found live on the Sky Sports channels (UHD and FHD alike — the whole family is HEVC video +
+E-AC-3 audio, which is exactly why TiviMate plays them natively while browsers cannot): the
+transcode's output was MPEG-TS, and a stream-copied HEVC stream is undecodable by Chromium's
+MSE in a TS container while being decodable in fMP4 (measured in the player browser:
+isTypeSupport hvc1-in-mp2t → false, hvc1-in-mp4 → true). Even after switching ffmpeg to
+`-hls_segment_type fmp4`, the sessions still churned — the file server's MIME allowlist
+(`TRANSCODE_MIME_TYPES`) 404'd the `init.mp4` the playlist's EXT-X-MAP references, so the very
+first player fetch died and every subsequent fragLoadError was the session-replacement cycle
+chasing that 404. Both fixed, plus: audio now keeps its source channel layout (a 5.1 feed
+stays 5.1 AAC at 384k instead of being folded to stereo — browsers downmix themselves), and
+the relay's refused-segment window cache keeps a one-deep history so a burst of refusals
+straddling a refresh still maps correctly. Verified live: sessions produce 4K fMP4 at ~1x
+realtime and survive (no churn, single start), segments fetch 200 through the app. **The
+remaining wall is per-browser: the test machine's embedded Chromium claims
+isTypeSupported(hvc1) → true but fails the actual decode (mediaSourceRequiresReset on
+append) — on browsers with genuine HEVC support (Safari; Chrome with working hardware
+decode) these channels now play via the audio-only path. See the new open item below for
+the HEVC-incapable-browser tier.**
+
+
 **v0.44.0 — refused segments retry with a fresh playlist instead of converting.** The thorough
 fix for expired signatures (see Live TV & playback below for the full account): the relay
 remembers each served playlist's segment window, and when a segment is refused (400/403 — the
@@ -350,6 +371,16 @@ failures live, name them plainly, and let the operator fix them from just the me
   out-of-window, stampede, no-window); live verification against a real heavy channel is pending the
   provider's return (it relayed a 4K Newcastle feed directly with zero refusals in the one window tested
   before the provider went down).
+- **A video re-encode tier for HEVC-incapable browsers.** *Open; diagnosed 2026-09-20.* The
+  Sky/EPL channels are HEVC (UHD: Main 10 HDR, FHD: Main) and the transcode stream-copies the
+  video — right everywhere the browser can genuinely decode HEVC (Safari: yes; Chrome on
+  hardware with working HEVC: usually), but some Chromium builds claim isTypeSupported(hvc1)
+  → true and then fail the actual decode (mediaSourceRequiresReset on append; measured on this
+  project's own test machine). For those, nothing short of re-encoding the video to H.264
+  helps. Shape: a `videoTranscode: true` mode on /api/transcode/start (libx264, ~25fps cap,
+  matching the shape every plain channel already plays), and the player's media-error ladder
+  escalates to it when an fMP4 session exhausts recoveries with mediaSourceRequiresReset —
+  the same escalation the v0.43.2 merge built for plain streams, applied to session output.
 - **Widen the undecodable-audio check beyond Dolby.** *Open.* The check that decides whether to convert a
   stream for audio reasons only considers `ac3`/`eac3`. Sunderland's feed carries **aac HE-AACv2**, which
   is a different question entirely and is not covered — the same blind spot the E-AC-3 fix closed for

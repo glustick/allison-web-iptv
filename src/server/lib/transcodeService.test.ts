@@ -512,7 +512,7 @@ describe('real ffmpeg integration', () => {
 
       expect(readFileSync(result.playlistPath, 'utf8')).toContain('#EXTM3U')
       const dir = join(result.playlistPath, '..')
-      const segment = readFileSync(join(dir, 'seg_00000.ts'))
+      const segment = readFileSync(join(dir, 'seg_00000.m4s'))
       expect(segment.byteLength).toBeGreaterThan(0)
 
       await service.stopTranscode('real-1')
@@ -720,6 +720,24 @@ describe('real ffmpeg integration', () => {
     const fileInfo = existsSync(segmentPath)
       ? `exists, ${statSync(segmentPath).size} bytes`
       : 'does NOT exist at spawn time'
+    // fMP4 segments are not standalone: their init segment (moov) is referenced from the
+    // playlist via EXT-X-MAP, so decoding a bare .m4s fails with "could not find
+    // corresponding track id". Assemble init + segment into one file when the playlist
+    // names one; a TS-era bare segment still works as before.
+    let inputPath = segmentPath
+    const playlistSibling = join(dirname(segmentPath), 'playlist.m3u8')
+    if (existsSync(playlistSibling)) {
+      const mapLine = readFileSync(playlistSibling, 'utf8').split('\n').find((l) => l.startsWith('#EXT-X-MAP:'))
+      const mapUri = mapLine?.match(/URI="([^"]+)"/)?.[1]
+      if (mapUri) {
+        const initPath = join(dirname(segmentPath), mapUri)
+        if (existsSync(initPath)) {
+          const combined = `${segmentPath}.combined.mp4`
+          writeFileSync(combined, Buffer.concat([readFileSync(initPath), readFileSync(segmentPath)]))
+          inputPath = combined
+        }
+      }
+    }
     await new Promise<void>((resolve, reject) => {
       let stderr = ''
       const proc = spawn(
@@ -732,7 +750,7 @@ describe('real ffmpeg integration', () => {
         // in case the crash is actually happening during automatic stream-parameter probing
         // (which runs for every stream in the container, before -map's stream selection is even
         // applied), not during the later, explicitly-audio-only decode itself.
-        ['-y', '-nostdin', '-probesize', '32k', '-analyzeduration', '0', '-i', segmentPath, '-map', '0:a:0', '-vn', '-f', 's16le', pcmPath],
+        ['-y', '-nostdin', '-probesize', '32k', '-analyzeduration', '0', '-i', inputPath, '-map', '0:a:0', '-vn', '-f', 's16le', pcmPath],
         { stdio: ['ignore', 'ignore', 'pipe'] }
       )
       proc.stderr.on('data', (chunk: Buffer) => {
@@ -756,6 +774,7 @@ describe('real ffmpeg integration', () => {
     })
     const pcm = readFileSync(pcmPath)
     rmSync(pcmPath, { force: true })
+    if (inputPath !== segmentPath) rmSync(inputPath, { force: true })
     if (pcm.length < 2) throw new Error(`ffmpeg produced an empty PCM file for ${segmentPath}`)
     let sumOfSquares = 0
     const sampleCount = Math.floor(pcm.length / 2)
@@ -875,8 +894,8 @@ describe('real ffmpeg integration', () => {
       // Default audioStreamIndex (0) — should carry through the silent track.
       const defaultResult = await service.startTranscode(originUrl, false, 'real-audio-default')
       const defaultDir = join(defaultResult.playlistPath, '..')
-      const defaultSegment = readdirSync(defaultDir).find((f) => f.endsWith('.ts'))
-      if (!defaultSegment) throw new Error('no .ts segment was produced')
+      const defaultSegment = readdirSync(defaultDir).find((f) => f.endsWith('.m4s'))
+      if (!defaultSegment) throw new Error('no fMP4 segment was produced')
       const defaultSegmentPath = join(defaultDir, defaultSegment)
       await waitForStableFileSize(defaultSegmentPath)
       const defaultRms = await measureRmsAmplitude(defaultSegmentPath)
@@ -885,7 +904,7 @@ describe('real ffmpeg integration', () => {
       // audioStreamIndex: 1 — the second audio stream — should carry through the audible tone.
       const chosenResult = await service.startTranscode(originUrl, false, 'real-audio-1', 0, 1)
       const chosenDir = join(chosenResult.playlistPath, '..')
-      const chosenSegment = readdirSync(chosenDir).find((f) => f.endsWith('.ts'))
+      const chosenSegment = readdirSync(chosenDir).find((f) => f.endsWith('.m4s'))
       if (!chosenSegment) throw new Error('no .ts segment was produced')
       const chosenSegmentPath = join(chosenDir, chosenSegment)
       await waitForStableFileSize(chosenSegmentPath)

@@ -299,6 +299,13 @@ export interface TranscodeService {
 const TRANSCODE_MIME_TYPES: Record<string, string> = {
   '.m3u8': 'application/vnd.apple.mpegurl',
   '.ts': 'video/mp2t',
+  // fMP4 HLS output (v0.44.1): the init segment the playlist references via EXT-X-MAP and
+  // the .m4s media segments it lists. Missing these 404s the init segment — found live when
+  // the UHD channels' sessions all produced perfect output the player then refused to load,
+  // because the very first fetch (init.mp4) died here and every subsequent fragLoadError
+  // was just the session-replacement cycle chasing that first 404.
+  '.mp4': 'video/mp4',
+  '.m4s': 'video/iso.segment',
   // ffmpeg's webvtt HLS muxer writes per-segment subtitle cue files (playlistN.vtt) referenced
   // from playlist_vtt.m3u8 — missing this entry 404s every one of them, which a live test
   // against a real subtitle-carrying title showed cascades into hls.js abandoning the whole
@@ -480,12 +487,23 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       '-c:a',
       'aac',
       '-b:a',
-      '192k',
-      '-ac',
-      '2',
+      '384k',
+      // No `-ac 2` on purpose: the source's channel layout survives (a 5.1 E-AC-3 feed stays
+      // 5.1 AAC — browsers decode it and downmix themselves), instead of permanently folding
+      // the living room's surround sound to stereo at the only point it could be kept.
       ...(isVod && subtitleStreamIndex >= 0 ? ['-c:s', 'webvtt'] : []),
       '-f',
       'hls',
+      // fMP4 segments, not MPEG-TS. The video is stream-copied, and a copied HEVC (with the
+      // 10-bit HDR the UHD feeds carry) is undecodable by Chromium's MSE in a TS container
+      // while being decodable in fMP4 — measured live in the player browser
+      // (isTypeSupported: hvc1 in mp2t → false, hvc1 in mp4 → true), and the exact reason
+      // every UHD channel cycled transcode sessions without ever attaching: ffmpeg produced
+      // fine 4K output the browser then refused to demux. H.264-in-fMP4 is universally
+      // supported, so non-HEVC channels keep working unchanged. (ffmpeg 5.1 on bookworm has
+      // -hls_segment_type since 4.x; this app's own tests run the real binary.)
+      '-hls_segment_type',
+      'fmp4',
       '-hls_time',
       '4',
       // Live's list is deliberately a short, ever-deleting window (there's no fixed end to keep
@@ -508,7 +526,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         ? ['-hls_list_size', '0', '-hls_playlist_type', 'event']
         : ['-hls_list_size', '6', '-hls_flags', 'delete_segments+omit_endlist']),
       '-hls_segment_filename',
-      join(dir, 'seg_%05d.ts'),
+      join(dir, 'seg_%05d.m4s'),
       playlistFile
     ])
 
