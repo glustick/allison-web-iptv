@@ -6,7 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.43.3 — a dead transcode session no longer freezes the channel)
+## Current state (v0.43.4 — lint, typecheck and tests now gate a release)
+
+**v0.43.4** closes the two gaps that let a dead conversion branch reach a tag.
+`eslint.config.mjs` now enforces `no-duplicate-case` and `no-unreachable` — a duplicate `case` below the
+live one is unreachable code that type-checks and passes tests (measured, not theorised) — and CI runs
+`lint`, `typecheck` and `test` in a `check` job that the image build depends on. Until now the workflow
+only built and pushed, so a release with failing tests published anyway.
+
+## v0.43.3 — a dead transcode session no longer freezes the channel
 
 **v0.43.3** closes the recovery holes found when the converted club channels still froze in
 real testing: a transcode session whose playlist exhausts its network retries is now replaced

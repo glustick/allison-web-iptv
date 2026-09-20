@@ -1,11 +1,28 @@
 # Roadmap
 
-Recommended enhancements for future development, refreshed **2026-09-19 against v0.42.1**.
+Recommended enhancements for future development, refreshed **2026-09-20 against v0.43.4**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.43.4 — the gate is a gate: lint, typecheck and tests now run before a release is published.**
+The v0.43.2 handoff turned up a defect class worth more than the fix it came with. A duplicated `case`
+label placed below the live one is **unreachable code that type-checks, lints and passes every test** —
+measured, because it happened here. Two gates were missing; both are now closed:
+
+- **`no-duplicate-case` and `no-unreachable` are enforced** in `eslint.config.mjs`. That config is
+  deliberately minimal (two promise rules), which is precisely why a duplicate switch case passed lint —
+  the tool never had an opinion on it. Verified zero-violation across `src/` before enabling, so this adds
+  no cleanup debt.
+- **CI runs `lint`, `typecheck` and `test` in a `check` job, and the image build needs it.** Until now the
+  workflow only built and pushed, so a release with failing tests or a lint error published regardless —
+  the v0.31.0 failure mode, and the reason the duplicate case reached a tag at all. The gate is now the
+  same gate locally and in CI.
+
+The lesson below stands, one class sharper: **a test that does not exercise the path proves nothing about
+it, and an automated gate that is not wired to the build is not a gate.**
 
 **v0.43.3 — a dead transcode session no longer freezes the channel.** Found live the same
 morning, by the user, as "Newcastle and Sunderland both still not working": the v0.43.2
@@ -98,6 +115,11 @@ of follow-up work, in the order it was needed:
 regressions I had introduced** — the guide-URL truncation, and both favourites operations — and each was
 found by the user rather than by me. The row that carried only the resolved id looked correct in every
 test I wrote, because I tested the resolver and not the path from a row to a click or a drag.
+
+A fifth, found during the v0.43.2 handoff, belongs to the same family and is the sharpest of them: a
+conversion branch added *below* an existing `case` in the same switch — unreachable, therefore dead —
+which type-checked, linted and passed all 447 tests. Nothing was wrong with the tests; nothing was
+checking that the new code could run at all. Both gaps are closed in v0.43.4.
 
 ### The stretch before it (v0.34.1 and back)
 
@@ -401,6 +423,11 @@ make that automatic and stop it depending on remembering.
 
 ### 6. Quality & testing
 
+- **A duplicate switch case can no longer pass.** *Shipped in v0.43.4.* `no-duplicate-case` and
+  `no-unreachable` are enforced, and CI runs `lint`, `typecheck` and `test` in a `check` job the image
+  build depends on. The motivating defect: a conversion branch pasted below the live `case` of the same
+  switch — dead code that passed type-checking, linting and the full suite, because lint carried only two
+  rules and CI ran none of them.
 - **Fold the ad-hoc checks into one script.** *Partly done.* The pieces exist and get used:
 `scripts/cdp-drive.mjs` and `scripts/cdp-verify-live.mjs` drive a real Chrome over the DevTools
 Protocol with genuine mouse/keyboard input, `scripts/verify-catchup.mjs` walks one feature end to end

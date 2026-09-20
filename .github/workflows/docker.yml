@@ -12,7 +12,30 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  # The gate. Until 2026-09-20 this workflow only built and pushed, so a release with failing tests,
+  # a type error or a lint error published anyway — which is how a duplicate switch case (unreachable
+  # dead code) reached a tag, and how v0.31.0 shipped with two failing tests. The image build now
+  # depends on it, so none of those can be published at all.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run typecheck
+
+      - run: npm test
+
   build-and-push:
+    needs: check
     runs-on: ubuntu-latest
     permissions:
       contents: read
