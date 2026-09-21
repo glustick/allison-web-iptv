@@ -6,14 +6,39 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.46.2 — the stall ladder is complete: it converts, escalates, and only then gives up)
+## Current state (v0.46.3 — play natively, and never trade picture quality for smoothness)
+
+**v0.46.3 changes direction, because the last three releases were aimed at the wrong thing.** Two
+things were true — no NAS CPU re-encodes 4K in real time, and a heavy channel can stall a relayed
+session — and neither should have been solved by the picture. v0.46.0 let the re-encode tier downscale
+a channel by default, and v0.46.1 let a stutter push a viewer onto that tier. Both traded **picture
+quality for smoothness, unasked**, on a player whose job is to show the stream the provider sent.
+
+- **Live TV now uses the browser's own HLS pipeline wherever it has one** — `prefersNativePlayback`,
+  pure and unit-tested. Safari has had one all along behind the same MIME type HLS has always used,
+  and it is the route a native player like TiviMate takes: the container goes to a decoder that
+  understands it, with hardware decode and no transcoding at all. Live TV was previously driven
+  through hls.js wherever MediaSource existed, which is what forced every HEVC/HDR/Dolby stream
+  through a JavaScript demux and into MSE. Chromium has no native HLS, so nothing changes there; a
+  native failure re-attaches with hls.js once, so the worst case is the old behaviour one retry later.
+- **The re-encode tier no longer caps resolution by default** — opt in with
+  `TRANSCODE_VIDEO_MAX_HEIGHT`. It exists to make a stream the browser cannot decode *playable*, at
+  the quality the provider sent, not to reshape a channel the browser can play.
+- **A stall never escalates to a re-encode.** v0.46.1's escalation is gone: a stalled session is
+  replaced in the shape it already has. The tier remains the media-error ladder's last resort (v0.45.0),
+  where the alternative is no picture at all.
+
+472 tests; typecheck, lint and both builds green. *Not verified live:* the provider has been answering
+every channel with a repeating placeholder (see the measurement note in `ROADMAP.md`), so there is
+nothing real to play yet.
 
 **v0.46.2** closes the last hole in the ladder v0.46.1 opened. A **direct** stream — the provider's own
 feed, relayed — that stalled through every reload it was allowed ended in the terminal error, while
 every other reload path in this app (a refused segment, two `BUFFER_STALLED` errors) converts the
 channel instead. That was the one place a heavy channel could die without the transcoder ever being
-offered. `stallRecoveryShape` now decides the whole rung set — `reload` → `convert` →
-`video-transcode` → `session` → `give-up` — and a direct stream is converted to the **cheap copy
+offered. `stallRecoveryShape` now decides the whole rung set — `reload` → `convert` → `session` /
+`give-up` (the `video-transcode` rung it briefly added was removed again in v0.46.3, above) — and a
+direct stream is converted to the **cheap copy
 tier** once its reloads are spent; nothing there claims the video is undecodable, and a session that
 then goes on to stall escalates a rung by itself. 473 tests; typecheck, lint and both builds green.
 
@@ -34,13 +59,15 @@ session is replaced in place exactly as before. A run that is not on a transcode
 framerate while leaving the resolution alone meant a UHD (3840x2160) channel was re-encoded *at 4K* —
 and no NAS CPU re-encodes 4K in real time, so the session fell behind the live edge and the viewer saw
 a stream that never caught up. That is the shape behind *"the UHD channels don't play well"*, while
-TiviMate plays them because it decodes HEVC in hardware and never re-encodes at all. The tier now
-scales to **1080p by default** — `scale=-2:'min(1080,ih)'`, a *cap* rather than a resize, so a 720p or
-1080p channel passes through untouched and nothing is ever upscaled — which is about a quarter of the
-encoder's work and the shape every plain channel already plays. `TRANSCODE_VIDEO_MAX_HEIGHT` sets it
-(`0` switches the cap off entirely) and `TRANSCODE_VIDEO_MAXRATE_KBPS` adds an optional capped-CRF
+TiviMate plays them because it decodes HEVC in hardware and never re-encodes at all. The tier scaled
+to **1080p by default** — `scale=-2:'min(1080,ih)'`, a *cap* rather than a resize, so a 720p or 1080p
+channel passes through untouched and nothing is ever upscaled — which is about a quarter of the
+encoder's work and the shape every plain channel already plays. **v0.46.3 made that opt-in rather than
+the default** (see the top of this file): downscaling a channel to spare a slow host is the operator's
+decision to make, not something a viewer should discover. `TRANSCODE_VIDEO_MAX_HEIGHT` sets it (unset,
+as it now is by default, keeps the source's own resolution) and `TRANSCODE_VIDEO_MAXRATE_KBPS` adds an optional capped-CRF
 bitrate ceiling for a host whose *network* rather than its CPU is the limit. The copy path still emits
-none of it. Proven three ways: argv-level tests for the default cap, a lower cap with a ceiling, and
+none of it. Proven three ways: argv-level tests for the cap, a lowered cap with a ceiling, and
 the untouched copy path; pure tests for the env parsing (`0`, empty and garbage all mean "no cap"
 rather than a broken encode); and a real-ffmpeg integration test that pushes a taller synthetic source
 through the tier and reads the output's actual dimensions back — the check that catches a malformed
@@ -507,20 +534,23 @@ Stale session directories left by a killed container are swept at startup.
 
 ### The re-encode tier's output shape — `TRANSCODE_VIDEO_MAX_HEIGHT`, `TRANSCODE_VIDEO_MAXRATE_KBPS`
 
-When a channel has to be **re-encoded** — the HEVC tier added in v0.45.0, for a browser that cannot
-decode the source's own video — its output is capped at **1080p by default**. The UHD channels are
-3840x2160, and re-encoding 4K in real time is not something a NAS CPU can do; 1080p is roughly a
-quarter of the work and the shape every plain channel already plays. The cap is a *cap*, not a
-resize: `scale=-2:'min(1080,ih)'` passes a smaller channel through untouched and never upscales.
+The re-encode tier exists for exactly one case: a browser that **cannot decode** the source's own
+video, where the alternative is no picture at all. It is not a way to reshape a channel the browser
+*can* play — since v0.46.3 its output keeps the source's own resolution by default, and a stall never
+reaches it. Both knobs below are for an operator whose **host** genuinely cannot keep up, and both are
+deliberate trades:
 
-- `TRANSCODE_VIDEO_MAX_HEIGHT` — default `1080`. Set a lower number (`720`) to trade picture for CPU
-  headroom on a weak box, or `0` (or an empty value) to switch the cap off and keep the source's own
-  resolution.
+- `TRANSCODE_VIDEO_MAX_HEIGHT` — **off by default**. Set a height to cap the output
+  (`scale=-2:'min(<height>,ih)'`, which never upscales, so a shorter channel passes through
+  untouched). This trades picture for CPU headroom, and 4K re-encodes are genuinely beyond a small
+  NAS — so if a UHD channel stutters, prefer letting the browser play it natively at full quality over
+  capping it here.
 - `TRANSCODE_VIDEO_MAXRATE_KBPS` — off by default. When set, the re-encode becomes capped-CRF
-  (`-maxrate`, with `-bufsize` at twice that), bounding how much each viewer pulls through the host.
+  (`-maxrate`, with `-bufsize` at twice that), bounding what each viewer pulls through the host.
 
-Both knobs apply to the re-encode tier **only**: a channel the browser can decode is still
-stream-copied at the source's own resolution and bitrate, with none of these flags emitted.
+Both apply to the re-encode tier **only**: a channel the browser can decode is stream-copied at the
+source's own resolution and bitrate, with none of these flags emitted — and on a browser with native
+HLS support (Safari) live TV now plays with no transcode at all.
 
 ### The guide is drag-scrollable in both directions
 

@@ -24,8 +24,8 @@ describe('resolveTrackSelection', () => {
 })
 
 describe('stallRecoveryShape', () => {
-  const onSession = { onTranscodeSession: true, videoTranscode: false, videoTranscodeTried: false, reloadAttempts: 0 }
-  const direct = { onTranscodeSession: false, videoTranscode: false, videoTranscodeTried: false, reloadAttempts: 0 }
+  const onSession = { onTranscodeSession: true, videoTranscodeTried: false, reloadAttempts: 0 }
+  const direct = { onTranscodeSession: false, videoTranscodeTried: false, reloadAttempts: 0 }
 
   it('rebuilds a direct stream while it still has reloads left', () => {
     expect(stallRecoveryShape(direct)).toBe('reload')
@@ -37,26 +37,16 @@ describe('stallRecoveryShape', () => {
     expect(stallRecoveryShape({ ...direct, reloadAttempts: STALL_RELOADS_BEFORE_CONVERTING })).toBe('convert')
   })
 
-  it('gives up on a direct stream only after the transcoder has been tried too', () => {
+  it('gives up on a direct stream only after the video tier has been tried too', () => {
     expect(stallRecoveryShape({ ...direct, reloadAttempts: 5, videoTranscodeTried: true })).toBe('give-up')
   })
 
-  it('escalates a stalled stream-copy session to the video re-encode tier', () => {
-    // The measured "UHD channels don't play well" shape: replacing a starving 4K copy session with
-    // another 4K copy session repeats the failure instead of reaching the tier that fixes it.
-    expect(stallRecoveryShape(onSession)).toBe('video-transcode')
-  })
-
-  it('replaces the session in place once the video tier has already been tried', () => {
+  it('replaces a stalled session in place — a stall never costs picture quality', () => {
+    // v0.46.1 escalated a stalled stream-copying session to the re-encode tier, which downscaled the
+    // channel to work around a stalling relay. That is the viewer's picture; it is not this ladder's
+    // call to make, and it is not the behaviour this app should have.
+    expect(stallRecoveryShape(onSession)).toBe('session')
+    expect(stallRecoveryShape({ ...onSession, reloadAttempts: 9 })).toBe('session')
     expect(stallRecoveryShape({ ...onSession, videoTranscodeTried: true })).toBe('session')
-  })
-
-  it('never escalates away from a session that is already re-encoding', () => {
-    expect(stallRecoveryShape({ ...onSession, videoTranscode: true })).toBe('session')
-  })
-
-  it('keeps a run on the session rules however many reloads it has spent', () => {
-    expect(stallRecoveryShape({ ...onSession, reloadAttempts: 9 })).toBe('video-transcode')
-    expect(stallRecoveryShape({ ...onSession, reloadAttempts: 9, videoTranscodeTried: true })).toBe('session')
   })
 })

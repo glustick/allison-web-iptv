@@ -8,12 +8,40 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-21 against v0.46.2**.
+Recommended enhancements for future development, refreshed **2026-09-21 against v0.46.3**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.46.3 — native playback first, and no silent quality trade.** A correction of direction, not just
+of code. v0.46.0 made the re-encode tier downscale by default and v0.46.1 let a stall reach that tier;
+both bought smoothness with the viewer's picture, which is not this player's decision to make — the
+user's own words were *"I don't want to transcode the video and lose quality, I want the native video
+to play correctly"*, and they were right.
+
+- **Live TV now prefers the browser's own HLS pipeline** (`lib/nativePlayback.ts` — pure, injected
+  `canPlayType`, unit-tested). Safari has had that pipeline all along behind the same MIME type HLS
+  has always used; it is the route a native player like TiviMate takes, and the reason these channels
+  play untouched there. Live TV was previously sent through hls.js wherever MediaSource existed — even
+  in Safari — which is what forced every HEVC / 10-bit HDR / Dolby stream through a JavaScript demux
+  into MSE, and therefore what made transcoding look necessary in the first place. Chromium answers
+  `''` to the native-HLS question, so nothing changes for it, and a native failure re-attaches with
+  hls.js once: worst case is the old behaviour, one retry later.
+- **Resolution is no longer capped by default** — `TRANSCODE_VIDEO_MAX_HEIGHT` is opt-in. The tier's
+  job is to make an undecodable stream playable at the quality the provider sent.
+- **A stall never escalates to a re-encode.** v0.46.1's rung is removed; a stalled session is replaced
+  in the shape it has. The tier remains the media-error ladder's last resort (v0.45.0), where the
+  alternative is nothing on screen.
+- Deliberately *not* done, and worth recording: the per-device hint that remembers a channel "needs
+  the video tier" was learned through MSE, so under native playback it is honoured only on the hls.js
+  path — otherwise a browser that can play a channel perfectly would still be handed a re-encode
+  because hls.js once struggled with it.
+
+472 tests; typecheck, lint and both builds green. *Not verified live:* the provider has been answering
+every channel with a repeating placeholder (see the measurement note below), so there is nothing real
+to play.
 
 **v0.46.2 — the stall ladder is complete.** v0.46.1 gave a stalled *session* an escape; a stalled
 **direct** stream — the provider's feed, relayed — still ended in the terminal error, the one place a
@@ -440,15 +468,16 @@ failures live, name them plainly, and let the operator fix them from just the me
   out-of-window, stampede, no-window); live verification against a real heavy channel is pending the
   provider's return (it relayed a 4K Newcastle feed directly with zero refusals in the one window tested
   before the provider went down).
-- **A video re-encode tier for HEVC-incapable browsers.** *Shipped in v0.45.0; resolution-capped in
-  v0.46.0.* `videoTranscode: true` on /api/transcode/start re-encodes to H.264 (libx264, 25 fps,
-  CRF 23, yuv420p, an explicit 4s GOP), and the player's media-error ladder escalates to it once when
-  a session exhausts its recoveries. v0.46.0 closed the one gap v0.45.0 named: the output is now
-  capped at 1080p by default (`scale=-2:'min(1080,ih)'`, never upscaling), so a UHD channel is no
-  longer re-encoded at 4K. What is left is operational: the tier's real-time headroom on the actual
-  NAS (1080p25 should hold; `TRANSCODE_VIDEO_MAX_HEIGHT=720` is the next step down if it does not),
-  and whether the escalation fires against a real HEVC channel — both need a deployment running this
-  build. The one hole deliberately left here — a *direct* relay that stalls (no session yet)
+- **A video re-encode tier for HEVC-incapable browsers.** *Shipped in v0.45.0; resolution cap made
+  opt-in in v0.46.3.* `videoTranscode: true` on /api/transcode/start re-encodes to H.264 (libx264,
+  25 fps, CRF 23, yuv420p, an explicit 4s GOP), and the player's media-error ladder escalates to it
+  once when a session exhausts its recoveries — the one case where the alternative is nothing on
+  screen. **v0.46.3 reversed v0.46.0's default**: the output keeps the source's resolution unless
+  `TRANSCODE_VIDEO_MAX_HEIGHT` asks otherwise, and a stall can no longer reach this tier at all.
+  Preferred direction instead: native playback (live TV now prefers the browser's own HLS pipeline),
+  which needs no transcode and loses nothing. What is left is operational: whether the escalation
+  ever fires now that Safari plays natively, and the fact that a UHD re-encode on a small NAS is still
+  not real-time if it does. The one hole deliberately left here — a *direct* relay that stalls (no session yet)
   exhausting its reloads and giving up rather than converting — **shipped in v0.46.2**, as the last
   rung of `stallRecoveryShape`.
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { stallRecoveryShape, useTranscodeFallback } from '../lib/transcodeFallback'
 import { noteStreamNeedsTranscode, streamNeedsTranscode, streamNeedsVideoTranscode } from '../lib/transcodeHints'
+import { prefersNativePlayback } from '../lib/nativePlayback'
 import { sniffStreamKind } from '../lib/streamKind'
 import { probeAudioTracks } from '../lib/audioTrackProbe'
 import { useSessionExpired } from '../lib/sessionWatch'
@@ -73,12 +74,19 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const audioPrefAppliedRef = useRef(false)
   const subtitlePrefAppliedRef = useRef(false)
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
-  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback, escalateToVideoTranscode, isVideoTranscode, hasTriedVideoTranscode } = useTranscodeFallback()
+  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback, escalateToVideoTranscode, hasTriedVideoTranscode } = useTranscodeFallback()
   // Recovery ladder state, deliberately on the component (not in the effect): the effect is
   // torn down and rebuilt by every reload tick, and an attempt counter that reset with it
   // would loop forever instead of ever escalating.
   const reloadAttemptsRef = useRef(0)
   const lastReloadAtRef = useRef(0)
+  // Which engine this run uses, and whether native has had its chance. Native wherever the browser
+  // has its own HLS pipeline (Safari) — the route a native player takes, and the one that plays the
+  // provider's container as-is with hardware decode instead of remuxing everything for MSE (see
+  // lib/nativePlayback.ts). hls.js remains the engine for browsers without one, and a native failure
+  // re-attaches with hls.js once, so the worst case is the old behaviour a retry later.
+  const engineRef = useRef<'native' | 'hls' | null>(null)
+  const nativeFailedRef = useRef(false)
 
   // A genuinely different channel resets the fallback (and stops any in-flight ffmpeg
   // session) — an internal reload (reloadTick bumping after a successful fallback) must not,
@@ -86,6 +94,8 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   useEffect(() => {
     reset()
     reloadAttemptsRef.current = 0
+    engineRef.current = null
+    nativeFailedRef.current = false
   }, [channelKey, reset])
 
   useEffect(() => {
@@ -93,14 +103,28 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     if (!video) return
     setError(null)
     beginRun()
+    // The engine has to be known before the hint below is read, since one of those hints is a
+    // statement about MSE rather than about the stream.
+    if (engineRef.current === null) {
+      engineRef.current = prefersNativePlayback((type) => video.canPlayType(type)) ? 'native' : 'hls'
+    }
     // Known to need converting (lib/transcodeHints.ts): skip the direct attempt rather than playing
     // nothing first — but only when there is not already a transcoded stream to play. Once the
-    // fallback has produced a URL, this has to fall through and hand *that* to hls.js; returning here
-    // regardless is what left a freshly started transcode unfetched and the screen black.
+    // fallback has produced a URL, this has to fall through and hand *that* to the player; returning
+    // here regardless is what left a freshly started transcode unfetched and the screen black.
     if (streamNeedsTranscode(url) && getSourceUrl(url) === url) {
       // A channel that only played once its video was re-encoded goes straight to that tier on the
-      // next play, rather than paying for a copy session this browser will abandon.
-      tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message), streamNeedsVideoTranscode(url))
+      // next play, rather than paying for a copy session this browser will abandon. Only under
+      // hls.js, though: that memory was learned through MSE, and the native pipeline answers a
+      // different question — forcing a re-encode because hls.js once struggled would downscale a
+      // channel the browser can play untouched.
+      tryFallbackForSilentAudio(
+        url,
+        false,
+        () => setReloadTick((t) => t + 1),
+        (message) => setError(message),
+        engineRef.current === 'hls' && streamNeedsVideoTranscode(url)
+      )
       return
     }
     const sourceUrl = getSourceUrl(url)
@@ -181,7 +205,6 @@ let stallCount = 0
         // already has — once its reloads are spent it is converted, not declared unrecoverable.
         const shape = stallRecoveryShape({
           onTranscodeSession: hasSession(),
-          videoTranscode: isVideoTranscode(),
           videoTranscodeTried: hasTriedVideoTranscode(),
           reloadAttempts: attempt
         })
@@ -292,7 +315,30 @@ let stallCount = 0
       }
     }
 
-    if (Hls.isSupported()) {
+    const onNativeError = (): void => {
+      // One retry with hls.js for a browser whose own pipeline refused the stream — not a loop. A
+      // stream that defeats both engines is a stream problem, and the ladder above is what handles it.
+      if (nativeFailedRef.current) return
+      nativeFailedRef.current = true
+      engineRef.current = 'hls'
+      console.warn('[player] native HLS playback failed; re-attaching with hls.js')
+      setReloadTick((t) => t + 1)
+    }
+
+    if (engineRef.current === 'native') {
+      // The whole point of native playback: hand the provider's playlist to the browser's own HLS
+      // implementation. Nothing is demuxed by JavaScript, nothing is re-encapsulated for MSE, and
+      // nothing needs transcoding to fit a codec MSE will accept — which is exactly why a native
+      // player shows these channels untouched, at their own resolution.
+      //
+      // The watchdog and the silent-audio poll below deliberately do nothing here: both are
+      // hls.js/MSE instrumentation (`!hls` short-circuits the one, and the decoded-byte counters it
+      // reads are Chromium-only), and neither has anything to add to a pipeline the browser runs
+      // itself. A native stream that stalls is handled by the browser, and by the error fallback.
+      video.addEventListener('error', onNativeError)
+      video.src = sourceUrl
+      video.play().catch(() => {})
+    } else if (Hls.isSupported()) {
       hls = new Hls({
         // Fixes a real, previously-confirmed bug (see the sibling AllisonIPTV desktop app's own
         // ROADMAP, v0.7.51): some channels' live playlists don't refresh with a segment-sequence
@@ -508,6 +554,7 @@ let stallCount = 0
     video.play().catch(() => {})
     return () => {
       clearInterval(recoveryTimer)
+      video.removeEventListener('error', onNativeError)
       video.removeEventListener('waiting', handleWaiting)
       video.removeEventListener('playing', handlePlaying)
       if (errorResetTimer) clearTimeout(errorResetTimer)
@@ -554,6 +601,11 @@ let stallCount = 0
   useEffect(() => {
     if (url.startsWith('/__transcode/')) return
     if (streamNeedsTranscode(url)) return
+    // Under native playback the browser decodes the audio itself, and it decodes considerably more
+    // than MSE does — Safari plays AC-3 and E-AC-3 natively. Asking MSE's opinion here would
+    // transcode a channel whose audio the native pipeline handles perfectly, which is the opposite
+    // of the point.
+    if (engineRef.current === 'native') return
     let cancelled = false
     void (async () => {
       const tracks = await probeAudioTracks(url)

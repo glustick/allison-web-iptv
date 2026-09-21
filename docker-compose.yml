@@ -34,11 +34,11 @@ services:
       # a feature-length title at ~10 Mbps is comfortably into the gigabytes. Give this volume
       # room, and check the System tab's free-space readout if you are unsure.
       - TRANSCODE_TMP_DIR=/transcode
-      # The video re-encode tier (a channel whose video this browser cannot decode) caps its output
-      # at 1080p by default, so a 4K channel is not re-encoded at 4K on this CPU — which no NAS can
-      # do in real time. Set 0 to keep the source's own resolution, or a lower number (720) to trade
-      # picture for CPU headroom.
-      # - TRANSCODE_VIDEO_MAX_HEIGHT=1080
+      # The video re-encode tier exists for a browser that cannot decode a channel's video at all,
+      # and keeps the source's own resolution unless you set this. Capping it trades picture for CPU
+      # headroom on a host that cannot keep up — and a 4K re-encode on a small NAS is not real-time,
+      # so prefer playing UHD natively (Safari does) over capping it here.
+      # - TRANSCODE_VIDEO_MAX_HEIGHT=720
       # Optional capped-CRF ceiling (kbit/s) on the same tier, for a host whose *network* rather
       # than its CPU is the limit: every viewer's output is relayed through it. Off unless set.
       # - TRANSCODE_VIDEO_MAXRATE_KBPS=8000

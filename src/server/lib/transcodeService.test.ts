@@ -1214,10 +1214,10 @@ describe('video re-encode tier', () => {
     const vf = args.indexOf('-vf')
     expect(vf).toBeGreaterThanOrEqual(0)
     expect(args[vf + 1]).toContain('fps=25')
-    // v0.46.0's resolution cap, on by default: a UHD (3840x2160) source must not be re-encoded at
-    // 4K, because no NAS CPU does that in real time. min() rather than a bare 1080 is what makes
-    // it a cap and not a resize — a 720p or 1080p channel is never upscaled.
-    expect(args[vf + 1]).toContain("scale=-2:'min(1080,ih)'")
+    // v0.46.3: no resolution cap unless one was asked for. The tier makes an undecodable stream
+    // playable; it does not get to decide the picture is too big for the host.
+    expect(args[vf + 1]).toBe('fps=25')
+    expect(args[vf + 1]).not.toContain('scale')
     // A keyframe every 4s (100 frames at 25 fps), or the HLS muxer cannot close a segment until the
     // source ends — measured: with libx264's default ~10s keyframe interval the session's playlist
     // did not appear until EOF, which for a live channel is never.
@@ -1229,15 +1229,7 @@ describe('video re-encode tier', () => {
     expect(args).not.toContain('-bufsize')
   })
 
-  it('leaves the resolution alone when the cap is switched off', async () => {
-    const args = await videoArgsFor(true, { maxHeight: null, maxBitrateKbps: null, fps: 25 }, 'uncapped')
-    const vf = args.indexOf('-vf')
-    expect(vf).toBeGreaterThanOrEqual(0)
-    expect(args[vf + 1]).toBe('fps=25')
-    expect(args).not.toContain('-maxrate')
-  })
-
-  it('honours a lower cap, and a bitrate ceiling when the environment asks for one', async () => {
+  it('honours a cap when one is asked for, alongside a bitrate ceiling', async () => {
     const args = await videoArgsFor(true, { maxHeight: 720, maxBitrateKbps: 6000, fps: 25 }, 'capped-720')
     const vf = args.indexOf('-vf')
     expect(vf).toBeGreaterThanOrEqual(0)
@@ -1252,11 +1244,13 @@ describe('video re-encode tier', () => {
 })
 
 describe('video encode profile', () => {
-  it('caps at 1080p when the environment says nothing', () => {
-    expect(resolveVideoEncodeProfile({})).toEqual({ maxHeight: 1080, maxBitrateKbps: null, fps: 25 })
+  it('keeps the source resolution when the environment says nothing', () => {
+    // v0.46.3: a re-encode is not allowed to quietly reshape what the provider sent. The viewer
+    // asked to watch that channel, not a smaller version of it.
+    expect(resolveVideoEncodeProfile({})).toEqual({ maxHeight: null, maxBitrateKbps: null, fps: 25 })
   })
 
-  it('treats an explicit 0, empty, or garbage value as "no cap", not as a broken encode', () => {
+  it('treats 0, an empty value, or garbage as "no cap", never as a broken encode', () => {
     expect(resolveVideoEncodeProfile({ TRANSCODE_VIDEO_MAX_HEIGHT: '0' }).maxHeight).toBeNull()
     expect(resolveVideoEncodeProfile({ TRANSCODE_VIDEO_MAX_HEIGHT: '  ' }).maxHeight).toBeNull()
     expect(resolveVideoEncodeProfile({ TRANSCODE_VIDEO_MAX_HEIGHT: 'nonsense' }).maxHeight).toBeNull()

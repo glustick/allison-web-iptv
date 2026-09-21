@@ -47,23 +47,24 @@ export function isUnsupportedAudioCodecError(data: ErrorData): boolean {
 /**
  * Which shape the *stall* ladder should rebuild a live stream in.
  *
- * The reload paths hls.js itself reports already end in the transcoder: a refused segment (400/403)
- * and two BUFFER_STALLED errors both convert the channel, and v0.45.0 taught the media-error ladder
- * to reach the video re-encode tier. The watchdog's stall ladder could not — it rebuilt the source,
- * or replaced a dead session with *the same shape*, so a heavy channel whose stream-copied session
- * keeps starving itself was handed another stream-copying session: the one shape the source has
- * already proven it cannot relay. Measured shape of "the UHD channels don't play well": a 4K feed
- * relayed verbatim through the host, stalling, restarting, stalling, then giving up — while the tier
- * that fixes it was never reached.
+ * Two rules, both shaped by one principle: a stall must never cost picture quality. Trading
+ * resolution for smoothness is sometimes the only way to keep a picture moving, but it is the
+ * viewer's picture, and a player's job is to show the stream the provider sent.
  *
- * Since v0.46.0 that tier also caps its resolution (1080p by default), which is what makes it the
- * right last rung here rather than just another conversion: it is a genuinely *cheaper* target than
- * the 4K relay it replaces — roughly a quarter of the pixels and a bitrate the host can actually
- * sustain. Deliberately a pure function (node-only vitest, same convention as liveStreamRecovery.ts)
- * so the rule is testable without a browser or an hls.js instance.
+ * 1. **On a session** the session is replaced in place. v0.46.1 briefly escalated a stalled
+ *    stream-copying session to the *video re-encode* tier; that quietly downscaled the channel for
+ *    anyone whose stream stuttered, to work around a relay problem, without anyone asking for it.
+ *    Removed. The re-encode tier still exists as the media-error ladder's **last resort** (v0.45.0),
+ *    where the alternative is no picture at all — and since v0.46.3 it keeps the source's resolution
+ *    unless an operator opts into a cap.
+ * 2. **Not on a session** — the provider's own stream, relayed — a reload fixes a wedged *player*
+ *    but not a source the host cannot sustain, and once the reloads are spent the ladder used to
+ *    give up outright while every other path in this app converts. So the last rung converts,
+ *    deliberately to the *cheap copy tier*: nothing here claims the video is undecodable, only that
+ *    relaying it is not working, and a remux changes no pixels.
  *
- * The video tier is bounded to one attempt per run, so `videoTranscodeTried` retires this rung and
- * everything falls back to replacing the session in place.
+ * Deliberately a pure function (node-only vitest, same convention as liveStreamRecovery.ts) so every
+ * rule is testable without a browser or an hls.js instance.
  */
 /** How many full-source reloads a run spends before a direct stream is converted instead. Matches
  *  the count at which the ladder would otherwise give up, so this replaces the terminal error
@@ -75,7 +76,7 @@ export type StallRecoveryShape =
   | 'reload'
   /** Hand the provider's own stream to the transcoder (the cheap copy tier) instead of giving up. */
   | 'convert'
-  /** Replace the session with one that re-encodes the video, and since v0.46.0 downscales it. */
+  /** Replace the session with one that re-encodes the video (the media-error ladder's last resort). */
   | 'video-transcode'
   /** Replace the session in place, keeping its current shape. */
   | 'session'
@@ -85,28 +86,18 @@ export type StallRecoveryShape =
 export function stallRecoveryShape(state: {
   /** True when the player is running off a transcode session's own output. */
   onTranscodeSession: boolean
-  /** True when that session is re-encoding the video (the last tier), false when it stream-copies. */
-  videoTranscode: boolean
-  /** True once the video re-encode tier has already been tried in this run. */
+  /** True once the video re-encode tier has been used in this run — the media-error ladder's last
+   *  resort, and the point past which this ladder has nothing left to offer. */
   videoTranscodeTried: boolean
   /** Full-source reloads this run has already spent (LivePlayer's own ladder). */
   reloadAttempts: number
 }): StallRecoveryShape {
-  if (state.onTranscodeSession) {
-    // On a session the shape is about *how* to produce it: a stream-copying session has already
-    // proven it cannot relay this source, so replace it with one that re-encodes — which, since
-    // v0.46.0, also caps the resolution, making it both the tier that fixes a heavy channel and the
-    // cheaper one to run. Once that has been tried, replace it in place.
-    return !state.videoTranscode && !state.videoTranscodeTried ? 'video-transcode' : 'session'
-  }
-  // Not on a session: this is the provider's own stream, relayed. A reload fixes a wedged player; it
-  // cannot fix a source the host cannot sustain, and once the reloads are spent the ladder used to
-  // give up outright — while every other reload path in this app (a refused segment, two
-  // BUFFER_STALLED errors) converts instead. That was the one place a heavy channel could die
-  // without the transcoder ever being offered, so the last rung is now the same move: convert,
-  // deliberately to the *cheap* copy tier first, because nothing here says the source's video is
-  // undecodable — only that relaying it is not working. A session that then goes on to stall
-  // escalates by itself, one rung up.
+  // A stalled session is replaced in place, in the shape it already has. Never escalated to a
+  // re-encode: see the note above — that would downscale the viewer's picture to work around a
+  // stalling relay, which is not this ladder's call to make.
+  if (state.onTranscodeSession) return 'session'
+  // The provider's own stream, relayed: reload it while reloads remain, then convert it rather than
+  // declaring it unrecoverable — the same move every other reload path in this app makes.
   if (state.reloadAttempts >= STALL_RELOADS_BEFORE_CONVERTING) {
     return state.videoTranscodeTried ? 'give-up' : 'convert'
   }
@@ -141,8 +132,6 @@ export function useTranscodeFallback(): {
   /** The last rung of the live recovery ladder: a session whose stream-copied video the browser
    *  cannot decode is replaced by one that re-encodes the video to H.264. Refuses a second try. */
   escalateToVideoTranscode: (originalUrl: string, onReload: () => void, onError?: (message: string) => void) => boolean
-  /** Whether the current session re-encodes the video rather than stream-copying it. */
-  isVideoTranscode: () => boolean
   /** Whether the video re-encode tier has already been tried in this run. */
   hasTriedVideoTranscode: () => boolean
 } {
@@ -289,10 +278,8 @@ export function useTranscodeFallback(): {
 
   const hasSession = useCallback((): boolean => transcodedUrlRef.current !== null, [])
 
-  // The stall ladder's two questions about this run — see stallRecoveryShape, which is what turns
-  // them into a decision. The mode flags already existed (the recovery restart preserves the
-  // session's shape); these only expose them.
-  const isVideoTranscode = useCallback((): boolean => videoModeRef.current, [])
+  // The stall ladder's question about this run — see stallRecoveryShape, which is what turns it into
+  // a decision. (The session's own shape is still preserved by the restart itself, below.)
   const hasTriedVideoTranscode = useCallback((): boolean => videoTriedRef.current, [])
 
   const restartFallback = useCallback(
@@ -341,7 +328,6 @@ export function useTranscodeFallback(): {
     hasSession,
     restartFallback,
     escalateToVideoTranscode,
-    isVideoTranscode,
     hasTriedVideoTranscode
   }
 }

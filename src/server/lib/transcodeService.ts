@@ -144,7 +144,18 @@ export function resolveTranscodeDir(): string {
  * shape every plain channel already plays.
  */
 export interface VideoEncodeProfile {
-  /** Nothing taller than this is ever encoded. `null` keeps the source's own resolution. */
+  /**
+   * Nothing taller than this is ever encoded. **`null` — the default — keeps the source's own
+   * resolution.**
+   *
+   * v0.46.0 shipped 1080p here by default, on the theory that no NAS CPU re-encodes 4K in real
+   * time. That reasoned about the host and not about the viewer: silently handing someone a
+   * downscaled channel because their box was slow is not the app's decision to make, and the honest
+   * fix for "the relay cannot sustain 4K" is to improve the relay or say so, not to change the
+   * picture. The tier exists to make a stream the browser cannot decode *playable*, at the quality
+   * the provider sent. An operator whose host genuinely cannot keep up can opt in with
+   * `TRANSCODE_VIDEO_MAX_HEIGHT`.
+   */
   maxHeight: number | null
   /** Capped-CRF ceiling in kbit/s. `null` leaves x264's own rate control alone (the default). */
   maxBitrateKbps: number | null
@@ -152,9 +163,8 @@ export interface VideoEncodeProfile {
   fps: number
 }
 
-/** The default cap. 1080p is the tallest output a browser-relayed H.264 stream needs to be here,
- *  and about a quarter of the work of the 4K source that actually triggers this tier. */
-export const DEFAULT_VIDEO_MAX_HEIGHT = 1080
+/** The framerate cap. Unlike the resolution, this costs the viewer nothing they would notice and
+ *  is what makes an H.264 re-encode real-time on a modest CPU at all. */
 export const DEFAULT_VIDEO_FPS = 25
 
 /** A positive integer, or null when the value is absent, empty, 0, or unparseable — so "0" and a
@@ -165,8 +175,9 @@ function optionalPositiveInt(raw: string | undefined): number | null {
 }
 
 /**
- * Reads the tier's shape from the environment: `TRANSCODE_VIDEO_MAX_HEIGHT` (default
- * DEFAULT_VIDEO_MAX_HEIGHT; `0` or an empty value switches the cap off entirely) and
+ * Reads the tier's shape from the environment: `TRANSCODE_VIDEO_MAX_HEIGHT` (**off by default** —
+ * set a number to cap the height, as a deliberate trade of picture for CPU headroom on a host that
+ * cannot keep up) and
  * `TRANSCODE_VIDEO_MAXRATE_KBPS` (off unless set — the resolution cap is what buys real time, and
  * a bitrate ceiling changes the picture in a way nobody asked for; it is the knob for a host whose
  * *network* rather than its CPU is the limit, since every viewer's output is relayed through it).
@@ -175,20 +186,19 @@ function optionalPositiveInt(raw: string | undefined): number | null {
  */
 export function resolveVideoEncodeProfile(env: Record<string, string | undefined> = process.env): VideoEncodeProfile {
   return {
-    maxHeight:
-      env.TRANSCODE_VIDEO_MAX_HEIGHT === undefined
-        ? DEFAULT_VIDEO_MAX_HEIGHT
-        : optionalPositiveInt(env.TRANSCODE_VIDEO_MAX_HEIGHT),
+    maxHeight: optionalPositiveInt(env.TRANSCODE_VIDEO_MAX_HEIGHT),
     maxBitrateKbps: optionalPositiveInt(env.TRANSCODE_VIDEO_MAXRATE_KBPS),
     fps: DEFAULT_VIDEO_FPS
   }
 }
 
 /**
- * The `-vf` chain for the re-encode tier. `fps` first (the cheapest possible reduction), then the
- * scale cap. `min(<maxHeight>,ih)` is what makes it a *cap* and not a resize: a 720p or 1080p
- * channel passes through untouched — no upscaling, no wasted work — and only a taller source is
- * scaled down. `-2` keeps the aspect ratio and lands on an even width, which yuv420p requires.
+ * The `-vf` chain for the re-encode tier. `fps` first (the cheapest possible reduction); a scale cap
+ * only when one was actually configured, because the tier's job is to make an undecodable stream
+ * playable at the resolution the provider sent. When a cap *is* set, `min(<maxHeight>,ih)` makes it
+ * a cap and not a resize: a shorter channel passes through untouched — no upscaling, no wasted work
+ * — and only a taller source is scaled down. `-2` keeps the aspect ratio and lands on an even width,
+ * which yuv420p requires.
  * The single quotes around the expression are filtergraph quoting, not shell quoting (spawn hands
  * this over as one argv element), and they are what protect the comma inside min() from being read
  * as the separator that starts a second filter — the real-ffmpeg integration test runs this exact
@@ -576,12 +586,11 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       // and a fast preset so a NAS CPU can keep up with real time. Nothing here is emitted on the
       // common copy path, so it costs that path nothing.
       //
-      // v0.46.0 adds the one dimension v0.45.0 left alone: resolution. Capping the framerate
-      // without capping the resolution meant a UHD (3840x2160) channel was re-encoded *at 4K*,
-      // which no NAS CPU does in real time — the session fell behind the live edge, which is the
-      // measured shape of "the UHD channels don't play well" (TiviMate plays them because it
-      // decodes HEVC in hardware and never re-encodes at all). See resolveVideoEncodeProfile for
-      // the cap itself and why 1080p is the default.
+      // Resolution is deliberately NOT capped by default (v0.46.3). v0.46.0 capped it at 1080p to
+      // spare a slow host, which meant a decode failure quietly became a downscaled channel; the
+      // tier is here to make an undecodable stream playable, not to reshape a decodable one, so a
+      // cap is opt-in per deployment (TRANSCODE_VIDEO_MAX_HEIGHT) instead — see
+      // resolveVideoEncodeProfile.
       ...(videoTranscode
         ? [
             '-preset',
