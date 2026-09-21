@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
-import { useTranscodeFallback } from '../lib/transcodeFallback'
+import { stallRecoveryShape, useTranscodeFallback } from '../lib/transcodeFallback'
 import { noteStreamNeedsTranscode, streamNeedsTranscode, streamNeedsVideoTranscode } from '../lib/transcodeHints'
 import { sniffStreamKind } from '../lib/streamKind'
 import { probeAudioTracks } from '../lib/audioTrackProbe'
@@ -73,7 +73,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const audioPrefAppliedRef = useRef(false)
   const subtitlePrefAppliedRef = useRef(false)
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
-  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback, escalateToVideoTranscode } = useTranscodeFallback()
+  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback, escalateToVideoTranscode, isVideoTranscode, hasTriedVideoTranscode } = useTranscodeFallback()
   // Recovery ladder state, deliberately on the component (not in the effect): the effect is
   // torn down and rebuilt by every reload tick, and an attempt counter that reset with it
   // would loop forever instead of ever escalating.
@@ -174,6 +174,32 @@ let stallCount = 0
         // relearned live on the club channels on 2026-09-19): a plain reload re-attaches the
         // same dead session id and provably re-freezes, so spending attempt 1 on it just adds
         // a doomed 60s-staleness cycle before the restart that was always going to be needed.
+        // A stream that has now stalled on this ladder needs a *different* shape, not another copy
+        // of the same one: a stream-copying session has already proven it cannot relay this source
+        // (that is what stalling means here), so handing it another copy repeats the failure and
+        // spends the ladder's remaining attempts doing it. Since v0.46.0 the video re-encode tier
+        // also caps its resolution — 1080p by default, a quarter of the pixels of the 4K relay it
+        // replaces — so it is both the tier that fixes a heavy channel and now the cheapest one to
+        // run. Reached here as well as from the media-error ladder (see stallRecoveryShape, which
+        // decides this purely and is unit-tested). Bounded to one attempt per run; once it has been
+        // tried the shape falls back to replacing the session in place, exactly as before.
+        if (
+          stallRecoveryShape({
+            onTranscodeSession: hasSession(),
+            videoTranscode: isVideoTranscode(),
+            videoTranscodeTried: hasTriedVideoTranscode()
+          }) === 'video-transcode'
+        ) {
+          const escalated = escalateToVideoTranscode(
+            url,
+            () => setReloadTick((t) => t + 1),
+            (message) => {
+              fatalErrorShown = true
+              setError(`Playback stalled and converting the channel failed: ${message}`)
+            }
+          )
+          if (escalated) return
+        }
         if (hasSession()) {
           const restarted = restartFallback(
             url,

@@ -6,7 +6,20 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.46.0 — the re-encode tier caps its resolution, so UHD channels transcode in real time)
+## Current state (v0.46.1 — the stall ladder reaches the re-encode tier, which now caps its resolution)
+
+**v0.46.1** is the other half of the same problem: the stall ladder could not *reach* the tier
+v0.46.0 had just made affordable. hls.js's own reload paths already end in the transcoder — a refused
+segment (400/403) converts the channel, two `BUFFER_STALLED` errors convert it, and v0.45.0 taught the
+media-error ladder to escalate to the video tier — but the backgrounding watchdog's stall rung did
+not: it rebuilt the source, or replaced a dead session with **the same shape**. So a heavy 4K channel
+whose stream-copied session kept starving itself was handed another 4K stream-copy, again and again,
+until the ladder gave up. That is measurably the shape behind *"the UHD channels don't play well"*,
+with the tier that fixes it never reached. `stallRecoveryShape` (pure, unit-tested) now decides the
+shape: a repeatedly-stalling **copy** session escalates to the video re-encode tier once — a quarter
+of the pixels, and a bitrate the host can actually sustain — after which that rung retires and the
+session is replaced in place exactly as before. A run that is not on a transcode session is untouched.
+470 tests; typecheck, lint and test all green.
 
 **v0.46.0** closes the gap v0.45.0 left inside the re-encode tier itself: **resolution**. Capping the
 framerate while leaving the resolution alone meant a UHD (3840x2160) channel was re-encoded *at 4K* —

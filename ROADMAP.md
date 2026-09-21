@@ -1,11 +1,25 @@
 # Roadmap
 
-Recommended enhancements for future development, refreshed **2026-09-21 against v0.46.0**.
+Recommended enhancements for future development, refreshed **2026-09-21 against v0.46.1**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.46.1 — the stall ladder reaches the re-encode tier.** hls.js's own reload paths already end in
+the transcoder — a refused segment (400/403) converts the channel, two `BUFFER_STALLED` errors
+convert it, and v0.45.0 taught the media-error ladder to escalate to the video tier — but the
+backgrounding watchdog's stall branch did not. It rebuilt the source, or replaced a dead session with
+*the same shape*, so a heavy channel whose stream-copied session kept starving itself got another
+stream-copy, and another, until the ladder gave up: measurably the shape behind "the UHD channels
+don't play well", with the tier that fixes it never reached. `stallRecoveryShape` (pure, exported,
+unit-tested in `transcodeFallback.test.ts`) now decides the shape — a repeatedly-stalling *copy*
+session escalates to the video re-encode tier once, which v0.46.0's cap makes a genuinely cheaper
+target than the 4K relay it replaces, after which that rung retires and the session is replaced in
+place exactly as before. A run that is not on a transcode session is unchanged. 470 tests; typecheck,
+lint and test all green. *Not proven live:* as with v0.46.0, the provider has been down since
+2026-09-20.
 
 **v0.46.0 — the re-encode tier caps resolution: UHD channels are no longer re-encoded at 4K.**
 The open question v0.45.0 named, closed. That tier capped the framerate (25 fps) but left the
@@ -415,7 +429,11 @@ failures live, name them plainly, and let the operator fix them from just the me
   capped at 1080p by default (`scale=-2:'min(1080,ih)'`, never upscaling), so a UHD channel is no
   longer re-encoded at 4K. What is left is operational: the tier's real-time headroom on the actual
   NAS (1080p25 should hold; `TRANSCODE_VIDEO_MAX_HEIGHT=720` is the next step down if it does not),
-  and whether the escalation fires against a real HEVC channel — both need the provider up.
+  and whether the escalation fires against a real HEVC channel — both need the provider up. One hole
+  is left here deliberately: a *direct* relay that stalls (no session yet) still exhausts its reloads
+  and gives up rather than converting. Converting a stream that never asked for it can burn one of the
+  account's two connections against a provider that is simply down, so that rung wants live
+  measurement before it is added.
 - **Widen the undecodable-audio check beyond Dolby.** *Open.* The check that decides whether to convert a
   stream for audio reasons only considers `ac3`/`eac3`. Sunderland's feed carries **aac HE-AACv2**, which
   is a different question entirely and is not covered — the same blind spot the E-AC-3 fix closed for
