@@ -6,7 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.46.1 — the stall ladder reaches the re-encode tier, which now caps its resolution)
+## Current state (v0.46.2 — the stall ladder is complete: it converts, escalates, and only then gives up)
+
+**v0.46.2** closes the last hole in the ladder v0.46.1 opened. A **direct** stream — the provider's own
+feed, relayed — that stalled through every reload it was allowed ended in the terminal error, while
+every other reload path in this app (a refused segment, two `BUFFER_STALLED` errors) converts the
+channel instead. That was the one place a heavy channel could die without the transcoder ever being
+offered. `stallRecoveryShape` now decides the whole rung set — `reload` → `convert` →
+`video-transcode` → `session` → `give-up` — and a direct stream is converted to the **cheap copy
+tier** once its reloads are spent; nothing there claims the video is undecodable, and a session that
+then goes on to stall escalates a rung by itself. 473 tests; typecheck, lint and both builds green.
 
 **v0.46.1** is the other half of the same problem: the stall ladder could not *reach* the tier
 v0.46.0 had just made affordable. hls.js's own reload paths already end in the transcoder — a refused

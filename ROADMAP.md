@@ -8,12 +8,22 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-21 against v0.46.1**.
+Recommended enhancements for future development, refreshed **2026-09-21 against v0.46.2**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.46.2 — the stall ladder is complete.** v0.46.1 gave a stalled *session* an escape; a stalled
+**direct** stream — the provider's feed, relayed — still ended in the terminal error, the one place a
+heavy channel could die without the transcoder ever being offered, while every other reload path in
+the app converts. `stallRecoveryShape` now returns the whole rung set (`reload`, `convert`,
+`video-transcode`, `session`, `give-up`), and a direct stream converts once its reloads are spent —
+deliberately to the cheap copy tier, because nothing there says the video is undecodable; a session
+that then stalls escalates by itself. 473 tests; typecheck, lint and both builds green. *Not proven
+against a real stream:* see the measurement note at the end of this section — the provider has been
+serving a repeating placeholder on every channel, so there is nothing real to exercise it against yet.
 
 **v0.46.1 — the stall ladder reaches the re-encode tier.** hls.js's own reload paths already end in
 the transcoder — a refused segment (400/403) converts the channel, two `BUFFER_STALLED` errors
@@ -438,11 +448,29 @@ failures live, name them plainly, and let the operator fix them from just the me
   longer re-encoded at 4K. What is left is operational: the tier's real-time headroom on the actual
   NAS (1080p25 should hold; `TRANSCODE_VIDEO_MAX_HEIGHT=720` is the next step down if it does not),
   and whether the escalation fires against a real HEVC channel — both need a deployment running this
-  build. One hole
-  is left here deliberately: a *direct* relay that stalls (no session yet) still exhausts its reloads
-  and gives up rather than converting. Converting a stream that never asked for it can burn one of the
-  account's two connections against a provider that is simply down, so that rung wants live
-  measurement before it is added.
+  build. The one hole deliberately left here — a *direct* relay that stalls (no session yet)
+  exhausting its reloads and giving up rather than converting — **shipped in v0.46.2**, as the last
+  rung of `stallRecoveryShape`.
+
+### Measured 2026-09-21: the provider serves a repeating placeholder on every channel
+
+Read this before chasing a playback bug that is not ours. Measured through the deployed app against
+the live provider, sampling across unrelated categories (Sky Sports UHD / TNT Ultimate 4K, Sky News,
+BBC One HD, Scripps, US local ABC/CW affiliates, NFHS, 24/7 channels):
+
+- **Every channel returns byte-identical media**: one shared ~2-minute loop, 1920x1080 H.264 at
+  ~435 kb/s, with **4 kb/s audio** (i.e. silent) — on both the HLS path and the raw `.ts` path. That
+  is a provider-side placeholder, not content; "NFHS Network 2941: NO EVENT" is fairly self-describing.
+- **The live playlist never advances.** Every refresh answers `#EXT-X-MEDIA-SEQUENCE:0` with the same
+  segment indices (`0.ts, 1.ts, …`); only the containing token directory changes. hls.js cannot build
+  a monotonic live timeline from that.
+- The panel itself is healthy (`reachable: true, auth: 1, Active, 0/2 connections`) — which is why
+  "the provider is down" is the wrong diagnosis and "the provider is serving a placeholder" is right.
+- The deployed build at the time was **v0.44.1**, so none of the v0.45.0/v0.46.x work was even in play.
+- **Open improvement:** the app cannot tell this apart from a broken channel — it runs its whole
+  recovery ladder against the placeholder. A non-advancing-playlist detector, plus a message that says
+  so, is the obvious next quality item; it wants one live browser reproduction to pin the exact signal
+  hls.js reports before it is written.
 - **Widen the undecodable-audio check beyond Dolby.** *Open.* The check that decides whether to convert a
   stream for audio reasons only considers `ac3`/`eac3`. Sunderland's feed carries **aac HE-AACv2**, which
   is a different question entirely and is not covered — the same blind spot the E-AC-3 fix closed for

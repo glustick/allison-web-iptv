@@ -174,22 +174,18 @@ let stallCount = 0
         // relearned live on the club channels on 2026-09-19): a plain reload re-attaches the
         // same dead session id and provably re-freezes, so spending attempt 1 on it just adds
         // a doomed 60s-staleness cycle before the restart that was always going to be needed.
-        // A stream that has now stalled on this ladder needs a *different* shape, not another copy
-        // of the same one: a stream-copying session has already proven it cannot relay this source
-        // (that is what stalling means here), so handing it another copy repeats the failure and
-        // spends the ladder's remaining attempts doing it. Since v0.46.0 the video re-encode tier
-        // also caps its resolution — 1080p by default, a quarter of the pixels of the 4K relay it
-        // replaces — so it is both the tier that fixes a heavy channel and now the cheapest one to
-        // run. Reached here as well as from the media-error ladder (see stallRecoveryShape, which
-        // decides this purely and is unit-tested). Bounded to one attempt per run; once it has been
-        // tried the shape falls back to replacing the session in place, exactly as before.
-        if (
-          stallRecoveryShape({
-            onTranscodeSession: hasSession(),
-            videoTranscode: isVideoTranscode(),
-            videoTranscodeTried: hasTriedVideoTranscode()
-          }) === 'video-transcode'
-        ) {
+        //
+        // Which shape to rebuild in is decided purely (and unit-tested) in stallRecoveryShape:
+        // v0.46.1 taught a stalled stream-copy session to escalate to the re-encode tier, and
+        // v0.46.2 gives a *direct* stream the same escape every other reload path in this app
+        // already has — once its reloads are spent it is converted, not declared unrecoverable.
+        const shape = stallRecoveryShape({
+          onTranscodeSession: hasSession(),
+          videoTranscode: isVideoTranscode(),
+          videoTranscodeTried: hasTriedVideoTranscode(),
+          reloadAttempts: attempt
+        })
+        if (shape === 'video-transcode') {
           const escalated = escalateToVideoTranscode(
             url,
             () => setReloadTick((t) => t + 1),
@@ -199,8 +195,7 @@ let stallCount = 0
             }
           )
           if (escalated) return
-        }
-        if (hasSession()) {
+        } else if (shape === 'session') {
           const restarted = restartFallback(
             url,
             () => setReloadTick((t) => t + 1),
@@ -210,6 +205,18 @@ let stallCount = 0
             }
           )
           if (restarted) return
+        } else if (shape === 'convert') {
+          // The last rung for the provider's own stream, when every reload has already failed:
+          // convert it — the cheap copy tier, exactly as the refused-segment and buffer-stall paths
+          // do — rather than showing the terminal error. Nothing here claims the video is
+          // undecodable, so a session that then stalls escalates one rung up by itself.
+          const converted = tryFallbackForSilentAudio(
+            url,
+            false,
+            () => setReloadTick((t) => t + 1),
+            (message) => setError(message)
+          )
+          if (converted) return
         }
         if (attempt >= 3) {
           fatalErrorShown = true

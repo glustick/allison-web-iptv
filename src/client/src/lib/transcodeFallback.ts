@@ -65,6 +65,23 @@ export function isUnsupportedAudioCodecError(data: ErrorData): boolean {
  * The video tier is bounded to one attempt per run, so `videoTranscodeTried` retires this rung and
  * everything falls back to replacing the session in place.
  */
+/** How many full-source reloads a run spends before a direct stream is converted instead. Matches
+ *  the count at which the ladder would otherwise give up, so this replaces the terminal error
+ *  rather than adding a step before it. */
+export const STALL_RELOADS_BEFORE_CONVERTING = 3
+
+export type StallRecoveryShape =
+  /** Rebuild the source (the player's own reload path) — a wedged *player*, not a dead stream. */
+  | 'reload'
+  /** Hand the provider's own stream to the transcoder (the cheap copy tier) instead of giving up. */
+  | 'convert'
+  /** Replace the session with one that re-encodes the video, and since v0.46.0 downscales it. */
+  | 'video-transcode'
+  /** Replace the session in place, keeping its current shape. */
+  | 'session'
+  /** Nothing left to try: stop, and say so. */
+  | 'give-up'
+
 export function stallRecoveryShape(state: {
   /** True when the player is running off a transcode session's own output. */
   onTranscodeSession: boolean
@@ -72,10 +89,28 @@ export function stallRecoveryShape(state: {
   videoTranscode: boolean
   /** True once the video re-encode tier has already been tried in this run. */
   videoTranscodeTried: boolean
-}): 'video-transcode' | 'session' | 'source' {
-  if (!state.onTranscodeSession) return 'source'
-  if (!state.videoTranscode && !state.videoTranscodeTried) return 'video-transcode'
-  return 'session'
+  /** Full-source reloads this run has already spent (LivePlayer's own ladder). */
+  reloadAttempts: number
+}): StallRecoveryShape {
+  if (state.onTranscodeSession) {
+    // On a session the shape is about *how* to produce it: a stream-copying session has already
+    // proven it cannot relay this source, so replace it with one that re-encodes — which, since
+    // v0.46.0, also caps the resolution, making it both the tier that fixes a heavy channel and the
+    // cheaper one to run. Once that has been tried, replace it in place.
+    return !state.videoTranscode && !state.videoTranscodeTried ? 'video-transcode' : 'session'
+  }
+  // Not on a session: this is the provider's own stream, relayed. A reload fixes a wedged player; it
+  // cannot fix a source the host cannot sustain, and once the reloads are spent the ladder used to
+  // give up outright — while every other reload path in this app (a refused segment, two
+  // BUFFER_STALLED errors) converts instead. That was the one place a heavy channel could die
+  // without the transcoder ever being offered, so the last rung is now the same move: convert,
+  // deliberately to the *cheap* copy tier first, because nothing here says the source's video is
+  // undecodable — only that relaying it is not working. A session that then goes on to stall
+  // escalates by itself, one rung up.
+  if (state.reloadAttempts >= STALL_RELOADS_BEFORE_CONVERTING) {
+    return state.videoTranscodeTried ? 'give-up' : 'convert'
+  }
+  return 'reload'
 }
 
 interface StartTranscodeResponse {
