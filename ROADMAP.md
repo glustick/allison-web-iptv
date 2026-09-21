@@ -1,11 +1,27 @@
 # Roadmap
 
-Recommended enhancements for future development, refreshed **2026-09-21 against v0.45.0**.
+Recommended enhancements for future development, refreshed **2026-09-21 against v0.46.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.46.0 — the re-encode tier caps resolution: UHD channels are no longer re-encoded at 4K.**
+The open question v0.45.0 named, closed. That tier capped the framerate (25 fps) but left the
+resolution alone, so a UHD (3840x2160 HEVC) channel was re-encoded *at 4K* — work no NAS CPU does in
+real time, which is precisely why the UHD channels "don't play well" while TiviMate plays them
+(native players decode HEVC in hardware and never re-encode at all). The tier now scales to 1080p by
+default, through a filter that is a *cap* rather than a resize — `scale=-2:'min(1080,ih)'`: a 720p or
+1080p channel passes through untouched, only a taller source is scaled down, and nothing is ever
+upscaled. `TRANSCODE_VIDEO_MAX_HEIGHT` overrides it (0 or empty = no cap at all) and
+`TRANSCODE_VIDEO_MAXRATE_KBPS` adds an optional capped-CRF bitrate ceiling for a network-limited
+host. Pinned three ways: argv-level tests for the default cap, for a lower cap with a ceiling, and
+for the copy path emitting none of it; pure tests for the env parsing (0, empty and garbage all mean
+"no cap" rather than a broken encode); and a real-ffmpeg integration test that runs a taller
+synthetic source through the tier and reads the output's real dimensions back. 466 tests; typecheck,
+lint and test all green. *Not yet proven live:* the tier's real-time headroom on the actual NAS, and
+the escalation firing against a real HEVC channel — both need the provider back.
 
 **v0.45.0 — the video re-encode tier: HEVC channels play on browsers that cannot decode HEVC.**
 The last wall from v0.44.1, closed. Some Chromium builds answer `isTypeSupported(hvc1)` → true and
@@ -392,13 +408,14 @@ failures live, name them plainly, and let the operator fix them from just the me
   out-of-window, stampede, no-window); live verification against a real heavy channel is pending the
   provider's return (it relayed a 4K Newcastle feed directly with zero refusals in the one window tested
   before the provider went down).
-- **A video re-encode tier for HEVC-incapable browsers.** *Shipped in v0.45.0.* `videoTranscode:
-  true` on /api/transcode/start re-encodes to H.264 (libx264, 25 fps, CRF 23, yuv420p, an explicit
-  4s GOP), and the player's media-error ladder escalates to it once when a session exhausts its
-  recoveries. What is left is operational rather than functional: what a 4K HEVC→H.264 re-encode
-  costs a NAS CPU in real time (the tier caps the framerate but not the resolution — a `scale` cap
-  is the obvious knob if a real UHD channel cannot keep up), and whether the escalation fires
-  against a real HEVC channel, which needs the provider up.
+- **A video re-encode tier for HEVC-incapable browsers.** *Shipped in v0.45.0; resolution-capped in
+  v0.46.0.* `videoTranscode: true` on /api/transcode/start re-encodes to H.264 (libx264, 25 fps,
+  CRF 23, yuv420p, an explicit 4s GOP), and the player's media-error ladder escalates to it once when
+  a session exhausts its recoveries. v0.46.0 closed the one gap v0.45.0 named: the output is now
+  capped at 1080p by default (`scale=-2:'min(1080,ih)'`, never upscaling), so a UHD channel is no
+  longer re-encoded at 4K. What is left is operational: the tier's real-time headroom on the actual
+  NAS (1080p25 should hold; `TRANSCODE_VIDEO_MAX_HEIGHT=720` is the next step down if it does not),
+  and whether the escalation fires against a real HEVC channel — both need the provider up.
 - **Widen the undecodable-audio check beyond Dolby.** *Open.* The check that decides whether to convert a
   stream for audio reasons only considers `ac3`/`eac3`. Sunderland's feed carries **aac HE-AACv2**, which
   is a different question entirely and is not covered — the same blind spot the E-AC-3 fix closed for

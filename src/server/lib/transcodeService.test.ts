@@ -5,7 +5,14 @@ import { tmpdir } from 'os'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { spawn } from 'child_process'
 import { createRequire } from 'module'
-import { createTranscodeService, type TranscodeService, type TranscodeServiceDeps, looksLikePlaylist } from './transcodeService.js'
+import {
+  createTranscodeService,
+  resolveVideoEncodeProfile,
+  looksLikePlaylist,
+  type TranscodeService,
+  type TranscodeServiceDeps,
+  type VideoEncodeProfile
+} from './transcodeService.js'
 
 // See src/server/index.ts's own comment on this same pattern — ffmpeg-static's lack of an
 // "exports" map trips up NodeNext's default-import interop.
@@ -991,6 +998,93 @@ describe('real ffmpeg integration', () => {
       rmSync(fixtureDir, { recursive: true, force: true })
     }
   }, 30000)
+
+  // v0.46.0's resolution cap, proven against the real binary rather than only asserted as argv.
+  // A malformed filtergraph — a comma in `min(1080,ih)` left unquoted, say — would not just skip
+  // the scaling, it would make ffmpeg refuse the entire command, killing every re-encode the
+  // moment it shipped. This is the test that catches that before a UHD channel does: a synthetic
+  // source taller than the cap must come out at the cap, with the aspect ratio kept.
+  async function probeVideoDimensions(segmentPath: string): Promise<{ width: number; height: number }> {
+    if (!ffmpegStaticPath) throw new Error('ffmpeg-static did not resolve a binary for this platform')
+    // Same fMP4 shape as measureRmsAmplitude: a bare .m4s has no moov, so init + segment are
+    // concatenated first whenever the playlist names an init segment.
+    let inputPath = segmentPath
+    const playlistSibling = join(dirname(segmentPath), 'playlist.m3u8')
+    const mapLine = existsSync(playlistSibling)
+      ? readFileSync(playlistSibling, 'utf8').split('\n').find((l) => l.startsWith('#EXT-X-MAP:'))
+      : undefined
+    const mapUri = mapLine?.match(/URI="([^"]+)"/)?.[1]
+    if (mapUri) {
+      const initPath = join(dirname(segmentPath), mapUri)
+      if (existsSync(initPath)) {
+        const combined = `${segmentPath}.dimensions.mp4`
+        writeFileSync(combined, Buffer.concat([readFileSync(initPath), readFileSync(segmentPath)]))
+        inputPath = combined
+      }
+    }
+    let stderr = ''
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(
+        ffmpegStaticPath as string,
+        ['-nostdin', '-probesize', '5M', '-analyzeduration', '10M', '-i', inputPath],
+        { stdio: ['ignore', 'ignore', 'pipe'] }
+      )
+      proc.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8')
+      })
+      proc.on('error', reject)
+      proc.on('close', () => resolve())
+    })
+    if (inputPath !== segmentPath) rmSync(inputPath, { force: true })
+    const match = /Video: \S+.*, (\d{2,5})x(\d{2,5})/.exec(stderr)
+    if (!match) throw new Error(`could not read a video size from ffmpeg's report: ${stderr.slice(-800)}`)
+    return { width: Number(match[1]), height: Number(match[2]) }
+  }
+
+  it('caps a taller source at the configured height, keeping the aspect ratio', async () => {
+    if (!ffmpegStaticPath) throw new Error('ffmpeg-static did not resolve a binary for this platform')
+
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-scale-cap-'))
+    // 640x480 with a 240 cap: the output has to be 320x240 — genuinely scaled, aspect kept, and
+    // small enough that the real encode stays fast. Twenty seconds of source on purpose: the
+    // origin below is throttled so this remux-exit race cannot fire (see startSyntheticOrigin),
+    // and a 6s clip was short enough that ffmpeg reached EOF and deleted its own session
+    // directory — segment and all — between startTranscode returning and the read below.
+    const inputPath = join(fixtureDir, 'synthetic-tall-input.mkv')
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpegStaticPath as string, [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=20:size=640x480:rate=25',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=20',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '25', '-keyint_min', '25',
+        '-c:a', 'aac', '-b:a', '96k',
+        inputPath
+      ])
+      proc.on('error', reject)
+      proc.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`fixture build exited ${code}`))))
+    })
+
+    const { url: originUrl, server } = await startSyntheticOrigin(inputPath, 300)
+    try {
+      const service = track(
+        createTranscodeService({
+          resolveFfmpegPath: resolverFor(ffmpegStaticPath as string),
+          vodDeadlineMs: 30000,
+          pollIntervalMs: 200,
+          videoEncodeProfile: { maxHeight: 240, maxBitrateKbps: null, fps: 25 }
+        })
+      )
+
+      const result = await service.startTranscode(originUrl, true, 'real-scale-cap', 0, 0, true)
+      const segment = join(dirname(result.playlistPath), 'seg_00000.m4s')
+      await waitForStableFileSize(segment)
+      expect(await probeVideoDimensions(segment)).toEqual({ width: 320, height: 240 })
+      await service.stopTranscode('real-scale-cap')
+    } finally {
+      server.close()
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 30000)
 })
 
 describe('live input resilience', () => {
@@ -1061,14 +1155,16 @@ describe('video re-encode tier', () => {
   // The HEVC escape hatch. `-c:v copy` cannot help a browser that claims hvc1 support and then
   // fails the actual decode, so the video has to be genuinely re-encoded to H.264 — and, just as
   // important, the default path must keep copying it for free. These pin both, fast and exactly.
-  async function videoArgsFor(videoTranscode: boolean): Promise<string[]> {
+  async function videoArgsFor(videoTranscode: boolean, profile?: VideoEncodeProfile, label?: string): Promise<string[]> {
+    const key = label ?? (videoTranscode ? 'video' : 'copy')
     const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-video-args-'))
     mkdirSync(join(fixtureDir, 'transcode'), { recursive: true })
-    const argsFile = join(fixtureDir, `args-${videoTranscode ? 'video' : 'copy'}.txt`)
+    const argsFile = join(fixtureDir, `args-${key}.txt`)
     const service = track(
       makeService({
         resolveFfmpegPath: async () => FAKE_FFMPEG,
-        tmpDir: join(fixtureDir, 'transcode')
+        tmpDir: join(fixtureDir, 'transcode'),
+        ...(profile ? { videoEncodeProfile: profile } : {})
       })
     )
     try {
@@ -1077,7 +1173,7 @@ describe('video re-encode tier', () => {
           await service.startTranscode(
             'https://upstream.example/live/user/pass/1.m3u8',
             false,
-            `s-video-${videoTranscode}`,
+            `s-${key}`,
             0,
             0,
             videoTranscode
@@ -1098,6 +1194,11 @@ describe('video re-encode tier', () => {
     expect(args).not.toContain('-preset')
     expect(args).not.toContain('-pix_fmt')
     expect(args).not.toContain('-g')
+    // v0.46.0: the resolution cap and the bitrate ceiling belong to the re-encode tier alone. A
+    // channel the browser can decode is still copied at its own resolution and bitrate.
+    expect(args).not.toContain('-vf')
+    expect(args).not.toContain('-maxrate')
+    expect(args).not.toContain('-bufsize')
   })
 
   it('re-encodes the video to H.264 at ~25 fps when the video tier is requested', async () => {
@@ -1113,12 +1214,62 @@ describe('video re-encode tier', () => {
     const vf = args.indexOf('-vf')
     expect(vf).toBeGreaterThanOrEqual(0)
     expect(args[vf + 1]).toContain('fps=25')
+    // v0.46.0's resolution cap, on by default: a UHD (3840x2160) source must not be re-encoded at
+    // 4K, because no NAS CPU does that in real time. min() rather than a bare 1080 is what makes
+    // it a cap and not a resize — a 720p or 1080p channel is never upscaled.
+    expect(args[vf + 1]).toContain("scale=-2:'min(1080,ih)'")
     // A keyframe every 4s (100 frames at 25 fps), or the HLS muxer cannot close a segment until the
     // source ends — measured: with libx264's default ~10s keyframe interval the session's playlist
     // did not appear until EOF, which for a live channel is never.
     const g = args.indexOf('-g')
     expect(g).toBeGreaterThanOrEqual(0)
     expect(args[g + 1]).toBe('100')
+    // The bitrate ceiling is opt-in, not bundled with the resolution cap.
+    expect(args).not.toContain('-maxrate')
+    expect(args).not.toContain('-bufsize')
+  })
+
+  it('leaves the resolution alone when the cap is switched off', async () => {
+    const args = await videoArgsFor(true, { maxHeight: null, maxBitrateKbps: null, fps: 25 }, 'uncapped')
+    const vf = args.indexOf('-vf')
+    expect(vf).toBeGreaterThanOrEqual(0)
+    expect(args[vf + 1]).toBe('fps=25')
+    expect(args).not.toContain('-maxrate')
+  })
+
+  it('honours a lower cap, and a bitrate ceiling when the environment asks for one', async () => {
+    const args = await videoArgsFor(true, { maxHeight: 720, maxBitrateKbps: 6000, fps: 25 }, 'capped-720')
+    const vf = args.indexOf('-vf')
+    expect(vf).toBeGreaterThanOrEqual(0)
+    expect(args[vf + 1]).toContain('fps=25')
+    expect(args[vf + 1]).toContain("scale=-2:'min(720,ih)'")
+    const maxrate = args.indexOf('-maxrate')
+    expect(maxrate).toBeGreaterThanOrEqual(0)
+    expect(args[maxrate + 1]).toBe('6000k')
+    // 2x maxrate, the usual HLS-friendly buffer shape.
+    expect(args[args.indexOf('-bufsize') + 1]).toBe('12000k')
+  })
+})
+
+describe('video encode profile', () => {
+  it('caps at 1080p when the environment says nothing', () => {
+    expect(resolveVideoEncodeProfile({})).toEqual({ maxHeight: 1080, maxBitrateKbps: null, fps: 25 })
+  })
+
+  it('treats an explicit 0, empty, or garbage value as "no cap", not as a broken encode', () => {
+    expect(resolveVideoEncodeProfile({ TRANSCODE_VIDEO_MAX_HEIGHT: '0' }).maxHeight).toBeNull()
+    expect(resolveVideoEncodeProfile({ TRANSCODE_VIDEO_MAX_HEIGHT: '  ' }).maxHeight).toBeNull()
+    expect(resolveVideoEncodeProfile({ TRANSCODE_VIDEO_MAX_HEIGHT: 'nonsense' }).maxHeight).toBeNull()
+  })
+
+  it('reads a height and a bitrate ceiling', () => {
+    const profile = resolveVideoEncodeProfile({
+      TRANSCODE_VIDEO_MAX_HEIGHT: '720',
+      TRANSCODE_VIDEO_MAXRATE_KBPS: '6000'
+    })
+    expect(profile.maxHeight).toBe(720)
+    expect(profile.maxBitrateKbps).toBe(6000)
+    expect(profile.fps).toBe(25)
   })
 })
 

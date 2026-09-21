@@ -131,6 +131,75 @@ export function resolveTranscodeDir(): string {
   return configured && configured.length > 0 ? configured : tmpdir()
 }
 
+/**
+ * The video re-encode tier's output shape.
+ *
+ * v0.45.0 gave the tier a framerate cap and deliberately left the resolution alone — which is
+ * exactly backwards for the case the tier actually runs on: the UHD channels are 3840x2160 HEVC,
+ * and re-encoding 4K in real time is not something this app's host (a NAS CPU) can do. The session
+ * falls behind the live edge and the viewer sees a stream that never catches up — the measured
+ * shape of "the UHD channels don't play well", while TiviMate plays them because a native player
+ * decodes HEVC in hardware and never re-encodes at all. Scaling down first is the one lever that
+ * changes the encoder's cost: 1080p is roughly a quarter of the pixels of 2160p, and it is the
+ * shape every plain channel already plays.
+ */
+export interface VideoEncodeProfile {
+  /** Nothing taller than this is ever encoded. `null` keeps the source's own resolution. */
+  maxHeight: number | null
+  /** Capped-CRF ceiling in kbit/s. `null` leaves x264's own rate control alone (the default). */
+  maxBitrateKbps: number | null
+  /** The framerate cap — 25 fps, the shape every plain channel already plays. */
+  fps: number
+}
+
+/** The default cap. 1080p is the tallest output a browser-relayed H.264 stream needs to be here,
+ *  and about a quarter of the work of the 4K source that actually triggers this tier. */
+export const DEFAULT_VIDEO_MAX_HEIGHT = 1080
+export const DEFAULT_VIDEO_FPS = 25
+
+/** A positive integer, or null when the value is absent, empty, 0, or unparseable — so "0" and a
+ *  typo both mean "no cap" rather than silently breaking the encode with a nonsense number. */
+function optionalPositiveInt(raw: string | undefined): number | null {
+  const value = Number((raw ?? '').trim())
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null
+}
+
+/**
+ * Reads the tier's shape from the environment: `TRANSCODE_VIDEO_MAX_HEIGHT` (default
+ * DEFAULT_VIDEO_MAX_HEIGHT; `0` or an empty value switches the cap off entirely) and
+ * `TRANSCODE_VIDEO_MAXRATE_KBPS` (off unless set — the resolution cap is what buys real time, and
+ * a bitrate ceiling changes the picture in a way nobody asked for; it is the knob for a host whose
+ * *network* rather than its CPU is the limit, since every viewer's output is relayed through it).
+ *
+ * Pure and env-parameterised so the parsing is testable without spawning anything.
+ */
+export function resolveVideoEncodeProfile(env: Record<string, string | undefined> = process.env): VideoEncodeProfile {
+  return {
+    maxHeight:
+      env.TRANSCODE_VIDEO_MAX_HEIGHT === undefined
+        ? DEFAULT_VIDEO_MAX_HEIGHT
+        : optionalPositiveInt(env.TRANSCODE_VIDEO_MAX_HEIGHT),
+    maxBitrateKbps: optionalPositiveInt(env.TRANSCODE_VIDEO_MAXRATE_KBPS),
+    fps: DEFAULT_VIDEO_FPS
+  }
+}
+
+/**
+ * The `-vf` chain for the re-encode tier. `fps` first (the cheapest possible reduction), then the
+ * scale cap. `min(<maxHeight>,ih)` is what makes it a *cap* and not a resize: a 720p or 1080p
+ * channel passes through untouched — no upscaling, no wasted work — and only a taller source is
+ * scaled down. `-2` keeps the aspect ratio and lands on an even width, which yuv420p requires.
+ * The single quotes around the expression are filtergraph quoting, not shell quoting (spawn hands
+ * this over as one argv element), and they are what protect the comma inside min() from being read
+ * as the separator that starts a second filter — the real-ffmpeg integration test runs this exact
+ * shape end to end, because a malformed one would fail every re-encode, not just the scaling.
+ */
+export function videoFilterChain(profile: VideoEncodeProfile): string {
+  const filters = [`fps=${profile.fps}`]
+  if (profile.maxHeight !== null) filters.push(`scale=-2:'min(${profile.maxHeight},ih)'`)
+  return filters.join(',')
+}
+
 /** Bytes on disk under a directory, tolerating entries that disappear mid-walk. */
 async function directorySize(dir: string): Promise<number> {
   let entries: string[]
@@ -241,6 +310,10 @@ export interface TranscodeServiceDeps {
   // Where ffmpeg writes its HLS output. Defaults to resolveTranscodeDir() (TRANSCODE_TMP_DIR,
   // else the OS temp dir) — overridable so tests write into their own scratch directory.
   tmpDir?: string
+  // The video re-encode tier's output shape (resolution cap, bitrate ceiling, framerate). Defaults
+  // to resolveVideoEncodeProfile() — the TRANSCODE_VIDEO_* environment — and is overridable so a
+  // test can pin an exact -vf chain instead of whatever the ambient environment carries.
+  videoEncodeProfile?: VideoEncodeProfile
   // A session whose output no client has asked for in this long is stopped (default 2 minutes):
   // the viewer is gone and ffmpeg is only filling the disk and holding a provider connection.
   idleStopMs?: number
@@ -341,6 +414,9 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
   // supposed to be a quick, no-output probe.
   const probeTimeoutMs = deps.probeTimeoutMs ?? 30000
   const tmpDir = deps.tmpDir ?? resolveTranscodeDir()
+  // The re-encode tier's resolution/bitrate shape, resolved once per service (see
+  // resolveVideoEncodeProfile) so every session in this process encodes the same way.
+  const videoEncodeProfile = deps.videoEncodeProfile ?? resolveVideoEncodeProfile()
   const idleStopMs = deps.idleStopMs ?? 120_000
   const idleSweepMs = deps.idleSweepMs ?? 15_000
 
@@ -499,6 +575,13 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       // 8-bit yuv420p (the 10-bit HDR feeds must land in a pixel format Chromium's MSE accepts),
       // and a fast preset so a NAS CPU can keep up with real time. Nothing here is emitted on the
       // common copy path, so it costs that path nothing.
+      //
+      // v0.46.0 adds the one dimension v0.45.0 left alone: resolution. Capping the framerate
+      // without capping the resolution meant a UHD (3840x2160) channel was re-encoded *at 4K*,
+      // which no NAS CPU does in real time — the session fell behind the live edge, which is the
+      // measured shape of "the UHD channels don't play well" (TiviMate plays them because it
+      // decodes HEVC in hardware and never re-encodes at all). See resolveVideoEncodeProfile for
+      // the cap itself and why 1080p is the default.
       ...(videoTranscode
         ? [
             '-preset',
@@ -506,9 +589,15 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
             '-crf',
             '23',
             '-vf',
-            'fps=25',
+            videoFilterChain(videoEncodeProfile),
             '-pix_fmt',
             'yuv420p',
+            // Optional capped-CRF ceiling, off unless TRANSCODE_VIDEO_MAXRATE_KBPS asks for it:
+            // the resolution cap is what buys real time, and a bitrate ceiling changes the picture
+            // in a way nobody asked for. bufsize is 2x maxrate, the usual hls-friendly shape.
+            ...(videoEncodeProfile.maxBitrateKbps !== null
+              ? ['-maxrate', `${videoEncodeProfile.maxBitrateKbps}k`, '-bufsize', `${videoEncodeProfile.maxBitrateKbps * 2}k`]
+              : []),
             // A fixed 4s GOP, matching -hls_time below. This is not cosmetic: the HLS muxer only
             // splits a segment at a keyframe, and libx264's default keyframe interval is ~10s at
             // 25 fps — so the first segment could not close until the input was nearly over.

@@ -34,6 +34,14 @@ services:
       # a feature-length title at ~10 Mbps is comfortably into the gigabytes. Give this volume
       # room, and check the System tab's free-space readout if you are unsure.
       - TRANSCODE_TMP_DIR=/transcode
+      # The video re-encode tier (a channel whose video this browser cannot decode) caps its output
+      # at 1080p by default, so a 4K channel is not re-encoded at 4K on this CPU — which no NAS can
+      # do in real time. Set 0 to keep the source's own resolution, or a lower number (720) to trade
+      # picture for CPU headroom.
+      # - TRANSCODE_VIDEO_MAX_HEIGHT=1080
+      # Optional capped-CRF ceiling (kbit/s) on the same tier, for a host whose *network* rather
+      # than its CPU is the limit: every viewer's output is relayed through it. Off unless set.
+      # - TRANSCODE_VIDEO_MAXRATE_KBPS=8000
     volumes:
       # Persistent storage, mapped read-write: survives container recreation and image
       # updates. Without this, an update wipes accounts and everyone lands back on the
