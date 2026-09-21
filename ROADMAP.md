@@ -1,5 +1,13 @@
 # Roadmap
 
+**Correction, 2026-09-21 (after v0.46.1).** Two entries below said live verification was pending
+because "the provider has been down since 2026-09-20". That came from the 2026-09-20 session's own
+notes and was carried forward without re-checking — the provider was back. What actually blocks the
+live proof is deployment: the running deployment was still on v0.44.1, so no real channel had been
+exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries now say that instead.
+Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
+check it before repeating it into a release note.
+
 Recommended enhancements for future development, refreshed **2026-09-21 against v0.46.1**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
@@ -18,8 +26,8 @@ unit-tested in `transcodeFallback.test.ts`) now decides the shape — a repeated
 session escalates to the video re-encode tier once, which v0.46.0's cap makes a genuinely cheaper
 target than the 4K relay it replaces, after which that rung retires and the session is replaced in
 place exactly as before. A run that is not on a transcode session is unchanged. 470 tests; typecheck,
-lint and test all green. *Not proven live:* as with v0.46.0, the provider has been down since
-2026-09-20.
+lint and test all green. *Not proven live:* as with v0.46.0, this needs a deployment running this
+build.
 
 **v0.46.0 — the re-encode tier caps resolution: UHD channels are no longer re-encoded at 4K.**
 The open question v0.45.0 named, closed. That tier capped the framerate (25 fps) but left the
@@ -35,7 +43,7 @@ for the copy path emitting none of it; pure tests for the env parsing (0, empty 
 "no cap" rather than a broken encode); and a real-ffmpeg integration test that runs a taller
 synthetic source through the tier and reads the output's real dimensions back. 466 tests; typecheck,
 lint and test all green. *Not yet proven live:* the tier's real-time headroom on the actual NAS, and
-the escalation firing against a real HEVC channel — both need the provider back.
+the escalation firing against a real HEVC channel — both need a deployment running this build.
 
 **v0.45.0 — the video re-encode tier: HEVC channels play on browsers that cannot decode HEVC.**
 The last wall from v0.44.1, closed. Some Chromium builds answer `isTypeSupported(hvc1)` → true and
@@ -56,7 +64,7 @@ explicit `-g 100 -keyint_min 100 -sc_threshold 0` (100 frames at fps=25 is exact
 fixes it. Second, the default path is untouched: none of these flags are emitted when the video is
 merely copied — a test pins that too. 460 tests; typecheck, lint and test all green. *Not yet proven
 live:* the tier's encode throughput on a NAS CPU, and the escalation firing against a real HEVC
-channel — the provider has been down since 2026-09-20, so that proof resumes with it.
+channel — both need a deployment running this build (see the correction note at the top).
 
 **v0.44.1 — fMP4 transcode segments: HEVC channels can finally play through the fallback.**
 Found live on the Sky Sports channels (UHD and FHD alike — the whole family is HEVC video +
@@ -429,7 +437,8 @@ failures live, name them plainly, and let the operator fix them from just the me
   capped at 1080p by default (`scale=-2:'min(1080,ih)'`, never upscaling), so a UHD channel is no
   longer re-encoded at 4K. What is left is operational: the tier's real-time headroom on the actual
   NAS (1080p25 should hold; `TRANSCODE_VIDEO_MAX_HEIGHT=720` is the next step down if it does not),
-  and whether the escalation fires against a real HEVC channel — both need the provider up. One hole
+  and whether the escalation fires against a real HEVC channel — both need a deployment running this
+  build. One hole
   is left here deliberately: a *direct* relay that stalls (no session yet) still exhausts its reloads
   and gives up rather than converting. Converting a stream that never asked for it can burn one of the
   account's two connections against a provider that is simply down, so that rung wants live

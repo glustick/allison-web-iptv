@@ -52,8 +52,9 @@ default ~10s GOP left the first segment unclosed until the input was nearly over
 throttled source the session's playlist never appeared at all until EOF, which for a live channel
 means forever — hence an explicit 4s GOP matching `-hls_time`; and the plain copy path still emits
 none of this. 460 tests; typecheck, lint and test all green. *Not yet verified live:* the tier's
-encode throughput on a NAS CPU, and the escalation against a real HEVC channel — the provider has
-been down since 2026-09-20, so the live proof resumes with it.
+encode throughput on a NAS CPU, and the escalation against a real HEVC channel — both need a
+deployment actually running this build. (This entry and two others originally blamed a provider
+outage; that was wrong — see the correction note at the top of `ROADMAP.md`.)
 
 **v0.44.1** makes the Sky Sports/EPL family (HEVC video + E-AC-3 audio — unplayable natively
 in any browser, native in TiviMate-class players) actually work through the transcode
