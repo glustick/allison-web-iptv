@@ -65,7 +65,10 @@ session escalates to the video re-encode tier once, which v0.46.0's cap makes a 
 target than the 4K relay it replaces, after which that rung retires and the session is replaced in
 place exactly as before. A run that is not on a transcode session is unchanged. 470 tests; typecheck,
 lint and test all green. *Not proven live:* as with v0.46.0, this needs a deployment running this
-build.
+build. **Reversed in v0.46.3, two hours later:** escalating a stutter into a downscale traded the
+viewer's picture for smoothness without being asked, which is not the stall ladder's call to make — a
+stalled session is now replaced in the shape it already has. Left in the record for the reasoning, not
+because it is current.
 
 **v0.46.0 — the re-encode tier caps resolution: UHD channels are no longer re-encoded at 4K.**
 The open question v0.45.0 named, closed. That tier capped the framerate (25 fps) but left the
@@ -445,6 +448,26 @@ failures live, name them plainly, and let the operator fix them from just the me
 
 ### 1. Live TV & playback
 
+- **Verify native playback live, and let it reach further.** *Open (v0.46.3, unverified).* Live TV now
+  prefers the browser's own HLS pipeline wherever one exists — Safari has had one all along, and
+  forcing hls.js instead is what put every HEVC / 10-bit HDR / Dolby stream through a JavaScript demux
+  into MSE, and therefore what made transcoding look necessary at all. What is left: prove it against a
+  real 4K feed (blocked — see the placeholder note above), decide whether the VOD/series player should
+  prefer native the same way for HLS sources (it already uses a plain `<video src>` for direct files),
+  and record what is given up on that path (the in-app audio/subtitle switcher is an hls.js facility;
+  native playback delegates track selection to the browser).
+- **Say "this channel isn't broadcasting" instead of looping.** *Open.* The provider currently answers
+  every channel with a repeating placeholder behind a playlist that never advances (measured; see
+  above). The app cannot tell that apart from a broken channel, so it spends its entire recovery ladder
+  on it — reloads, session restarts, and one of the account's two provider connections per attempt. A
+  non-advancing-playlist detector, plus a message that says so, turns a mystery black screen into one
+  sentence. Wants one live browser reproduction first to pin the exact signal hls.js reports — worth
+  measuring rather than guessing at, given how much of this project's history is exactly that.
+- **A quality selector in the player.** *Open.* The re-encode tier's cap is an environment variable, so
+  changing it means a redeploy, and since v0.46.3 its default is the honest one: keep the source's
+  resolution. A per-device control (Source / 1080p / 720p) would let a viewer make that trade
+  deliberately, when their own host cannot keep up, instead of the app making it for them. This is the
+  piece of the "player settings that persist" item below that the UHD question actually needs.
 - **Player settings that persist.** *Open (partial).* `TrackControls` lets you switch audio /
   subtitle tracks live, but the choice resets per session and there is no quality or
   subtitle-styling surface. Persist the selected tracks per saved profile and add a compact
