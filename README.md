@@ -725,6 +725,19 @@ app at least once.
   answers becomes a 504 with a sentence instead of a hang.
 - **`max_connections` is 2.** Anything that opens a second connection on the same account can starve
   playback, which is why transcode sessions are never pre-warmed.
+- **Every channel can answer with a repeating placeholder while the panel still looks perfectly
+  healthy.** Measured 2026-09-21: the panel reported `reachable: true, auth: 1, Active, 0/2
+  connections`, while *every* channel sampled — 4K (Sky Sports UHD, TNT Sports Ultimate), news (Sky
+  News, BBC One HD, Scripps), US local affiliates, niche feeds — returned **byte-identical media**: one
+  shared ~2-minute loop, 1920x1080 H.264 at ~435 kb/s with **4 kb/s audio** (i.e. silent), on both the
+  HLS path and the raw `.ts` path. The HLS playlist also never advances: every refresh answers
+  `#EXT-X-MEDIA-SEQUENCE:0` with the same segment indices (`0.ts, 1.ts, …`), and only the containing
+  token directory changes. A native player plays that loop smoothly; hls.js cannot build a monotonic
+  live timeline out of it, so this app's recovery ladder can spend its whole budget cycling against a
+  channel that was never broadcasting. **"The provider is down" and "the provider is serving a
+  placeholder" look nothing alike from the panel and only one of them is a bug worth chasing** — check
+  a channel known to be live before debugging the player, and note that an event-only channel outside
+  its event is the most likely source of this.
 
 ## Backup, restore and system health (admin → **System** tab)
 
