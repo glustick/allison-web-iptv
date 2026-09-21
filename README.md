@@ -6,7 +6,24 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.44.1 — fMP4 transcode segments; HEVC channels playable)
+## Current state (v0.45.0 — the video re-encode tier; HEVC channels play on browsers that cannot decode HEVC)
+
+**v0.45.0** closes the per-browser wall v0.44.1 left behind. Some Chromium builds answer
+`isTypeSupported(hvc1)` → true and then fail the actual append (`mediaSourceRequiresReset`) — so a
+session that stream-copies HEVC can never play there, no matter how many times it recovers. This
+release adds the last tier: `videoTranscode: true` on `/api/transcode/start` re-encodes the video
+with libx264 (~25 fps, CRF 23, 8-bit yuv420p so the 10-bit HDR feeds land somewhere Chromium's MSE
+will accept), and the player's media-error ladder reaches it — a session that exhausts its
+recoveries and still cannot decode is replaced once by a re-encoding session, then gives up with the
+message it always gave. The requirement is *remembered per device*, so the next play of that channel
+goes straight to H.264 instead of paying for a copy session it will abandon. Two things the real
+binary taught, both pinned by tests: the HLS muxer only splits a segment at a keyframe, so libx264's
+default ~10s GOP left the first segment unclosed until the input was nearly over — measured against a
+throttled source the session's playlist never appeared at all until EOF, which for a live channel
+means forever — hence an explicit 4s GOP matching `-hls_time`; and the plain copy path still emits
+none of this. 460 tests; typecheck, lint and test all green. *Not yet verified live:* the tier's
+encode throughput on a NAS CPU, and the escalation against a real HEVC channel — the provider has
+been down since 2026-09-20, so the live proof resumes with it.
 
 **v0.44.1** makes the Sky Sports/EPL family (HEVC video + E-AC-3 audio — unplayable natively
 in any browser, native in TiviMate-class players) actually work through the transcode
@@ -16,10 +33,8 @@ server learned to serve the init segment the playlist references (its absence 40
 player's very first fetch and churned every session), and the audio keeps its source channel
 layout (5.1 stays 5.1 AAC 384k) instead of folding to stereo. One caveat measured live:
 some Chromium builds claim HEVC support and fail the actual decode — on browsers with real
-HEVC support (Safari; Chrome with working hardware decode) these channels now play; a
-video re-encode tier for the rest is the next roadmap item.
-
-**v0.44.0** fixes the root cause behind the heavy-channel conversions in the relay itself: when
+HEVC support (Safari; Chrome with working hardware decode) these channels play; the rest are
+served by v0.45.0's video re-encode tier above.
 
 **v0.44.0** fixes the root cause behind the heavy-channel conversions in the relay itself: when
 the provider's ~25-second signed segment URLs expire mid-playlist (the measured 400/xxx pattern

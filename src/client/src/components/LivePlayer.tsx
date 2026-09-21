@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
-import { noteStreamNeedsTranscode, streamNeedsTranscode } from '../lib/transcodeHints'
+import { noteStreamNeedsTranscode, streamNeedsTranscode, streamNeedsVideoTranscode } from '../lib/transcodeHints'
 import { sniffStreamKind } from '../lib/streamKind'
 import { probeAudioTracks } from '../lib/audioTrackProbe'
 import { useSessionExpired } from '../lib/sessionWatch'
@@ -73,7 +73,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const audioPrefAppliedRef = useRef(false)
   const subtitlePrefAppliedRef = useRef(false)
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
-  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback } = useTranscodeFallback()
+  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback, escalateToVideoTranscode } = useTranscodeFallback()
   // Recovery ladder state, deliberately on the component (not in the effect): the effect is
   // torn down and rebuilt by every reload tick, and an attempt counter that reset with it
   // would loop forever instead of ever escalating.
@@ -98,7 +98,9 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     // fallback has produced a URL, this has to fall through and hand *that* to hls.js; returning here
     // regardless is what left a freshly started transcode unfetched and the screen black.
     if (streamNeedsTranscode(url) && getSourceUrl(url) === url) {
-      tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
+      // A channel that only played once its video was re-encoded goes straight to that tier on the
+      // next play, rather than paying for a copy session this browser will abandon.
+      tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message), streamNeedsVideoTranscode(url))
       return
     }
     const sourceUrl = getSourceUrl(url)
@@ -438,6 +440,17 @@ let stallCount = 0
                 setError(null)
                 instance.destroy()
                 tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
+                break
+              }
+              // Already on the transcoder's output and still unable to decode: this is the
+              // HEVC-incapable browser — measured on this project's own test machine, a Chromium
+              // build that answers isTypeSupported(hvc1) → true and then fails the actual append
+              // (mediaSourceRequiresReset). The session's video is a stream-copy of source HEVC, so
+              // nothing about the session is wrong; only a real H.264 re-encode can help. Escalate
+              // to that tier once before giving up.
+              if (escalateToVideoTranscode(url, () => setReloadTick((t) => t + 1), (message) => setError(message))) {
+                setError(null)
+                instance.destroy()
                 break
               }
               fatalErrorShown = true

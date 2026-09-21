@@ -432,10 +432,13 @@ describe('real ffmpeg integration', () => {
   // takes far longer than one poll interval to fully read+remux regardless of copy-mode
   // speed — so this throttles the fixture to be realistic instead of changing production
   // code to work around an artifact of an unrealistically tiny, instantly-served test input.
-  async function startSyntheticOrigin(inputPath: string): Promise<{ url: string; server: Server }> {
+  const CHUNK_SIZE = 32 * 1024
+  const CHUNK_DELAY_MS = 100
+  async function startSyntheticOrigin(
+    inputPath: string,
+    chunkDelayMs = CHUNK_DELAY_MS
+  ): Promise<{ url: string; server: Server }> {
     const fileData = readFileSync(inputPath)
-    const CHUNK_SIZE = 32 * 1024
-    const CHUNK_DELAY_MS = 100
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       void req
       res.writeHead(200, { 'content-type': 'video/x-matroska' })
@@ -447,7 +450,7 @@ describe('real ffmpeg integration', () => {
         }
         res.write(fileData.subarray(offset, offset + CHUNK_SIZE))
         offset += CHUNK_SIZE
-        setTimeout(sendNextChunk, CHUNK_DELAY_MS)
+        setTimeout(sendNextChunk, chunkDelayMs)
       }
       sendNextChunk()
     })
@@ -922,6 +925,72 @@ describe('real ffmpeg integration', () => {
       rmSync(fixtureDir, { recursive: true, force: true })
     }
   }, 30000)
+
+  it('produces a playable playlist when the video is re-encoded to H.264', async () => {
+    if (!ffmpegStaticPath) throw new Error('ffmpeg-static did not resolve a binary for this platform')
+
+    // The argv-level proof that videoTranscode really swaps `-c:v copy` for libx264 lives in the
+    // "video re-encode tier" describe below, where it is exact and fast. This proves the other
+    // half: that those flags are a command this project's real bundled ffmpeg accepts and turns
+    // into a playable session. An unknown option or a bad filter exits immediately here — exactly
+    // the class of defect that has bitten this file before (-seg_max_retry, argued about and then
+    // measured).
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-test-fixture-'))
+    const inputPath = join(fixtureDir, 'synthetic-video-input.mkv')
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpegStaticPath as string, [
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=12:size=320x240:rate=10',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=12',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-g',
+        '10',
+        '-keyint_min',
+        '10',
+        '-c:a',
+        'ac3',
+        inputPath
+      ])
+      proc.on('error', reject)
+      proc.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`fixture build exited ${code}`))))
+    })
+
+    // Slower origin and a faster poll than the other integration tests use: re-encoding a tiny,
+    // instantly-served synthetic clip can finish — segments, playlist and clean process exit — in
+    // less than one 200ms poll interval, and the exit handler deletes the session directory on any
+    // exit, success included (the race this file's own startSyntheticOrigin comment documents).
+    const { url: originUrl, server } = await startSyntheticOrigin(inputPath, 400)
+    try {
+      const service = track(
+        createTranscodeService({
+          resolveFfmpegPath: resolverFor(ffmpegStaticPath as string),
+          vodDeadlineMs: 30000,
+          pollIntervalMs: 50
+        })
+      )
+
+      const result = await service.startTranscode(originUrl, true, 'real-video', 0, 0, true)
+
+      expect(readFileSync(result.playlistPath, 'utf8')).toContain('#EXTM3U')
+      const dir = join(result.playlistPath, '..')
+      const segment = readFileSync(join(dir, 'seg_00000.m4s'))
+      expect(segment.byteLength).toBeGreaterThan(0)
+
+      await service.stopTranscode('real-video')
+    } finally {
+      server.close()
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 30000)
 })
 
 describe('live input resilience', () => {
@@ -985,6 +1054,71 @@ describe('live input resilience', () => {
     // Matroska/MP4 input fails the whole transcode before a single frame is read.
     const args = await argsFor(true)
     expect(args).not.toContain('-live_start_index')
+  })
+})
+
+describe('video re-encode tier', () => {
+  // The HEVC escape hatch. `-c:v copy` cannot help a browser that claims hvc1 support and then
+  // fails the actual decode, so the video has to be genuinely re-encoded to H.264 — and, just as
+  // important, the default path must keep copying it for free. These pin both, fast and exactly.
+  async function videoArgsFor(videoTranscode: boolean): Promise<string[]> {
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-video-args-'))
+    mkdirSync(join(fixtureDir, 'transcode'), { recursive: true })
+    const argsFile = join(fixtureDir, `args-${videoTranscode ? 'video' : 'copy'}.txt`)
+    const service = track(
+      makeService({
+        resolveFfmpegPath: async () => FAKE_FFMPEG,
+        tmpDir: join(fixtureDir, 'transcode')
+      })
+    )
+    try {
+      await withEnv({ FAKE_FFMPEG_ARGS_FILE: argsFile }, () =>
+        withFakeFfmpegMode('dump_args', async () => {
+          await service.startTranscode(
+            'https://upstream.example/live/user/pass/1.m3u8',
+            false,
+            `s-video-${videoTranscode}`,
+            0,
+            0,
+            videoTranscode
+          )
+        })
+      )
+      return readFileSync(argsFile, 'utf8').split('\n').filter(Boolean)
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }
+
+  it('stream-copies the video by default, so the common path pays nothing', async () => {
+    const args = await videoArgsFor(false)
+    const i = args.indexOf('-c:v')
+    expect(i).toBeGreaterThanOrEqual(0)
+    expect(args[i + 1]).toBe('copy')
+    expect(args).not.toContain('-preset')
+    expect(args).not.toContain('-pix_fmt')
+    expect(args).not.toContain('-g')
+  })
+
+  it('re-encodes the video to H.264 at ~25 fps when the video tier is requested', async () => {
+    const args = await videoArgsFor(true)
+    const i = args.indexOf('-c:v')
+    expect(i).toBeGreaterThanOrEqual(0)
+    expect(args[i + 1]).toBe('libx264')
+    // yuv420p, not the 10-bit format the UHD HDR feeds carry: Chromium's MSE will not append HDR.
+    const pix = args.indexOf('-pix_fmt')
+    expect(pix).toBeGreaterThanOrEqual(0)
+    expect(args[pix + 1]).toBe('yuv420p')
+    // The framerate cap, matching the shape every plain channel already plays.
+    const vf = args.indexOf('-vf')
+    expect(vf).toBeGreaterThanOrEqual(0)
+    expect(args[vf + 1]).toContain('fps=25')
+    // A keyframe every 4s (100 frames at 25 fps), or the HLS muxer cannot close a segment until the
+    // source ends — measured: with libx264's default ~10s keyframe interval the session's playlist
+    // did not appear until EOF, which for a live channel is never.
+    const g = args.indexOf('-g')
+    expect(g).toBeGreaterThanOrEqual(0)
+    expect(args[g + 1]).toBe('100')
   })
 })
 

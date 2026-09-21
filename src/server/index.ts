@@ -1585,7 +1585,7 @@ function resolveUpstreamUrl(relativeOrAbsolute: string, req: Request): string {
 }
 
 app.post('/api/transcode/start', requireAuth, (req, res) => {
-  const { sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex } = req.body ?? {}
+  const { sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex, videoTranscode } = req.body ?? {}
   if (typeof sourceUrl !== 'string' || typeof sessionId !== 'string') {
     res.status(400).json({ error: 'Missing sourceUrl/sessionId' })
     return
@@ -1598,7 +1598,7 @@ app.post('/api/transcode/start', requireAuth, (req, res) => {
     return
   }
   transcodeService
-    .startTranscode(upstreamUrl, Boolean(isVod), sessionId, subtitleStreamIndex, audioStreamIndex)
+    .startTranscode(upstreamUrl, Boolean(isVod), sessionId, subtitleStreamIndex, audioStreamIndex, Boolean(videoTranscode))
     .then(({ playlistPath, subtitleTracks }) => {
       // Same reasoning as the desktop app's own transcode:start handler: the filename varies
       // (playlist.m3u8 normally, master.m3u8 when a subtitle rendition got included), so

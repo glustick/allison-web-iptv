@@ -59,7 +59,7 @@ interface StartTranscodeResponse {
 export function useTranscodeFallback(): {
   getSourceUrl: (originalUrl: string) => string
   tryFallback: (data: ErrorData, originalUrl: string, onReload: () => void, onError?: (message: string) => void) => boolean
-  tryFallbackForSilentAudio: (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void) => boolean
+  tryFallbackForSilentAudio: (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void, videoTranscode?: boolean) => boolean
   selectTracks: (requested: TrackSelectionRequest, audioTracks?: Array<{ index: number }>, subtitleTracks?: Array<{ index: number; supported?: boolean }>) => TrackSelectionResult
   reset: () => void
   beginRun: () => void
@@ -69,11 +69,20 @@ export function useTranscodeFallback(): {
    *  transcode whose output stopped advancing, where reloading the same dead session id would
    *  leave the picture frozen forever. */
   restartFallback: (originalUrl: string, onReload: () => void, onError?: (message: string) => void) => boolean
+  /** The last rung of the live recovery ladder: a session whose stream-copied video the browser
+   *  cannot decode is replaced by one that re-encodes the video to H.264. Refuses a second try. */
+  escalateToVideoTranscode: (originalUrl: string, onReload: () => void, onError?: (message: string) => void) => boolean
 } {
   const transcodedUrlRef = useRef<string | null>(null)
   const triedRef = useRef(false)
   const awaitingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
+  // How the *current* session is being produced (stream-copy vs full video re-encode), so a
+  // recovery restart replaces it with the same shape rather than regressing a channel this browser
+  // can only play as H.264 back to a copy it cannot decode. videoTriedRef bounds the escalation to
+  // one attempt per run.
+  const videoModeRef = useRef(false)
+  const videoTriedRef = useRef(false)
   const [, forceRender] = useState(0)
 
   const stopSession = useCallback((sessionId: string | null): void => {
@@ -117,6 +126,8 @@ export function useTranscodeFallback(): {
     triedRef.current = false
     awaitingRef.current = false
     transcodedUrlRef.current = null
+    videoModeRef.current = false
+    videoTriedRef.current = false
     const stale = sessionIdRef.current
     sessionIdRef.current = null
     stopSessionRef.current(stale)
@@ -136,7 +147,7 @@ export function useTranscodeFallback(): {
   )
 
   const startFallback = useCallback(
-    (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void): void => {
+    (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void, videoTranscode = false): void => {
       // A URL that is already this app's transcoder output must never be 'converted' again: the
       // fallback would start a second transcode of the same media, stop the first, and hand the player
       // a stream with no history. For live semantics (a rolling six-segment window) the player then
@@ -148,14 +159,19 @@ export function useTranscodeFallback(): {
 
       triedRef.current = true
       awaitingRef.current = true
+      videoModeRef.current = videoTranscode
+      if (videoTranscode) videoTriedRef.current = true
       // This stream needed converting once, so it will again — the next play skips straight to it.
-      noteStreamNeedsTranscode(originalUrl)
+      // Only ever *upgrades* the hint to "needs the video re-encode too": an ordinary audio-only
+      // fallback for a channel that previously needed the video tier must not clear that flag and
+      // cost the next play a second, doomed copy session. (Undefined = leave the flag as found.)
+      noteStreamNeedsTranscode(originalUrl, undefined, videoTranscode ? true : undefined)
       const sessionId = newSessionId()
       sessionIdRef.current = sessionId
       fetch('/api/transcode/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceUrl: originalUrl, isVod, sessionId })
+        body: JSON.stringify({ sourceUrl: originalUrl, isVod, sessionId, videoTranscode })
       })
         .then(async (res) => {
           if (!res.ok) throw new Error((await res.text()) || `transcode start failed: ${res.status}`)
@@ -190,9 +206,9 @@ export function useTranscodeFallback(): {
   // -1` / `-reconnect*` (the signed-URL expiry race those exist for, see transcodeService), and
   // VOD's 240s start deadline instead of live's 45s.
   const tryFallbackForSilentAudio = useCallback(
-    (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void): boolean => {
+    (originalUrl: string, isVod: boolean, onReload: () => void, onError?: (message: string) => void, videoTranscode = false): boolean => {
       if (awaitingRef.current || triedRef.current) return false
-      startFallback(originalUrl, isVod, onReload, onError)
+      startFallback(originalUrl, isVod, onReload, onError, videoTranscode)
       return true
     },
     [startFallback]
@@ -208,7 +224,29 @@ export function useTranscodeFallback(): {
       transcodedUrlRef.current = null
       stopSession(stale)
       triedRef.current = true
-      startFallback(originalUrl, false, onReload, onError)
+      // Preserve the current session's shape — a channel that only plays as re-encoded H.264 must
+      // not be restarted as a stream-copy after a stall.
+      startFallback(originalUrl, false, onReload, onError, videoModeRef.current)
+      return true
+    },
+    [startFallback, stopSession]
+  )
+
+  // The bottom rung of the live media-error ladder (see LivePlayer's MEDIA_ERROR terminal branch).
+  // Arriving here means the player is already on the transcoder's output and still cannot decode
+  // it — the HEVC-incapable-browser case, where the session stream-copies HEVC the browser claimed
+  // to support and then failed to append. Replace it with a session that re-encodes the video to
+  // H.264. Bounded to one attempt so a channel that fails even that gives up instead of looping.
+  const escalateToVideoTranscode = useCallback(
+    (originalUrl: string, onReload: () => void, onError?: (message: string) => void): boolean => {
+      if (awaitingRef.current || videoTriedRef.current) return false
+      // Drop the undecodable session first so the replacement gets its own /__transcode/<id>/ output.
+      const stale = sessionIdRef.current
+      sessionIdRef.current = null
+      transcodedUrlRef.current = null
+      stopSession(stale)
+      triedRef.current = true
+      startFallback(originalUrl, false, onReload, onError, true)
       return true
     },
     [startFallback, stopSession]
@@ -222,6 +260,7 @@ export function useTranscodeFallback(): {
     reset,
     beginRun,
     hasSession,
-    restartFallback
+    restartFallback,
+    escalateToVideoTranscode
   }
 }

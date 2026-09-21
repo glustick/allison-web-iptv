@@ -17,6 +17,10 @@ export const TRANSCODE_HINT_LIMIT = 200
 export interface TranscodeHint {
   url: string
   at: number
+  // Set once a plain stream-copy session proved undecodable on this device, so the next play
+  // starts the video re-encode tier directly instead of paying for a copy session it will have to
+  // abandon. Absent (the common case) means "needs converting" alone.
+  video?: boolean
 }
 
 /** Keeps entries that are well-formed and fresh, newest first, capped. */
@@ -25,10 +29,10 @@ export function pruneHints(raw: unknown, now: number, ttlMs = TRANSCODE_HINT_TTL
   const kept: TranscodeHint[] = []
   for (const entry of raw) {
     if (!entry || typeof entry !== 'object') continue
-    const { url, at } = entry as Partial<TranscodeHint>
+    const { url, at, video } = entry as Partial<TranscodeHint>
     if (typeof url !== 'string' || !url || typeof at !== 'number' || !Number.isFinite(at)) continue
     if (now - at > ttlMs || at > now) continue
-    kept.push({ url, at })
+    kept.push(video === true ? { url, at, video: true } : { url, at })
   }
   return kept.sort((a, b) => b.at - a.at).slice(0, TRANSCODE_HINT_LIMIT)
 }
@@ -37,14 +41,25 @@ export function hasHint(hints: readonly TranscodeHint[], url: string): boolean {
   return hints.some((hint) => hint.url === url)
 }
 
-/** Adds or refreshes a hint, keeping the list bounded and newest-first. */
+/**
+ * Adds or refreshes a hint, keeping the list bounded and newest-first. `video` is tri-state: true
+ * records the video re-encode requirement, false clears it, and undefined leaves whatever the
+ * existing entry carried — so an ordinary audio-only fallback never silently downgrades a channel
+ * that genuinely needs H.264.
+ */
 export function rememberHint(
   hints: readonly TranscodeHint[],
   url: string,
-  now: number
+  now: number,
+  video?: boolean
 ): TranscodeHint[] {
   if (!url) return [...hints]
-  return [{ url, at: now }, ...hints.filter((hint) => hint.url !== url)].slice(0, TRANSCODE_HINT_LIMIT)
+  const existing = hints.find((hint) => hint.url === url)
+  const keepVideo = video ?? existing?.video ?? false
+  return [
+    { url, at: now, ...(keepVideo ? { video: true } : {}) },
+    ...hints.filter((hint) => hint.url !== url)
+  ].slice(0, TRANSCODE_HINT_LIMIT)
 }
 
 function storage(): Storage | null {
@@ -76,11 +91,16 @@ export function saveHints(hints: readonly TranscodeHint[]): void {
   }
 }
 
-/** The two calls a player needs: does this stream already need converting, and note that it does. */
+/** The calls a player needs: does this stream already need converting (and how deeply), and note it. */
 export function streamNeedsTranscode(url: string, now = Date.now()): boolean {
   return hasHint(loadHints(now), url)
 }
 
-export function noteStreamNeedsTranscode(url: string, now = Date.now()): void {
-  saveHints(rememberHint(loadHints(now), url, now))
+/** Whether this stream previously needed the video re-encode tier, not just the audio remux. */
+export function streamNeedsVideoTranscode(url: string, now = Date.now()): boolean {
+  return loadHints(now).find((hint) => hint.url === url)?.video === true
+}
+
+export function noteStreamNeedsTranscode(url: string, now = Date.now(), video?: boolean): void {
+  saveHints(rememberHint(loadHints(now), url, now, video))
 }

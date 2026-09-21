@@ -279,7 +279,12 @@ export interface TranscodeService {
     // map. Unlike subtitles this applies to Live TV too, not just VOD/series — see
     // AUDIO_STREAM_PATTERN's own comment for why a live channel needs this at all. Defaults to
     // the first audio stream, matching every existing call site's previous hardcoded behavior.
-    audioStreamIndex?: number
+    audioStreamIndex?: number,
+    // Re-encode the video to H.264 instead of stream-copying it. False (the default) copies the
+    // source's video untouched, which is free and correct wherever the browser genuinely decodes
+    // it; true is the escape hatch for the last tier — a browser that claims HEVC support and then
+    // fails the actual decode (see the -c:v comment in the argv below).
+    videoTranscode?: boolean
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }>
   stopTranscode(sessionId: string): Promise<void>
   serveTranscodeFile(url: string, res: ServerResponse): Promise<void>
@@ -372,7 +377,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     isVod: boolean,
     sessionId: string,
     subtitleStreamIndex = 0,
-    audioStreamIndex = 0
+    audioStreamIndex = 0,
+    videoTranscode = false
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }> {
     const ffmpegPath = await deps.resolveFfmpegPath()
     if (!ffmpegPath) {
@@ -483,7 +489,41 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       // when the requested index turns out to be a bitmap codec ffmpeg can't convert.
       ...(isVod && subtitleStreamIndex >= 0 ? ['-map', `0:s:${subtitleStreamIndex}?`] : []),
       '-c:v',
-      'copy',
+      videoTranscode ? 'libx264' : 'copy',
+      // The video re-encode tier (v0.45.0). `copy` is right wherever the browser can genuinely
+      // decode the source's video, but the Sky/EPL channels are HEVC (UHD: Main 10 HDR, FHD: Main)
+      // and some Chromium builds answer isTypeSupported(hvc1) → true and *then* fail the actual
+      // decode — measured on this project's own test machine as mediaSourceRequiresReset on every
+      // append, a state the stream-copied fMP4 session can never recover from. Only a real H.264
+      // re-encode helps, so libx264 with the shape every plain channel already plays: ~25 fps,
+      // 8-bit yuv420p (the 10-bit HDR feeds must land in a pixel format Chromium's MSE accepts),
+      // and a fast preset so a NAS CPU can keep up with real time. Nothing here is emitted on the
+      // common copy path, so it costs that path nothing.
+      ...(videoTranscode
+        ? [
+            '-preset',
+            'veryfast',
+            '-crf',
+            '23',
+            '-vf',
+            'fps=25',
+            '-pix_fmt',
+            'yuv420p',
+            // A fixed 4s GOP, matching -hls_time below. This is not cosmetic: the HLS muxer only
+            // splits a segment at a keyframe, and libx264's default keyframe interval is ~10s at
+            // 25 fps — so the first segment could not close until the input was nearly over.
+            // Measured against a throttled source (a 12s clip delivered over 4.8s): the playlist did
+            // not appear until EOF instead of ~2.5s, and a live channel never reaches EOF at all, so
+            // this tier would have produced no playlist ever. 100 frames at fps=25 is exactly the 4s
+            // segment, and disabling scene-cut keyframes stops anything from shifting the boundary.
+            '-g',
+            '100',
+            '-keyint_min',
+            '100',
+            '-sc_threshold',
+            '0'
+          ]
+        : []),
       '-c:a',
       'aac',
       '-b:a',
@@ -695,7 +735,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         // whole fallback exists for. subtitleStreamIndex >= 0 guards against retrying forever —
         // the retry itself always passes -1, which can never hit this same failure again.
         if (subtitleStreamIndex >= 0 && SUBTITLE_CODEC_INCOMPATIBLE_PATTERN.test(session.stderrTail.join('\n'))) {
-          return startTranscode(sourceUrl, isVod, sessionId, -1, audioStreamIndex)
+          return startTranscode(sourceUrl, isVod, sessionId, -1, audioStreamIndex, videoTranscode)
         }
         throw new Error(`ffmpeg exited before producing output: ${session.stderrTail.slice(-10).join('\n')}`)
       }

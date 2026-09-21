@@ -55,3 +55,36 @@ describe('rememberHint', () => {
     expect(hints.length).toBeLessThanOrEqual(TRANSCODE_HINT_LIMIT)
   })
 })
+
+describe('video re-encode hints', () => {
+  it('records and reports the video tier', () => {
+    expect(rememberHint([], '/live/1', now, true)[0].video).toBe(true)
+  })
+
+  it('leaves an existing video flag alone when only the audio remux is noted again', () => {
+    const withVideo = rememberHint([], '/live/1', now, true)
+    const refreshed = rememberHint(withVideo, '/live/1', now + 1000, undefined)
+    expect(refreshed[0].video).toBe(true)
+    expect(refreshed[0].at).toBe(now + 1000)
+  })
+
+  it('clears the video flag only when explicitly asked', () => {
+    const withVideo = rememberHint([], '/live/1', now, true)
+    expect(rememberHint(withVideo, '/live/1', now + 1, false)[0].video).toBeUndefined()
+  })
+
+  it('keeps the video flag through pruning, and drops it when it is not exactly true', () => {
+    const pruned = pruneHints(
+      [
+        { url: '/a', at: now, video: true },
+        { url: '/b', at: now, video: 'yes' },
+        { url: '/c', at: now }
+      ],
+      now
+    )
+    expect(pruned.find((h) => h.url === '/a')?.video).toBe(true)
+    expect(pruned.find((h) => h.url === '/b')?.video).toBeUndefined()
+    expect(pruned.find((h) => h.url === '/c')?.video).toBeUndefined()
+  })
+})
+

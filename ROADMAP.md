@@ -1,11 +1,32 @@
 # Roadmap
 
-Recommended enhancements for future development, refreshed **2026-09-20 against v0.43.4**.
+Recommended enhancements for future development, refreshed **2026-09-21 against v0.45.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.45.0 — the video re-encode tier: HEVC channels play on browsers that cannot decode HEVC.**
+The last wall from v0.44.1, closed. Some Chromium builds answer `isTypeSupported(hvc1)` → true and
+then fail the actual append (`mediaSourceRequiresReset`); the session's video is a stream-copy of
+source HEVC, so nothing about the session is wrong and no amount of recovery helps. `videoTranscode:
+true` on `/api/transcode/start` re-encodes with libx264 — ~25 fps, CRF 23, 8-bit yuv420p (the UHD
+feeds are Main 10 HDR, and Chromium's MSE will not append that) — and the player's `MEDIA_ERROR`
+ladder escalates to it **once**, when a session exhausts its recoveries, before giving up as it
+always did. The requirement is remembered per device (`transcodeHints`' optional `video` flag), so
+the next play starts at that tier rather than paying for a copy session it will discard.
+
+Two measurements worth keeping, both now pinned by tests. First, the encoder flags are only half the
+fix: the HLS muxer splits a segment at a keyframe, and libx264's default keyframe interval is ~10s at
+25 fps — so the first 4s segment could not close until the input was nearly over. Measured against a
+throttled source (a 12s clip delivered over 4.8s): the session's playlist did not appear until EOF
+instead of ~2.5s, and a live channel never reaches EOF, so it would never have appeared at all. An
+explicit `-g 100 -keyint_min 100 -sc_threshold 0` (100 frames at fps=25 is exactly the 4s segment)
+fixes it. Second, the default path is untouched: none of these flags are emitted when the video is
+merely copied — a test pins that too. 460 tests; typecheck, lint and test all green. *Not yet proven
+live:* the tier's encode throughput on a NAS CPU, and the escalation firing against a real HEVC
+channel — the provider has been down since 2026-09-20, so that proof resumes with it.
 
 **v0.44.1 — fMP4 transcode segments: HEVC channels can finally play through the fallback.**
 Found live on the Sky Sports channels (UHD and FHD alike — the whole family is HEVC video +
@@ -371,16 +392,13 @@ failures live, name them plainly, and let the operator fix them from just the me
   out-of-window, stampede, no-window); live verification against a real heavy channel is pending the
   provider's return (it relayed a 4K Newcastle feed directly with zero refusals in the one window tested
   before the provider went down).
-- **A video re-encode tier for HEVC-incapable browsers.** *Open; diagnosed 2026-09-20.* The
-  Sky/EPL channels are HEVC (UHD: Main 10 HDR, FHD: Main) and the transcode stream-copies the
-  video — right everywhere the browser can genuinely decode HEVC (Safari: yes; Chrome on
-  hardware with working HEVC: usually), but some Chromium builds claim isTypeSupported(hvc1)
-  → true and then fail the actual decode (mediaSourceRequiresReset on append; measured on this
-  project's own test machine). For those, nothing short of re-encoding the video to H.264
-  helps. Shape: a `videoTranscode: true` mode on /api/transcode/start (libx264, ~25fps cap,
-  matching the shape every plain channel already plays), and the player's media-error ladder
-  escalates to it when an fMP4 session exhausts recoveries with mediaSourceRequiresReset —
-  the same escalation the v0.43.2 merge built for plain streams, applied to session output.
+- **A video re-encode tier for HEVC-incapable browsers.** *Shipped in v0.45.0.* `videoTranscode:
+  true` on /api/transcode/start re-encodes to H.264 (libx264, 25 fps, CRF 23, yuv420p, an explicit
+  4s GOP), and the player's media-error ladder escalates to it once when a session exhausts its
+  recoveries. What is left is operational rather than functional: what a 4K HEVC→H.264 re-encode
+  costs a NAS CPU in real time (the tier caps the framerate but not the resolution — a `scale` cap
+  is the obvious knob if a real UHD channel cannot keep up), and whether the escalation fires
+  against a real HEVC channel, which needs the provider up.
 - **Widen the undecodable-audio check beyond Dolby.** *Open.* The check that decides whether to convert a
   stream for audio reasons only considers `ac3`/`eac3`. Sunderland's feed carries **aac HE-AACv2**, which
   is a different question entirely and is not covered — the same blind spot the E-AC-3 fix closed for
