@@ -563,6 +563,20 @@ hardware, permanently — and the client it would be competing with has an RTX 3
 (Safari) keeps playing untouched; WebCodecs is the route for browsers without it, offered only when the
 probe proves it can decode; otherwise the honest error stands.
 
+**Target clients, confirmed by the operator:** the machine with the RTX 3080 Ti will most likely run
+**Chrome or Brave**. Both are Chromium, so nothing about the plan changes — same WebCodecs path, same
+absence of native HLS, same MSE+HEVC limitation. Two consequences worth building in from the start:
+
+- **The probe must measure *speed*, not just support.** `isConfigSupported` answers "can this config be
+  decoded", and on Windows that can be true through a *software* fallback (e.g. no HEVC Video
+  Extensions installed) which would decode 4K Main 10 at a handful of frames per second. A capability
+  check alone would then promise playback and deliver a slideshow. So the probe reports **decoded frames
+  per second against the stream's real 3840x2160**, and only a comfortable margin over realtime (50 fps
+  source; expect hundreds on NVDEC, tens on software) counts as "available".
+- **Brave adds a variable Chrome does not have** — Shields and its fingerprinting protections. Neither
+  touches WebCodecs or same-origin relayed fetches, so this should be a non-issue, but the probe runs
+  in the real browser rather than assuming, and it is cheap to re-run if Brave misbehaves.
+
 **Interim, and true today:** UHD plays natively in a browser with its own HLS pipeline (Safari) after
 the container remux — no server decode, no re-encode — and does not play in Chrome on this hardware at
 any resolution. The desktop sibling app (`~/Desktop/Development/iptv-app`) is the other obvious client:
