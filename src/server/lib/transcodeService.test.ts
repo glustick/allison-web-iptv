@@ -383,6 +383,8 @@ describe('probeTracks', () => {
       { index: 2, language: null, codec: 'eac3', channelLayout: '5.1(side)' }
     ])
     expect(result.subtitleTracks).toEqual([])
+    // v0.47.0: the video codec too, so the client can ask whether this browser can decode it.
+    expect(result.videoCodec).toBe('h264')
   })
 
   it('reports a single audio track and no subtitles for an ordinary single-rendition source', async () => {
@@ -394,6 +396,8 @@ describe('probeTracks', () => {
 
     expect(result.audioTracks).toEqual([{ index: 0, language: null, codec: 'aac', channelLayout: 'stereo' }])
     expect(result.subtitleTracks).toEqual([])
+    // The UHD shape this whole probe exists for: HEVC, which most browsers cannot decode.
+    expect(result.videoCodec).toBe('hevc')
   })
 
   it('reports both audio and subtitle tracks, each with correct language tags', async () => {
@@ -406,6 +410,7 @@ describe('probeTracks', () => {
       { index: 1, language: 'fre', codec: 'aac', channelLayout: 'stereo' }
     ])
     expect(result.subtitleTracks).toEqual([{ index: 0, language: 'eng', supported: false }])
+    expect(result.videoCodec).toBe('h264')
   })
 
   it('resolves with empty results (does not reject) when ffmpeg exits with nothing usable logged', async () => {
@@ -413,7 +418,7 @@ describe('probeTracks', () => {
 
     const result = await withFakeFfmpegMode('fail_immediately', () => service.probeTracks('irrelevant-source'))
 
-    expect(result).toEqual({ audioTracks: [], subtitleTracks: [] })
+    expect(result).toEqual({ audioTracks: [], subtitleTracks: [], videoCodec: null })
   })
 
   it('resolves with whatever was found so far once probeTimeoutMs elapses, for a hanging source', async () => {
@@ -421,7 +426,7 @@ describe('probeTracks', () => {
 
     const result = await withFakeFfmpegMode('hang_forever', () => service.probeTracks('irrelevant-source'))
 
-    expect(result).toEqual({ audioTracks: [], subtitleTracks: [] })
+    expect(result).toEqual({ audioTracks: [], subtitleTracks: [], videoCodec: null })
   })
 })
 

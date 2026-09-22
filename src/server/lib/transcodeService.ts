@@ -51,6 +51,14 @@ const SUBTITLE_CODEC_INCOMPATIBLE_PATTERN = /Subtitle encoding currently only po
 // language tag at all — without it there'd be no way to tell two same-language, same-codec
 // tracks apart in a picker, or to explain *why* a provider's own "5.1 + Stereo" labeling means
 // two tracks, not one.
+/**
+ * The same source line again, for video. Every channel this provider serves is HEVC (the UHD tier is
+ * Main 10), and whether a *browser* can decode that is knowable before playback rather than only
+ * after it fails — which matters, because the alternative the app used to reach for was re-encoding
+ * 4K in real time. Reported so the client can ask the viewer instead of deciding for them.
+ */
+const VIDEO_STREAM_PATTERN = /Stream #\d+:\d+(?:\[[^\]]*\])?(?:\(([a-zA-Z-]+)\))?: Video: (\S+)/
+
 const AUDIO_STREAM_PATTERN =
   /Stream #\d+:\d+(?:\[[^\]]*\])?(?:\(([a-zA-Z-]+)\))?: Audio: (\S+).*?,\s*\d+\s*Hz,\s*([a-zA-Z0-9.()]+)/
 
@@ -381,7 +389,12 @@ export interface TranscodeService {
   // playback or touch any active transcode session — purely informational, so a caller (see
   // useTranscodeFallback.ts's probeLiveAudioTracks) can decide whether picking a non-default
   // audioStreamIndex via startTranscode above is even worth offering.
-  probeTracks(sourceUrl: string): Promise<{ audioTracks: AudioTrackInfo[]; subtitleTracks: SubtitleTrackInfo[] }>
+  probeTracks(sourceUrl: string): Promise<{
+    audioTracks: AudioTrackInfo[]
+    subtitleTracks: SubtitleTrackInfo[]
+    /** The source's video codec, as ffmpeg names it ("hevc", "h264", …), or null if it said nothing. */
+    videoCodec: string | null
+  }>
 }
 
 const TRANSCODE_MIME_TYPES: Record<string, string> = {
@@ -937,7 +950,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
   // of ever transcoding at all.
   async function probeTracks(
     sourceUrl: string
-  ): Promise<{ audioTracks: AudioTrackInfo[]; subtitleTracks: SubtitleTrackInfo[] }> {
+  ): Promise<{ audioTracks: AudioTrackInfo[]; subtitleTracks: SubtitleTrackInfo[]; videoCodec: string | null }> {
     const ffmpegPath = await deps.resolveFfmpegPath()
     if (!ffmpegPath) {
       throw new Error('ffmpeg binary not available on this platform')
@@ -951,6 +964,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       const proc = spawn(ffmpegPath, ['-i', sourceUrl])
       const audioTracks: AudioTrackInfo[] = []
       const subtitleTracks: SubtitleTrackInfo[] = []
+      let videoCodec: string | null = null
       let inputStreamListEnded = false
       let stderrBuffer = ''
       let settled = false
@@ -959,7 +973,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         if (settled) return
         settled = true
         proc.kill('SIGKILL')
-        resolve({ audioTracks, subtitleTracks })
+        resolve({ audioTracks, subtitleTracks, videoCodec })
       }, probeTimeoutMs)
 
       // Same chunk-boundary-safety rationale as startTranscode's own stderr handling above:
@@ -974,6 +988,14 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
             break
           }
           if (inputStreamListEnded) break
+          const videoMatch = VIDEO_STREAM_PATTERN.exec(line)
+          if (videoMatch && videoCodec === null) {
+            // The first video stream only: a stream with more than one is not a shape this provider
+            // produces, and the client's question ("can this browser decode *the* video?") needs one
+            // answer rather than a list.
+            videoCodec = videoMatch[2].toLowerCase()
+            continue
+          }
           const subtitleMatch = SUBTITLE_STREAM_PATTERN.exec(line)
           if (subtitleMatch) {
             subtitleTracks.push({
@@ -1010,7 +1032,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         if (settled) return
         settled = true
         clearTimeout(timer)
-        resolve({ audioTracks, subtitleTracks })
+        resolve({ audioTracks, subtitleTracks, videoCodec })
       })
     })
   }

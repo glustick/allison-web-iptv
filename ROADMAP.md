@@ -8,12 +8,33 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-21 against v0.46.3**.
+Recommended enhancements for future development, refreshed **2026-09-22 against v0.47.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.47.0 — ask before re-encoding, and let the viewer decide.** Measured on 2026-09-22 by driving a
+real browser into the deployed app and playing *Sky Sports Main Event UHD*: the relay carried the 4K
+feed correctly (segments 0.6-3.1 s each, with the provider's intermittent expired-signature 400s that
+v0.44.0's fresh-playlist retry handles), and then the app started a **transcode session** — 7.7 MB
+written in 36 s, `idleSeconds: 24`, its output never consumed — because Chromium cannot decode HEVC
+and nothing had asked that question beforehand. So the app's response to "this browser cannot play
+this" was its single most expensive option, on the host that can least afford it.
+
+- `probeTracks` now also reports the source's **video codec** (ffmpeg's own "Video: hevc (Main 10)" line,
+  the same free source the audio/subtitle patterns already read), so the client knows *before* playback.
+- `lib/videoCapability.ts` (pure, unit-tested) maps that to the question MSE understands and returns the
+  browser's answer — optimistically: an unrecognised codec or a failed probe answers "yes", because a
+  wrong "no" would block a channel that plays perfectly.
+- The live player asks first. A "no" shows a plain sentence naming the codec and pointing at Safari,
+  with **Convert this channel** as an explicit button. The media-error ladder's exhausted case now
+  surfaces the same offer instead of escalating on its own.
+
+479 tests; typecheck, lint and both builds green. *Not verified live:* the offer itself needs a look on
+a real device — and the pre-flight's "yes" is not proof, since some Chromium builds claim hvc1 support
+and then fail the append (v0.45.0's own measurement), which is exactly why the ladder still exists.
 
 **v0.46.3 — native playback first, and no silent quality trade.** A correction of direction, not just
 of code. v0.46.0 made the re-encode tier downscale by default and v0.46.1 let a stall reach that tier;
@@ -476,7 +497,8 @@ failures live, name them plainly, and let the operator fix them from just the me
   non-advancing-playlist detector, plus a message that says so, turns a mystery black screen into one
   sentence. Wants one live browser reproduction first to pin the exact signal hls.js reports — worth
   measuring rather than guessing at, given how much of this project's history is exactly that.
-- **A quality selector in the player.** *Open.* The re-encode tier's cap is an environment variable, so
+- **A quality selector in the player.** *Partly addressed by v0.47.0.* Conversion is now offered
+  rather than taken, so nothing reduces quality without being asked. *Open.* The re-encode tier's cap is an environment variable, so
   changing it means a redeploy, and since v0.46.3 its default is the honest one: keep the source's
   resolution. A per-device control (Source / 1080p / 720p) would let a viewer make that trade
   deliberately, when their own host cannot keep up, instead of the app making it for them. This is the

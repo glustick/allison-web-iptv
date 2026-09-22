@@ -4,7 +4,8 @@ import { stallRecoveryShape, useTranscodeFallback } from '../lib/transcodeFallba
 import { noteStreamNeedsTranscode, streamNeedsTranscode, streamNeedsVideoTranscode } from '../lib/transcodeHints'
 import { prefersNativePlayback } from '../lib/nativePlayback'
 import { sniffStreamKind } from '../lib/streamKind'
-import { probeAudioTracks } from '../lib/audioTrackProbe'
+import { probeStreamTracks } from '../lib/audioTrackProbe'
+import { canDecodeVideoCodec } from '../lib/videoCapability'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
@@ -66,6 +67,10 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // Set when this browser cannot decode the channel's video (or when it tried and failed). It drives
+  // a notice *offering* conversion rather than starting one: re-encoding is a real trade — heavier on
+  // the host, and since v0.46.0 able to change the resolution — so it is the viewer's call to make.
+  const [videoUnplayable, setVideoUnplayable] = useState<string | null>(null)
   const [audioTracks, setAudioTracks] = useState<PlayerTrack[]>([])
   const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
   const [audioTrack, setAudioTrack] = useState(-1)
@@ -96,6 +101,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     reloadAttemptsRef.current = 0
     engineRef.current = null
     nativeFailedRef.current = false
+    setVideoUnplayable(null)
   }, [channelKey, reset])
 
   useEffect(() => {
@@ -525,15 +531,19 @@ let stallCount = 0
               // HEVC-incapable browser — measured on this project's own test machine, a Chromium
               // build that answers isTypeSupported(hvc1) → true and then fails the actual append
               // (mediaSourceRequiresReset). The session's video is a stream-copy of source HEVC, so
-              // nothing about the session is wrong; only a real H.264 re-encode can help. Escalate
-              // to that tier once before giving up.
-              if (escalateToVideoTranscode(url, () => setReloadTick((t) => t + 1), (message) => setError(message))) {
-                setError(null)
+              // nothing about the session is wrong; only a real H.264 re-encode can help.
+              //
+              // v0.47.0: that re-encode is now *offered*, not taken. It re-encodes the picture the
+              // viewer chose to watch (and can resize it), which is a trade to put in front of them
+              // rather than to make on their behalf — and on a 10-bit 4K feed it is also the most
+              // expensive thing this host can be asked to do.
+              if (hasTriedVideoTranscode()) {
+                fatalErrorShown = true
+                setError('This channel could not be played even after converting it.')
                 instance.destroy()
                 break
               }
-              fatalErrorShown = true
-              setError('This channel cannot be decoded on this device, and automatic transcoding failed.')
+              setVideoUnplayable('this channel’s video')
               instance.destroy()
             } else if (mediaErrorRecoveryCount === 2) {
               instance.swapAudioCodec()
@@ -608,11 +618,23 @@ let stallCount = 0
     if (engineRef.current === 'native') return
     let cancelled = false
     void (async () => {
-      const tracks = await probeAudioTracks(url)
-      if (cancelled || tracks.length === 0) return
+      const { audioTracks, videoCodec } = await probeStreamTracks(url)
+      if (cancelled) return
       // this effect is a sibling of the hls one, so it cannot see that effect's local probe
       const decodeProbe = (mimeType: string): boolean =>
         typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mimeType)
+      // Video first, and before playback rather than after it fails: every channel this provider
+      // serves is HEVC, and a browser without an HEVC decoder will never play one. Asking up front
+      // turns "fails, recovers, converts 4K" into one sentence — and stops the app reaching for the
+      // most expensive response it has. See lib/videoCapability.ts for why MSE's answer is only the
+      // first half of this, and why the ladder below still exists.
+      if (!canDecodeVideoCodec(videoCodec, decodeProbe)) {
+        console.warn(`[player] stream video is ${videoCodec}, which this browser cannot decode`)
+        setVideoUnplayable(videoCodec ?? 'this channel’s video')
+        return
+      }
+      if (audioTracks.length === 0) return
+      const tracks = audioTracks
       if (canDecodeAudioCodec(tracks[0].codec, decodeProbe)) return
       console.warn(`[player] first audio track is ${tracks[0].codec}, which this browser cannot decode; transcoding`)
       tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
@@ -668,6 +690,29 @@ let stallCount = 0
           <span>Your session expired — sign in again to keep watching.</span>
           <button type="button" className="admin-small-btn" onClick={() => window.location.reload()}>
             Sign in again
+          </button>
+        </div>
+      )}
+      {!sessionExpired && !error && videoUnplayable && (
+        <div className="player-error" role="status">
+          <span>
+            This browser cannot decode the video this channel uses ({videoUnplayable}). Safari plays it
+            natively. Converting here re-encodes the video on the server — heavier, and it may reduce
+            quality.
+          </span>
+          <button
+            type="button"
+            className="admin-small-btn"
+            onClick={() => {
+              setVideoUnplayable(null)
+              if (
+                !escalateToVideoTranscode(url, () => setReloadTick((t) => t + 1), (message) => setError(message))
+              ) {
+                setError('Converting this channel could not be started.')
+              }
+            }}
+          >
+            Convert this channel
           </button>
         </div>
       )}

@@ -18,17 +18,23 @@ export interface ProbedAudioTrack {
   codec: string
 }
 
-/** Per session: a channel's audio tracks do not change from one play to the next. */
-const probed = new Map<string, ProbedAudioTrack[]>()
+export interface ProbedStream {
+  audioTracks: ProbedAudioTrack[]
+  /** The video codec the source actually carries, as ffmpeg names it ("hevc", "h264", …), or null. */
+  videoCodec: string | null
+}
+
+/** Per session: a channel's tracks do not change from one play to the next. */
+const probed = new Map<string, ProbedStream>()
 
 export function forgetProbedTracks(): void {
   probed.clear()
 }
 
-export async function probeAudioTracks(
+export async function probeStreamTracks(
   url: string,
   fetchImpl: typeof fetch = fetch
-): Promise<ProbedAudioTrack[]> {
+): Promise<ProbedStream> {
   const cached = probed.get(url)
   if (cached) return cached
   try {
@@ -37,15 +43,29 @@ export async function probeAudioTracks(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sourceUrl: url })
     })
-    if (!res.ok) return []
-    const data = (await res.json()) as { audioTracks?: { index?: number; codec?: string }[] }
-    const tracks = (data.audioTracks ?? [])
-      .map((track, position) => ({ index: track.index ?? position, codec: track.codec ?? '' }))
-      .sort((a, b) => a.index - b.index)
-    probed.set(url, tracks)
-    return tracks
+    if (!res.ok) return { audioTracks: [], videoCodec: null }
+    const data = (await res.json()) as {
+      audioTracks?: { index?: number; codec?: string }[]
+      videoCodec?: string
+    }
+    const payload: ProbedStream = {
+      audioTracks: (data.audioTracks ?? [])
+        .map((track, position) => ({ index: track.index ?? position, codec: track.codec ?? '' }))
+        .sort((a, b) => a.index - b.index),
+      videoCodec: typeof data.videoCodec === 'string' && data.videoCodec ? data.videoCodec : null
+    }
+    probed.set(url, payload)
+    return payload
   } catch {
     // A failed probe is not evidence of anything: play the stream as we would have anyway.
-    return []
+    return { audioTracks: [], videoCodec: null }
   }
+}
+
+/** The audio-only view of the same probe and the same cache, for callers that only need tracks. */
+export async function probeAudioTracks(
+  url: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProbedAudioTrack[]> {
+  return (await probeStreamTracks(url, fetchImpl)).audioTracks
 }

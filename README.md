@@ -6,7 +6,23 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.46.3 — play natively, and never trade picture quality for smoothness)
+## Current state (v0.47.0 — the app asks before it re-encodes, and the viewer decides)
+
+**v0.47.0** stops the app deciding to re-encode on the viewer's behalf. Playback now **asks whether
+this browser can decode the channel's video before playing it**: the server's existing on-play probe
+reports the video codec (every channel this provider serves is HEVC; the UHD tier is Main 10), and
+`canDecodeVideoCodec` (pure, unit-tested) puts that to the browser's own media stack. When the answer
+is no, the player *says so* — "this browser cannot decode the video this channel uses; Safari plays it
+natively" — and offers a **Convert this channel** button instead of starting a transcode. The same
+applies when the ladder fails later: the media-error path's last resort is now that same offer, not an
+automatic escalation.
+
+The reason is the one the user gave, in their words: re-encoding changes the picture, so it is the
+viewer's trade to make, not the app's. It is also, on a 10-bit 4K feed at 14-22 Mbps, the heaviest
+thing the host can be asked to do — and the app's own browser test (2026-09-22, Chromium, Sky Sports
+Main Event UHD) measured exactly what that costs: a transcode session started, 7.7 MB written in 36
+seconds, and its output never consumed, because the browser could never have played it. 479 tests;
+typecheck, lint and both builds green.
 
 **v0.46.3 changes direction, because the last three releases were aimed at the wrong thing.** Two
 things were true — no NAS CPU re-encodes 4K in real time, and a heavy channel can stall a relayed
