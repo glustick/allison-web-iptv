@@ -6,6 +6,23 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.49.1 — client-side decoding, step one: the provider's own bytes come out of TS)
+
+**v0.49.1 lands the first piece of moving video work to the client** — the direction decided on
+2026-09-22, because this NAS has no headroom for video transcoding and the client edge has a GPU.
+`src/client/src/lib/tsHevc.ts` demuxes the provider's MPEG-TS segments down to the HEVC elementary
+stream in Annex-B form, which WebCodecs' `VideoDecoder` accepts *without* a codec description, because
+Annex-B carries its parameter sets in-band. No ffmpeg, no remux, no re-encode — and no server CPU.
+
+Verified against real bytes rather than a hand-built fixture: the tests generate a genuine HEVC
+transport stream and decode the extracted stream back (frames counted), and the same check runs against
+a **real 7 MB 4K segment captured from the provider**, extracting VPS/SPS/PPS and slices that ffmpeg
+then decodes. Ten tests, all green.
+
+**Still to build:** the `VideoDecoder` loop on top of this extractor, canvas presentation with A/V sync
+against the MSE-fed audio, and the capability gate. The media stats panel (v0.49.0) already reports the
+WebCodecs capability line this depends on.
+
 ## Current state (v0.49.0 — a media stats panel: the player reports what it is doing)
 
 **v0.49.0 ships the panel the operator asked for** — a **Stats** button in the live player that opens

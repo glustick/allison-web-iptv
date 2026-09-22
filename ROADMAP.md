@@ -584,21 +584,31 @@ two candidates are:
 "same error as Chrome" tells us less than it could. Distinct messages make the next test
 self-diagnosing.
 
-**Started 2026-09-22 and paused mid-slice — read this before restarting it.** The first artifact was
-going to be the TS -> HEVC extractor (`tsHevc.ts`, the piece that lets the browser decode the
-provider's own MPEG-TS bytes with no server work at all): walk 188-byte packets, find the video PID
-via the PAT/PMT, reassemble PES payloads into Annex-B — which WebCodecs accepts with **no codec
-description**, because Annex-B carries its parameter sets in-band. That is the whole reason the
-client can do this without ffmpeg, a remux, or a re-encode.
+**Step 1 landed 2026-09-23 (v0.49.1): the TS -> HEVC extractor works, verified against real bytes.**
+`src/client/src/lib/tsHevc.ts` walks 188-byte packets, finds the video PID through the PAT/PMT, and
+reassembles the PES payloads into Annex-B — which WebCodecs accepts with **no codec description**,
+because Annex-B carries its parameter sets in-band. That is the whole reason the client can decode the
+provider's own bytes with no ffmpeg, no remux, and no re-encode.
 
-It was written, then removed uncommitted, because the unit fixture caught a real subtlety it had not
-handled correctly: **TS pads the last packet of a PES to 188 bytes, so the PES_packet_length field has
-to be honoured** or padding (0xff) reaches the decoder as if it were NAL data. The implementation was
-trimmed for that and still returned trailing padding, so either the length arithmetic
-(`pesLength - 3 - headerLength`) or the fixture's own packet construction is still wrong — the
-fixture splits a PES across packets and was itself suspect. Nothing broken was left in the tree; the
-work restarts from that debug point, with a *real* captured segment as the fixture rather than a
-hand-built one, since the hand-built one is as likely to be the bug as the parser.
+Two things it taught, both now pinned by tests:
+
+- **`PES_packet_length` must be honoured, or TS padding (`0xff`) reaches the decoder as NAL data.** The
+  first attempt failed here, and the *hand-built* fixture that was supposed to catch it was itself
+  wrong: it split a PES down the middle, which no muxer does — real muxing fills every packet and pads
+  only the last. Fixing the fixture to behave like a muxer made the parser's bug visible, which is the
+  reverse of the usual order and worth remembering.
+- **A raw elementary stream needs `-f hevc` to be decoded at all**, and ffmpeg's progress output starts
+  at `frame= 0`, so "how many frames did it decode" is the *last* match, not the first. Both cost a
+  debugging cycle.
+
+Proof, not assertion: the suite generates a real HEVC transport stream with ffmpeg and decodes the
+extracted stream again (frames counted), and the same test runs against a **real 7 MB 4K segment
+captured from the provider** (set `UHD_TS_SEGMENT=/path/to/seg.ts` to exercise it) — where it extracts
+parameter sets (VPS/SPS/PPS) and slices and ffmpeg decodes the result. Ten tests, all green.
+
+**Still to build, in order:** the WebCodecs `VideoDecoder` loop feeding off this extractor, canvas
+presentation with A/V sync against the MSE-fed audio, and the capability gate the stats panel already
+exposes.
 
 **Next build, on the operator's suggestion (2026-09-22), and it replaces the standalone probe page:**
 a **media stats panel** in the live player — a button that opens what the player is actually doing.
