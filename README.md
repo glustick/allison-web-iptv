@@ -6,6 +6,34 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.49.0 — a media stats panel: the player reports what it is doing)
+
+**v0.49.0 ships the panel the operator asked for** — a **Stats** button in the live player that opens
+what the player is actually doing, so the next "why is it black?" is answered by reading instead of by
+guessing. It was motivated by exactly that: today's debugging needed three assumptions about the
+browser (which engine ran, whether MSE took the append, whether decode was hardware or software), and
+one of them (Safari silently falling back to hls.js) cost a release cycle.
+
+The panel shows, and where each number really comes from:
+
+- **Engine in use** — native HLS / hls.js, straight from the player's own state.
+- **Stream video codec and audio track count** — from the on-play probe (`probeTracks`) that already
+  runs for every channel.
+- **Presented resolution** — `videoWidth`/`videoHeight`. A black picture that still *decodes* reads
+  here as none, which is the signature of the HEVC-in-TS case.
+- **Played / buffered ahead** — `currentTime` and `buffered`.
+- **Dropped frames** — `getVideoPlaybackQuality()`, where the platform provides it.
+- **Bandwidth estimate** — hls.js's own estimate, where the engine provides one.
+- **What this browser supports** — native-HLS check, MSE+HEVC check, and `VideoDecoder.isConfigSupported`
+  for 4K Main 10 *with* the `hardwareAcceleration` path the platform chose, which is the go/no-go for
+  the client-side (WebCodecs/NVDEC) direction.
+
+Two rules kept deliberately: **the panel only runs while it is open** (a one-second interval, cleared on
+close — it must not compete with the thing it measures), and **nothing is invented**: a capability the
+platform does not expose is reported as `unknown` rather than guessed.
+
+486 tests; typecheck, lint and both builds green.
+
 ## Current state (v0.48.2 — live TV plays natively, or says it cannot)
 
 **v0.48.2 makes the rule explicit, on the operator's instruction:** *"if the only option is native then

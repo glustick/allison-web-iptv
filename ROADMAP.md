@@ -8,12 +8,22 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-22 against v0.48.2**.
+Recommended enhancements for future development, refreshed **2026-09-22 against v0.49.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.49.0 — the media stats panel.** The operator's suggestion, shipped as the next build: a **Stats**
+button in the live player opening a panel that reports what the player is actually doing — engine in
+use, stream codec and audio track count, presented resolution, played/buffered, dropped frames,
+bandwidth estimate, and the browser's capability lines (native HLS, MSE+HEVC, WebCodecs 4K Main 10 with
+the hardware path the platform chose). It subsumes the standalone decode probe page this file used to
+plan, and it is the capability gate for the client-side (WebCodecs/NVDEC) direction below. Two rules
+shipped with it: the panel **only runs while it is open** (one-second interval, cleared on close), and
+**nothing is invented** — a capability the platform does not expose is shown as `unknown`. 486 tests;
+typecheck, lint and both builds green.
 
 **v0.48.2 — native or an error: the conversion offer is gone.** The operator's call, and the right one:
 live TV plays natively or it reports that it cannot, and asks for another channel. Removed from the

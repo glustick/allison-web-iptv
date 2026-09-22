@@ -10,6 +10,7 @@ import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
+import { MediaStats } from './MediaStats'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
 // Matches the desktop app's own Player.tsx recovery tuning (see its ROADMAP): a fatal
@@ -67,6 +68,11 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // The media stats panel (operator's request, 2026-09-22): what engine is running, what the stream
+  // is, and what this browser can do. Closed by default; it needs nothing the probe has not already
+  // learned about the stream.
+  const [showStats, setShowStats] = useState(false)
+  const [probeInfo, setProbeInfo] = useState<{ videoCodec: string | null; audioTrackCount: number } | null>(null)
   const [audioTracks, setAudioTracks] = useState<PlayerTrack[]>([])
   const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
   const [audioTrack, setAudioTrack] = useState(-1)
@@ -603,6 +609,7 @@ let stallCount = 0
     void (async () => {
       const { audioTracks, videoCodec } = await probeStreamTracks(url)
       if (cancelled) return
+      setProbeInfo({ videoCodec, audioTrackCount: audioTracks.length })
       // this effect is a sibling of the hls one, so it cannot see that effect's local probe
       const decodeProbe = (mimeType: string): boolean =>
         typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mimeType)
@@ -665,6 +672,27 @@ let stallCount = 0
 
   return (
     <div className="player-wrap">
+      <button
+        type="button"
+        className="admin-small-btn"
+        style={{ position: 'absolute', top: 8, left: 8, zIndex: 40 }}
+        onClick={() => setShowStats((open) => !open)}
+        aria-pressed={showStats}
+      >
+        {showStats ? 'Hide stats' : 'Stats'}
+      </button>
+      {showStats && (
+        <MediaStats
+          video={videoRef.current}
+          engine={engineRef.current}
+          videoCodec={probeInfo?.videoCodec ?? null}
+          audioTrackCount={probeInfo?.audioTrackCount ?? null}
+          readBandwidth={() => {
+            const instance = hlsRef.current as { bandwidthEstimate?: number } | null
+            return typeof instance?.bandwidthEstimate === 'number' ? instance.bandwidthEstimate : null
+          }}
+        />
+      )}
       <video ref={videoRef} controls />
       <TrackControls
         audioTracks={audioTracks}
