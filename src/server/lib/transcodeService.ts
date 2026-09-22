@@ -349,6 +349,8 @@ export interface TranscodeService {
       runningSeconds: number
       hasPlaylist: boolean
       bytes: number
+      /** Average output rate in bytes/second since the session started (null under 1s). */
+      bytesPerSecond: number | null
       idleSeconds: number
     }>
   >
@@ -395,6 +397,27 @@ export interface TranscodeService {
     /** The source's video codec, as ffmpeg names it ("hevc", "h264", …), or null if it said nothing. */
     videoCodec: string | null
   }>
+}
+
+/**
+ * A session's average output rate in bytes per second — the number that says whether a relay is
+ * keeping up with what it is relaying.
+ *
+ * Every live segment is relayed through this host by design (the provider's credentials never reach
+ * the browser), and the provider's UHD tier is measured at 14-22 Mbps, so this is the load the host is
+ * actually carrying for one viewer rather than a theoretical one. If it is far below what a healthy
+ * relay of that channel should produce, the host is the bottleneck and nothing the player does will
+ * fix it — which is exactly why it belongs on the screen instead of in a log file.
+ *
+ * Deliberately the *average since the session started*: an instantaneous rate over 4s segments jumps
+ * around, and a number that jumps is a number nobody watches. null before a second has passed, since
+ * dividing by a fraction of a second produces a wild spike that means nothing. Pure, so it is
+ * testable without an ffmpeg or a clock.
+ */
+export function averageBytesPerSecond(bytes: number, runningSeconds: number): number | null {
+  if (!Number.isFinite(bytes) || !Number.isFinite(runningSeconds)) return null
+  if (runningSeconds < 1) return null
+  return Math.round(bytes / runningSeconds)
 }
 
 const TRANSCODE_MIME_TYPES: Record<string, string> = {
@@ -1050,19 +1073,25 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       runningSeconds: number
       hasPlaylist: boolean
       bytes: number
+      bytesPerSecond: number | null
       idleSeconds: number
     }>
   > {
     const now = Date.now()
     return Promise.all(
-      [...transcodeSessions.entries()].map(async ([sessionId, session]) => ({
-        sessionId,
-        startedAt: new Date(session.startedAt).toISOString(),
-        runningSeconds: Math.round((now - session.startedAt) / 1000),
-        hasPlaylist: existsSync(join(session.dir, 'playlist.m3u8')) || existsSync(join(session.dir, 'master.m3u8')),
-        bytes: await directorySize(session.dir),
-        idleSeconds: Math.round((now - session.lastServedAt) / 1000)
-      }))
+      [...transcodeSessions.entries()].map(async ([sessionId, session]) => {
+        const runningSeconds = Math.round((now - session.startedAt) / 1000)
+        const bytes = await directorySize(session.dir)
+        return {
+          sessionId,
+          startedAt: new Date(session.startedAt).toISOString(),
+          runningSeconds,
+          hasPlaylist: existsSync(join(session.dir, 'playlist.m3u8')) || existsSync(join(session.dir, 'master.m3u8')),
+          bytes,
+          bytesPerSecond: averageBytesPerSecond(bytes, runningSeconds),
+          idleSeconds: Math.round((now - session.lastServedAt) / 1000)
+        }
+      })
     )
   }
 

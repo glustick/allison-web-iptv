@@ -6,6 +6,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { spawn } from 'child_process'
 import { createRequire } from 'module'
 import {
+  averageBytesPerSecond,
   createTranscodeService,
   resolveVideoEncodeProfile,
   looksLikePlaylist,
@@ -1363,5 +1364,24 @@ describe('looksLikePlaylist', () => {
   it('says no to nothing at all', () => {
     expect(looksLikePlaylist(new Uint8Array([]))).toBe(false)
     expect(looksLikePlaylist(undefined)).toBe(false)
+  })
+})
+
+describe('averageBytesPerSecond', () => {
+  it('measures the relay rate the System tab reports — the load the host carries for one viewer', () => {
+    // Measured 2026-09-22: this provider's UHD tier is 14-22 Mbps, and every segment of it is relayed
+    // through this host. 3 MB of segments over 20 seconds is 150 kB/s (1.2 Mbps) — far under, and the
+    // number that would tell an operator their NAS is the bottleneck before anyone guesses.
+    expect(averageBytesPerSecond(3_000_000, 20)).toBe(150_000)
+  })
+
+  it('says nothing until a second has passed', () => {
+    expect(averageBytesPerSecond(5_000_000, 0.5)).toBeNull()
+    expect(averageBytesPerSecond(5_000_000, 0)).toBeNull()
+  })
+
+  it('treats absent or impossible numbers as "no reading yet"', () => {
+    expect(averageBytesPerSecond(NaN, 10)).toBeNull()
+    expect(averageBytesPerSecond(100, NaN)).toBeNull()
   })
 })

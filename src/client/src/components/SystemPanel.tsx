@@ -15,6 +15,11 @@ function formatUptime(seconds: number): string {
   return `${minutes}m`
 }
 
+/** Bytes/second to Mbps, one decimal — the units someone thinking about their LAN actually uses. */
+function mbpsFromBytesPerSecond(bytesPerSecond: number): string {
+  return `${(Math.round((bytesPerSecond * 8) / 100000) / 10).toFixed(1)} Mbps`
+}
+
 function formatBytesShort(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -301,6 +306,7 @@ export function SystemPanel(): JSX.Element {
                 <th>Running</th>
                 <th>Output</th>
                 <th>Disk used</th>
+                <th title="Average output rate since this session started. Every live segment is relayed through this host, so this is the bandwidth it is carrying for one viewer.">Rate</th>
                 <th title="Seconds since anything fetched this session's output; the server stops a session after 120s">Idle</th>
               </tr>
             </thead>
@@ -311,6 +317,9 @@ export function SystemPanel(): JSX.Element {
                   <td>{session.runningSeconds}s</td>
                   <td>{session.hasPlaylist ? 'playlist ready' : 'starting'}</td>
                   <td>{formatBytesShort(session.bytes)}</td>
+                  <td>
+                    {session.bytesPerSecond !== null ? mbpsFromBytesPerSecond(session.bytesPerSecond) : '—'}
+                  </td>
                   {/* The number that explained every hard playback bug on 2026-09-17: a session nothing is
                       fetching is a session nobody is watching, and the server reaps it at 120 seconds. Visible
                       here so it is a fact rather than a black screen. */}
@@ -322,7 +331,7 @@ export function SystemPanel(): JSX.Element {
               ))}
               {health && health.transcode.active.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="admin-empty">
+                  <td colSpan={6} className="admin-empty">
                     None running
                   </td>
                 </tr>
@@ -331,14 +340,33 @@ export function SystemPanel(): JSX.Element {
           </table>
         </div>
         {health && (
-          <p className="setup-hint">
-            Segments are written to <code>{health.transcode.storage.dir}</code>
-            {health.transcode.storage.freeBytes !== null
-              ? ` — ${formatBytesShort(health.transcode.storage.freeBytes)} free there.`
-              : ' (free space unavailable).'}{' '}
-            A movie keeps every segment while it plays, so a feature-length title can use several
-            gigabytes; point <code>TRANSCODE_TMP_DIR</code> somewhere roomy if that is a problem.
-          </p>
+          <>
+            {health.transcode.active.length > 0 && (
+              <p className="setup-hint">
+              Every live segment is relayed through this host, so the rates above are bandwidth the NAS
+              is carrying for other people's players —{' '}
+              {(() => {
+                const total = health.transcode.active.reduce(
+                  (sum, session) => sum + (session.bytesPerSecond ?? 0),
+                  0
+                )
+                return `${mbpsFromBytesPerSecond(total)} across ${health.transcode.active.length} ${
+                  health.transcode.active.length === 1 ? 'session' : 'sessions'
+                } right now`
+              })()}
+              . If that number is below what a channel should produce, the host is the bottleneck — no
+              amount of recovery in the player will change it.
+            </p>
+          )}
+            <p className="setup-hint">
+              Segments are written to <code>{health.transcode.storage.dir}</code>
+              {health.transcode.storage.freeBytes !== null
+                ? ` — ${formatBytesShort(health.transcode.storage.freeBytes)} free there.`
+                : ' (free space unavailable).'}{' '}
+              A movie keeps every segment while it plays, so a feature-length title can use several
+              gigabytes; point <code>TRANSCODE_TMP_DIR</code> somewhere roomy if that is a problem.
+            </p>
+          </>
         )}
       </section>
 

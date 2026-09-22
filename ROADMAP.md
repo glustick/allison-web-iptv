@@ -639,11 +639,13 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
   **52 seconds** from a cold cache while its eight siblings answered in under four. The UI gives up and
   reports an error instead of *"this category is slow — still trying"*. A longer timeout for category
   fetches, with the loading state kept alive, is the same shape as the v0.31.0 fix for provider stalls.
-- **The host now carries live video bandwidth.** *Worth documenting and measuring.* Live segments are
-  relayed through the app (v0.33.0) rather than fetched by the browser from the provider's CDN, which is
-  what removed the provider credentials from the browser and the dependence on the CDN accepting the
-  viewer's address. The cost is real: every viewer's live stream now flows through the NAS. Worth a note
-  in the README and a line in the System tab, so it is a known trade rather than a surprise.
+- **The host now carries live video bandwidth.** *Shipped in v0.47.1.* Live segments are relayed
+  through the app (v0.33.0) rather than fetched by the browser from the provider's CDN, which is what
+  removed the provider credentials from the browser and the dependence on the CDN accepting the viewer's
+  address. The cost is real, and now visible: every viewer's live stream flows through the NAS, the
+  Active-transcodes table reports each session's average rate plus a total, and the measured UHD tier
+  (2026-09-22) makes the number concrete at 14-22 Mbps per viewer. Documented in the README, so it is a
+  known trade rather than a surprise.
 - **Skip the multi-arch build for docs-only commits.** *Open.* Every push to `main` builds a full
 multi-arch image (~13–20 min, arm64 `better-sqlite3` under emulation). `[skip ci]` in the commit
 message is used by hand for documentation commits; a `paths-ignore: ['**.md']` on the workflow would

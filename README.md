@@ -772,6 +772,11 @@ app at least once.
 - **Health**: version, uptime, memory, database size and row counts, provider reachability with
   **connection usage** (`1 in use of 2`), guide-source status, active transcodes, and the last few
   server errors — the "is it them or us?" page.
+- **What the relay is carrying** (v0.47.1): every live segment is relayed through this host by design, so
+  the Active-transcodes table now shows each session's **average rate** and a running total — 14-22 Mbps
+  per UHD viewer, measured 2026-09-22. If that number sits below what a channel should produce, the host
+  is the bottleneck and no amount of recovery in the player will change it; that is worth knowing before
+  hunting a playback bug.
 - **Backup**: download the whole database with one click (a consistent copy taken with SQLite's
   own backup API, safe while the app is running). A snapshot is also written to `/appdata/backups`
   automatically once a day, keeping the last handful.

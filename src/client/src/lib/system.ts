@@ -76,6 +76,9 @@ export interface HealthReport {
       runningSeconds: number
       hasPlaylist: boolean
       bytes: number
+      /** Average output rate in bytes/second since the session started (null under 1s). Every live
+       *  segment is relayed through this host, so this is the bandwidth it carries for one viewer. */
+      bytesPerSecond: number | null
       /** Seconds since anything fetched this session's output. The server stops a session at 120. */
       idleSeconds: number
     }>
