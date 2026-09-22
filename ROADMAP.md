@@ -650,9 +650,23 @@ absence of native HLS, same MSE+HEVC limitation. Two consequences worth building
   touches WebCodecs or same-origin relayed fetches, so this should be a non-issue, but the probe runs
   in the real browser rather than assuming, and it is cheap to re-run if Brave misbehaves.
 
-**Interim, and true today:** UHD plays natively in a browser with its own HLS pipeline (Safari) after
-the container remux — no server decode, no re-encode — and does not play in Chrome on this hardware at
-any resolution. The desktop sibling app (`~/Desktop/Development/iptv-app`) is the other obvious client:
+**Measured 2026-09-22, and this is the reference point: the fat client plays the UHD channels
+perfectly** — smooth, good buffers, no stuttering (operator's report). The desktop sibling
+(`~/Desktop/Development/iptv-app`) is a native player with hardware decode and it handles these channels
+without help.
+
+That settles three things at once:
+
+1. **The streams are sound.** The provider's 4K10 HDR feeds are deliverable and playable; nothing about
+   the source is the problem.
+2. **The client hardware can decode them comfortably** — and it is the *same machine* that would run the
+   WebCodecs path, which makes "can this GPU do it" close to answered by demonstration.
+3. **The web player's failure is purely a browser-environment problem** — MSE's codec limits and the
+   native pipeline's container limits — not a stream, network, or NAS problem.
+
+And it means **UHD has a working client today**: the desktop app, with no NAS load at all. Worth saying
+plainly, because the temptation is to keep building a server-side transcoder to solve something that is
+already solved one layer up. The desktop sibling app (`~/Desktop/Development/iptv-app`) is the other obvious client:
 a native player there can hardware-decode HEVC on the same 3090 and needs nothing from the NAS.
 
 ### 1. Live TV & playback
