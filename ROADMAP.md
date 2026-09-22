@@ -671,6 +671,11 @@ a native player there can hardware-decode HEVC on the same 3090 and needs nothin
 
 ### 1. Live TV & playback
 
+*Where to start next session:* the media stats panel (v0.49.0) is the first thing to deploy and use. On
+a machine with the GPU, its WebCodecs line answers whether client-side decoding is real; in Chrome it
+answers what Chrome is missing. The browser feature after that is the live-playback reproduction of
+2026-09-22's failed attempt (see "Measured 2026-09-22 evening" above), then the WebCodecs player itself.
+
 - **~~Settle whether Safari's native pipeline takes HEVC-in-MPEG-TS.~~ Answered 2026-09-22 — then
   answered again, better, the same evening: *no, for video.* The first answer ("yes, it plays") was read
   off a playhead that an audio-only stream advances just as happily, with the probe's own "no video
