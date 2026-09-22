@@ -1,20 +1,21 @@
 import { describe, it, expect } from 'vitest'
-import { canDecodeVideoCodec, mseCodecForVideo, needsStreamCopyRemux } from './videoCapability.js'
+import { canDecodeVideoCodec, mseCodecsForVideo, needsStreamCopyRemux } from './videoCapability.js'
 
-describe('mseCodecForVideo', () => {
-  it('maps the codec names ffmpeg reports to the question MSE understands', () => {
-    expect(mseCodecForVideo('hevc')).toBe('hvc1.1.6.L153.B0')
-    expect(mseCodecForVideo('h264')).toBe('avc1.640028')
+describe('mseCodecsForVideo', () => {
+  it('asks about both HEVC shapes this provider uses — Main and Main 10', () => {
+    // Asking only about Main 10 is the wrong question for the 1080p channels, and answering it wrongly
+    // pushed a playable HD channel through a server-side remux on 2026-09-23.
+    expect(mseCodecsForVideo('hevc')).toEqual(['hvc1.1.6.L120.B0', 'hvc1.2.4.L153.B0'])
+    expect(mseCodecsForVideo('h264')).toEqual(['avc1.640028'])
   })
 
   it('passes through a codec string that is already RFC 6381', () => {
-    expect(mseCodecForVideo('hvc1.2.4.L153.B0')).toBe('hvc1.2.4.L153.B0')
-    expect(mseCodecForVideo('avc1.4d401f')).toBe('avc1.4d401f')
+    expect(mseCodecsForVideo('hvc1.2.4.L153.B0')).toEqual(['hvc1.2.4.L153.B0'])
   })
 
   it('has no opinion about codecs it cannot name', () => {
-    expect(mseCodecForVideo(null)).toBeNull()
-    expect(mseCodecForVideo('mpeg2video')).toBeNull()
+    expect(mseCodecsForVideo(null)).toEqual([])
+    expect(mseCodecsForVideo('mpeg2video')).toEqual([])
   })
 })
 
@@ -33,7 +34,14 @@ describe('canDecodeVideoCodec', () => {
   it('reports a browser that cannot decode HEVC — the case that started this', () => {
     const { probe, asked } = asking(false)
     expect(canDecodeVideoCodec('hevc', probe)).toBe(false)
-    expect(asked).toEqual(['video/mp4;codecs="hvc1.1.6.L153.B0"'])
+    expect(asked).toEqual(['video/mp4;codecs="hvc1.1.6.L120.B0"', 'video/mp4;codecs="hvc1.2.4.L153.B0"'])
+  })
+
+  it('says yes when the browser takes Main even if it refuses Main 10 — the HD channel case', () => {
+    // A 1080p Main feed on a machine whose MSE decodes Main but not Main 10 must be counted as
+    // playable, or the app remuxes a channel that was playing fine.
+    const probe = (mimeType: string): boolean => mimeType.includes('L120')
+    expect(canDecodeVideoCodec('hevc', probe)).toBe(true)
   })
 
   it('reports a browser that can', () => {

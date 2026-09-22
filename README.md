@@ -6,6 +6,27 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.49.3 — remux only what the browser cannot decode)
+
+**v0.49.3 fixes a regression I introduced in v0.48.0**, reported as *"Sky News HD is not playing
+smoothly"*. The v0.48.0 rule routed **every** HEVC live channel through the server-side container remux
+— on the codec alone. But a browser's MSE can decode **Main** (8-bit) HEVC while refusing **Main 10**,
+and that is exactly the shape of the operator's machine: the 1080p channel used to play *directly* and
+smoothly, and v0.48.0 replaced that working path with a remux that cuts ~5.8-second segments and adds a
+hop through the NAS. Hence the stutter.
+
+The capability check made it worse by asking only about Main 10 at level 5.3 — the UHD profile — which
+is the wrong question for a 1080p feed. Now:
+
+- `canDecodeVideoCodec` asks about **both** HEVC shapes this provider uses (`Main` and `Main 10`) and
+  answers yes if the browser takes *either*.
+- The remux is applied only when the browser genuinely cannot present the stream (or on the native-HLS
+  engine, which cannot present HEVC-in-TS at all) — never merely because the codec is HEVC.
+
+497 tests; typecheck, lint and both builds green. Measured before changing anything: the remux itself is
+healthy (8.2s to start, segments in realtime, ffmpeg at 8.5% CPU, correct bitrate) — the fault was in
+*choosing* to use it.
+
 ## Current state (v0.49.2 — the stats panel actually shows, and stays off the controls)
 
 **v0.49.2 fixes the stats panel the operator reported broken on sight**: its toggle button sat on top of

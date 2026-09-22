@@ -617,22 +617,29 @@ let stallCount = 0
       // MPEG-TS is unplayable as it arrives — the native pipeline presents no video at all (measured:
       // 0 decoded frames, presentationSize 0x0, audio-only), and hls.js has no better answer. The
       // transcoder's stream copy fixes it without touching a pixel. See needsStreamCopyRemux.
-      if (needsStreamCopyRemux({ videoCodec, isLive: true })) {
+      // The container remux is for streams this browser genuinely cannot present — not for HEVC as a
+      // category. Forcing it on a channel the browser decodes directly is a regression, and it was
+      // measured as one on 2026-09-23: an HD channel that played smoothly through MSE went through a
+      // server-side remux instead, with ~5.8s segments and an extra hop, and stuttered. So ask the
+      // browser first; only the native engine (which cannot present HEVC-in-TS at all) skips the ask.
+      const mseCanDecode = canDecodeVideoCodec(videoCodec, decodeProbe)
+      if (
+        needsStreamCopyRemux({ videoCodec, isLive: true }) &&
+        (engineRef.current === 'native' || !mseCanDecode)
+      ) {
         console.warn(
-          `[player] ${videoCodec} live video in an MPEG-TS HLS container; the browser cannot present it — ` +
+          `[player] ${videoCodec} live video in an MPEG-TS HLS container that this browser cannot present — ` +
             'remuxing the container (stream copy, no re-encode)'
         )
         tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
         return
       }
-      // Under native playback the browser decodes codecs MSE cannot, so the capability question below
-      // is about the hls.js path only — Safari plays AC-3, E-AC-3 and more without help.
       if (engineRef.current === 'native') return
       // Video next, and before playback rather than after it fails: a browser without an HEVC decoder
       // will never play one. Asking up front turns "fails, recovers, converts 4K" into one sentence —
       // and stops the app reaching for the most expensive response it has. See lib/videoCapability.ts
       // for why MSE's answer is only the first half of this, and why the ladder below still exists.
-      if (!canDecodeVideoCodec(videoCodec, decodeProbe)) {
+      if (!mseCanDecode) {
         // Native or nothing (v0.48.2). The app used to offer to re-encode here, which could not work on
         // this host for a 4K feed anyway (measured: ffmpeg pinned at ~400% CPU, one segment, then it
         // falls behind the live edge) — and a futile button is worse than a sentence.

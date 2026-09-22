@@ -8,12 +8,25 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-23 against v0.49.2**.
+Recommended enhancements for future development, refreshed **2026-09-23 against v0.49.3**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.49.3 — remux only what the browser cannot decode.** The operator reported *"Sky News HD is not
+playing smoothly"* — a regression from v0.48.0, which routed **every** HEVC live channel through the
+container remux on the codec alone. A browser's MSE can decode **Main** (8-bit) HEVC and refuse **Main
+10**, and that is the shape of the operator's machine: a 1080p channel that played directly and smoothly
+was replaced by a remux with ~5.8s segments and an extra hop. The capability check compounded it by
+asking only about Main 10 at level 5.3 — the UHD profile — so a 1080p feed was judged undecodable.
+
+Measured before changing anything: the remux output is healthy (8.2s to start, segments in realtime,
+ffmpeg at 8.5% CPU, correct 3.8 Mbps for a 3.6 Mbps source). The fault was in *choosing* it, not in it.
+Now `canDecodeVideoCodec` asks about both HEVC shapes and answers yes if the browser takes either, and
+the remux is used only when the browser genuinely cannot present the stream — or on the native-HLS
+engine, which cannot present HEVC-in-TS at all. 497 tests; all gates green.
 
 **v0.49.2 — the stats panel shows, and keeps out of the controls' way.** Reported on sight by the
 operator: the Stats button sat **on top of** the native PiP and fullscreen controls, and the panel came

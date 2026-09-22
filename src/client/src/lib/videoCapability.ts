@@ -17,27 +17,33 @@
  */
 export type TypeSupportProbe = (mimeType: string) => boolean
 
-/** The MSE codec string to ask about, for the codec names ffmpeg reports. */
-const MSE_VIDEO_CODECS: Record<string, string> = {
-  // Main 10, level 5.3, the profile the UHD tier actually carries. A browser that answers false for
-  // this is being asked the question that matters; one that answers true may still fail the append,
-  // which is the ladder's job, not this function's.
-  hevc: 'hvc1.1.6.L153.B0',
-  h265: 'hvc1.1.6.L153.B0',
-  h264: 'avc1.640028',
-  avc1: 'avc1.640028',
-  av1: 'av01.0.08M.08',
-  vp9: 'vp09.00.10.08'
+/**
+ * The MSE codec strings to ask about, for the codec names ffmpeg reports.
+ *
+ * **More than one, deliberately.** The first version of this asked only about Main 10 at level 5.3 —
+ * the UHD profile — which is the wrong question for the 1080p channels, and produced a false negative
+ * that a later release acted on: it routed *every* HEVC channel through a server-side remux, including
+ * the HD ones a browser could decode perfectly well directly (measured 2026-09-23: a Windows Chrome on
+ * an RTX 3080 Ti decodes Main 8-bit through MSE and stutters when a remux is forced in front of it).
+ * A capable browser answers yes for Main; a browser with real limits answers no for both.
+ */
+const MSE_VIDEO_CODECS: Record<string, string[]> = {
+  hevc: ['hvc1.1.6.L120.B0', 'hvc1.2.4.L153.B0'],
+  h265: ['hvc1.1.6.L120.B0', 'hvc1.2.4.L153.B0'],
+  h264: ['avc1.640028'],
+  avc1: ['avc1.640028'],
+  av1: ['av01.0.08M.08'],
+  vp9: ['vp09.00.10.08']
 }
 
 /** A codec string that is already an RFC 6381 MSE codec (what hls.js reports for a level). */
 const RFC6381 = /^(avc1|avc3|hvc1|hev1|av01|vp09|mp4v)\./i
 
-export function mseCodecForVideo(codec: string | null | undefined): string | null {
-  if (!codec) return null
+export function mseCodecsForVideo(codec: string | null | undefined): string[] {
+  if (!codec) return []
   const normalized = codec.trim()
-  if (RFC6381.test(normalized)) return normalized
-  return MSE_VIDEO_CODECS[normalized.toLowerCase()] ?? null
+  if (RFC6381.test(normalized)) return [normalized]
+  return MSE_VIDEO_CODECS[normalized.toLowerCase()] ?? []
 }
 
 /**
@@ -46,10 +52,12 @@ export function mseCodecForVideo(codec: string | null | undefined): string | nul
  * and a wrong "no" would block a channel that plays perfectly.
  */
 export function canDecodeVideoCodec(codec: string | null | undefined, probe: TypeSupportProbe): boolean {
-  const mseCodec = mseCodecForVideo(codec)
-  if (!mseCodec) return true
+  const candidates = mseCodecsForVideo(codec)
+  if (candidates.length === 0) return true
   try {
-    return probe(`video/mp4;codecs="${mseCodec}"`)
+    // Any supported shape is a yes: the stream only has to be one of them, and refusing on the wrong
+    // profile is how a playable HD channel got pushed through a server-side remux.
+    return candidates.some((candidate) => probe(`video/mp4;codecs="${candidate}"`))
   } catch {
     return true
   }
