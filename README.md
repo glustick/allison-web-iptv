@@ -69,7 +69,10 @@ The measurements behind the honest version:
 So on this hardware a 4K re-encode cannot keep up — and **downscaling does not rescue it**: the extra
 speed comes from the encoder, while the **decode** of 4K10 50fps is the fixed cost, and the NAS pays it
 in software. Chrome cannot decode these channels itself (no native HLS, and MSE+HEVC fails), so in
-**Chrome the UHD channels are not watchable on this server at all** — at any quality setting.
+**Chrome the UHD channels are not watchable on this server at all** — at any quality setting. The one
+working client for them today is the **desktop app** (`~/Desktop/Development/iptv-app`), which plays the
+same streams perfectly with no load on the NAS: a native player decodes HEVC-in-MPEG-TS that a browser's
+HLS stack will not present.
 
 The path that *does* work needs no decode: **Safari**, where v0.48.0's stream-copy remux hands the
 browser fMP4 and the browser decodes HEVC in hardware. The notice now says that as a capability rather
