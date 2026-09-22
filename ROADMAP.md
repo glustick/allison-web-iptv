@@ -546,6 +546,22 @@ hardware, permanently — and the client it would be competing with has an RTX 3
   re-encode its copy path already does (`-c:v copy -c:a aac`), which is an audio-only decode — trivial
   next to a 4K video decode. The video stays bit-exact.
 
+**Started 2026-09-22 and paused mid-slice — read this before restarting it.** The first artifact was
+going to be the TS -> HEVC extractor (`tsHevc.ts`, the piece that lets the browser decode the
+provider's own MPEG-TS bytes with no server work at all): walk 188-byte packets, find the video PID
+via the PAT/PMT, reassemble PES payloads into Annex-B — which WebCodecs accepts with **no codec
+description**, because Annex-B carries its parameter sets in-band. That is the whole reason the
+client can do this without ffmpeg, a remux, or a re-encode.
+
+It was written, then removed uncommitted, because the unit fixture caught a real subtlety it had not
+handled correctly: **TS pads the last packet of a PES to 188 bytes, so the PES_packet_length field has
+to be honoured** or padding (0xff) reaches the decoder as if it were NAL data. The implementation was
+trimmed for that and still returned trailing padding, so either the length arithmetic
+(`pesLength - 3 - headerLength`) or the fixture's own packet construction is still wrong — the
+fixture splits a PES across packets and was itself suspect. Nothing broken was left in the tree; the
+work restarts from that debug point, with a *real* captured segment as the fixture rather than a
+hand-built one, since the hand-built one is as likely to be the bug as the parser.
+
 **Build order for v0.49, so the first step answers the go/no-go question:**
 
 1. **Decode-headroom probe** — a small page behind the app (`/uhd-probe`) that fetches a real fMP4
