@@ -76,8 +76,6 @@ export type StallRecoveryShape =
   | 'reload'
   /** Hand the provider's own stream to the transcoder (the cheap copy tier) instead of giving up. */
   | 'convert'
-  /** Replace the session with one that re-encodes the video (the media-error ladder's last resort). */
-  | 'video-transcode'
   /** Replace the session in place, keeping its current shape. */
   | 'session'
   /** Nothing left to try: stop, and say so. */
@@ -93,8 +91,8 @@ export function stallRecoveryShape(state: {
   reloadAttempts: number
 }): StallRecoveryShape {
   // A stalled session is replaced in place, in the shape it already has. Never escalated to a
-  // re-encode: see the note above — that would downscale the viewer's picture to work around a
-  // stalling relay, which is not this ladder's call to make.
+  // re-encode: see the note above. (v0.48.2 removed the last rung that could reach one at all —
+  // live TV here plays natively or reports that it cannot.)
   if (state.onTranscodeSession) return 'session'
   // The provider's own stream, relayed: reload it while reloads remain, then convert it rather than
   // declaring it unrecoverable — the same move every other reload path in this app makes.

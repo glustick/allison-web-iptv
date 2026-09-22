@@ -6,6 +6,23 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.48.2 — live TV plays natively, or says it cannot)
+
+**v0.48.2 makes the rule explicit, on the operator's instruction:** *"if the only option is native then
+let's say that, no need to transcode — just give an error that the channel cannot be played, then
+display an error and to select another channel."* So the live player no longer offers conversion at
+all. A channel whose video this browser cannot decode now produces one sentence naming the codec and
+telling the viewer to choose another channel; the **Convert this channel** button is gone, the stall
+ladder can no longer reach a re-encode, and a remembered "this channel needed the video tier" (learned
+back when the app still tried) is deliberately ignored.
+
+What remains, and is deliberately *not* a transcode: the **container remux** (`needsStreamCopyRemux`) —
+the same bitstream re-wrapped as fMP4, byte-for-byte unchanged, so a browser with its own HLS pipeline
+can decode it in hardware. Removing that too would leave the UHD channels unplayable everywhere.
+
+The video-re-encode tier still exists on the server (env- and API-reachable); nothing in the client
+calls it.
+
 ## Current state (v0.48.1 — and what Chrome cannot do, measured)
 
 **v0.48.1** stops the player presuming which browser the viewer uses, and stops offering a conversion

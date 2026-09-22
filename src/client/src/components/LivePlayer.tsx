@@ -67,10 +67,6 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
-  // Set when this browser cannot decode the channel's video (or when it tried and failed). It drives
-  // a notice *offering* conversion rather than starting one: re-encoding is a real trade — heavier on
-  // the host, and since v0.46.0 able to change the resolution — so it is the viewer's call to make.
-  const [videoUnplayable, setVideoUnplayable] = useState<string | null>(null)
   const [audioTracks, setAudioTracks] = useState<PlayerTrack[]>([])
   const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
   const [audioTrack, setAudioTrack] = useState(-1)
@@ -79,7 +75,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const audioPrefAppliedRef = useRef(false)
   const subtitlePrefAppliedRef = useRef(false)
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
-  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback, escalateToVideoTranscode, hasTriedVideoTranscode } = useTranscodeFallback()
+  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback, hasTriedVideoTranscode } = useTranscodeFallback()
   // Recovery ladder state, deliberately on the component (not in the effect): the effect is
   // torn down and rebuilt by every reload tick, and an attempt counter that reset with it
   // would loop forever instead of ever escalating.
@@ -101,7 +97,6 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     reloadAttemptsRef.current = 0
     engineRef.current = null
     nativeFailedRef.current = false
-    setVideoUnplayable(null)
   }, [channelKey, reset])
 
   useEffect(() => {
@@ -129,7 +124,10 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
         false,
         () => setReloadTick((t) => t + 1),
         (message) => setError(message),
-        engineRef.current === 'hls' && streamNeedsVideoTranscode(url)
+        // A remembered "this needed the video re-encode" is deliberately ignored (v0.48.2): live TV
+        // transcodes video or it does not play, and this app chose the second. The container remux
+        // (needsStreamCopyRemux, below) is a different thing and still applies — it changes no pixels.
+        false
       )
       return
     }
@@ -214,17 +212,7 @@ let stallCount = 0
           videoTranscodeTried: hasTriedVideoTranscode(),
           reloadAttempts: attempt
         })
-        if (shape === 'video-transcode') {
-          const escalated = escalateToVideoTranscode(
-            url,
-            () => setReloadTick((t) => t + 1),
-            (message) => {
-              fatalErrorShown = true
-              setError(`Playback stalled and converting the channel failed: ${message}`)
-            }
-          )
-          if (escalated) return
-        } else if (shape === 'session') {
+        if (shape === 'session') {
           const restarted = restartFallback(
             url,
             () => setReloadTick((t) => t + 1),
@@ -537,13 +525,13 @@ let stallCount = 0
               // viewer chose to watch (and can resize it), which is a trade to put in front of them
               // rather than to make on their behalf — and on a 10-bit 4K feed it is also the most
               // expensive thing this host can be asked to do.
-              if (hasTriedVideoTranscode()) {
-                fatalErrorShown = true
-                setError('This channel could not be played even after converting it.')
-                instance.destroy()
-                break
-              }
-              setVideoUnplayable('this channel’s video')
+              // Native or nothing (v0.48.2): no re-encode is offered, because on this host one could
+              // not keep up with a 4K feed anyway. Say so, and let the viewer pick another channel.
+              fatalErrorShown = true
+              setError(
+                'This channel can’t be played in this browser — its video needs decoding this browser ' +
+                  'cannot do. Choose another channel.'
+              )
               instance.destroy()
             } else if (mediaErrorRecoveryCount === 2) {
               instance.swapAudioCodec()
@@ -638,8 +626,14 @@ let stallCount = 0
       // and stops the app reaching for the most expensive response it has. See lib/videoCapability.ts
       // for why MSE's answer is only the first half of this, and why the ladder below still exists.
       if (!canDecodeVideoCodec(videoCodec, decodeProbe)) {
+        // Native or nothing (v0.48.2). The app used to offer to re-encode here, which could not work on
+        // this host for a 4K feed anyway (measured: ffmpeg pinned at ~400% CPU, one segment, then it
+        // falls behind the live edge) — and a futile button is worse than a sentence.
         console.warn(`[player] stream video is ${videoCodec}, which this browser cannot decode`)
-        setVideoUnplayable(videoCodec ?? 'this channel’s video')
+        setError(
+          `This channel can’t be played in this browser — its video is ${videoCodec}, which this browser ` +
+            'cannot decode. Choose another channel.'
+        )
         return
       }
       if (audioTracks.length === 0) return
@@ -699,41 +693,6 @@ let stallCount = 0
           <span>Your session expired — sign in again to keep watching.</span>
           <button type="button" className="admin-small-btn" onClick={() => window.location.reload()}>
             Sign in again
-          </button>
-        </div>
-      )}
-      {!sessionExpired && !error && videoUnplayable && hasTriedVideoTranscode() && (
-        <div className="player-error" role="status">
-          <span>
-            This channel has already been converted and still could not be played here. Its video is
-            {videoUnplayable}, which this browser cannot decode, and re-encoding it did not produce a
-            stream this browser could keep up with. A browser with its own HLS pipeline (Safari) plays
-            these channels without conversion.
-          </span>
-        </div>
-      )}
-      {!sessionExpired && !error && videoUnplayable && !hasTriedVideoTranscode() && (
-        <div className="player-error" role="status">
-          <span>
-            This browser cannot decode the video this channel uses ({videoUnplayable}) — and this
-            provider serves every channel as HEVC. A browser with its own HLS pipeline (Safari, on a
-            Mac that decodes HEVC in hardware) plays these channels without any conversion. Converting
-            re-encodes the video to H.264 on the server: heavier, it may reduce quality, and a 4K
-            re-encode may not keep up.
-          </span>
-          <button
-            type="button"
-            className="admin-small-btn"
-            onClick={() => {
-              setVideoUnplayable(null)
-              if (
-                !escalateToVideoTranscode(url, () => setReloadTick((t) => t + 1), (message) => setError(message))
-              ) {
-                setError('Converting this channel could not be started.')
-              }
-            }}
-          >
-            Convert this channel
           </button>
         </div>
       )}

@@ -8,12 +8,24 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-22 against v0.48.1**.
+Recommended enhancements for future development, refreshed **2026-09-22 against v0.48.2**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.48.2 — native or an error: the conversion offer is gone.** The operator's call, and the right one:
+live TV plays natively or it reports that it cannot, and asks for another channel. Removed from the
+client: the "Convert this channel" button, the media-error ladder's re-encode escalation, and
+`stallRecoveryShape`'s `video-transcode` rung — so nothing in the player can reach the re-encode tier
+any more, which on this host could not keep up with a 4K feed anyway (measured: ffmpeg pegged at
+~400% CPU, one segment, then it falls behind). A remembered per-device "this needed the video tier" is
+ignored for the same reason. The tier remains a server capability; the client does not call it.
+
+Kept, and explicitly *not* a transcode: the container remux, which re-wraps the identical bitstream as
+fMP4 so a browser with its own HLS pipeline (Safari) decodes it in hardware. Removing that would make
+the UHD channels unplayable everywhere.
 
 **v0.48.1 — a conversion that cannot succeed is no longer offered, and the notice stops guessing the
 browser.** Found by using it: a Chrome user on the UHD channels got *"this browser cannot decode… Safari
