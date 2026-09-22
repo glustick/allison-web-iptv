@@ -469,19 +469,18 @@ failures live, name them plainly, and let the operator fix them from just the me
 
 ### 1. Live TV & playback
 
-- **Settle whether Safari's native pipeline takes HEVC-in-MPEG-TS — this decides everything else.**
-  *Open, and the top of this list.* The provider's UHD feeds are HEVC Main 10, 3840x2160 at 50 fps,
-  10-bit HDR, ~14-22 Mbps, with E-AC-3/AC-3 5.1 audio — and packed in **MPEG-TS** segments (measured
-  2026-09-22; see the note below). Apple's own HLS authoring rules put HEVC in **fMP4**, so native
-  Safari playback may refuse the container while happily decoding the codec. Two very different
-  outcomes follow, and they need opposite work:
-  - *If native Safari plays it* — nothing more to do; v0.46.3 already plays these untouched, at full
-    quality, with hardware decode, and the re-encode tier is dead weight.
-  - *If it refuses* — the fix is **not** a re-encode. It is the v0.44.1 machinery (a stream-**copy**
-    remux into fMP4, which changes no pixels) applied *before* hls.js is ever attached: detect that
-    the browser will not take this container and remux, rather than falling back to a JavaScript
-    demux into MSE. That keeps full quality and full resolution.
-  Wants one live observation on Safari to settle it.
+- **~~Settle whether Safari's native pipeline takes HEVC-in-MPEG-TS.~~ Answered 2026-09-22: yes.**
+  *Settled, and it closes the question this list was built around.* The provider's UHD feeds are HEVC
+  Main 10, 3840x2160 at 50 fps, 10-bit HDR, ~14-22 Mbps, in **MPEG-TS** segments, and Apple's HLS
+  authoring rules put HEVC in fMP4 — so the container was a real worry. Measured directly against the
+  macOS media stack (AVFoundation, the engine Safari sits on), pointed at locally-served copies of
+  real fetched segments: **both containers play**, HEVC Main 10 included — MPEG-TS advanced its
+  playhead to 1.21 s with `keepUp=yes`, and the fMP4 remux of the same content to 1.29 s. So
+  **no stream-copy remux is needed**, v0.46.3's native-first path is the right shape for these
+  channels as they are, and the re-encode tier stays a last resort for browsers that genuinely cannot
+  decode HEVC (Chromium). The harness is worth keeping: `swift` + AVFoundation against a local HLS
+  origin answered in minutes a question that had been argued from documentation for a day — and the
+  first version of it was wrong in a way that matters (see the note below).
 - **Verify native playback live, and let it reach further.** *Open (v0.46.3, unverified).* Live TV now
   prefers the browser's own HLS pipeline wherever one exists — Safari has had one all along, and
   forcing hls.js instead is what put every HEVC / 10-bit HDR / Dolby stream through a JavaScript demux

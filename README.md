@@ -762,10 +762,11 @@ app at least once.
   640 kb/s or AC-3 5.1. Even the 1080p HD channels are HEVC (Main, 8-bit, 50 fps) with E-AC-3 stereo,
   not H.264. Two consequences worth holding onto: **a browser has to decode both HEVC *and* Dolby to
   play any of this untouched** (Safari does; Chromium usually does not), and **the segments are
-  MPEG-TS**, which is not the container Apple's own HLS authoring rules specify for HEVC (fMP4). So
-  "can Safari's native pipeline take HEVC-in-TS, or does it need the remux first?" is an open,
-  measurable question rather than a settled one — and it is the one that decides whether the app can
-  play these channels untouched.
+  MPEG-TS**, which is not the container Apple's own HLS authoring rules specify for HEVC (fMP4).
+  Measured 2026-09-22 against the macOS media stack itself (AVFoundation, Safari's engine): **it plays
+  both** — MPEG-TS and an fMP4 remux of the same content — so the container was never the blocker and
+  no remux is needed. These channels can be played untouched, at full resolution and bitrate, by any
+  browser whose media stack decodes HEVC.
 
 ## Backup, restore and system health (admin → **System** tab)
 
