@@ -546,6 +546,34 @@ hardware, permanently — and the client it would be competing with has an RTX 3
   re-encode its copy path already does (`-c:v copy -c:a aac`), which is an audio-only decode — trivial
   next to a 4K video decode. The video stays bit-exact.
 
+**Measured 2026-09-22 evening, and this is the state to start from: no browser plays these channels
+today.** Reported by the operator after v0.48.2 was deployed — Chrome shows the honest "cannot decode
+hevc" error, and **Safari throws the same error**, which was the one path expected to work.
+
+What the server saw during the Safari attempt (from the app's own health endpoint, not inferred):
+
+- a **remux session did start** and produce a playlist, and the browser **fetched it for roughly
+  thirteen seconds** before stopping (`idleSeconds` 131 of 141 running) — so the container-remux path
+  was taken and playback began;
+- an earlier ffmpeg exited with code 255 while reading the source
+  (`Skip ('#EXT-X-PROGRAM-DATE-TIME…')`), which is logged and unexplained.
+
+So the failure is in the **last hop — playing the app's own stream** — not in codec selection, and the
+two candidates are:
+
+1. **The earlier AVFoundation proof did not test the real shape.** It played a *VOD* playlist from a toy
+   local server: container and codec controlled for, **playlist semantics and relay headers not**. The
+   app serves a *live* playlist — rolling window, `delete_segments`, advancing media sequence — through
+   its own relay. That gap is the first thing to close: run the same frame-counting test against a
+   **real running session's live playlist**, captured exactly as the browser would receive it.
+2. **The engine fallback may be manufacturing the error.** v0.46.3 made a native failure re-attach with
+   hls.js — and for a HEVC channel hls.js can never work, so a native hiccup becomes the "cannot decode
+   hevc" message on *both* browsers. That would explain the identical error on Chrome and Safari.
+
+**A cheap product fix to fold in:** the two failure paths currently render nearly the same sentence, so
+"same error as Chrome" tells us less than it could. Distinct messages make the next test
+self-diagnosing.
+
 **Started 2026-09-22 and paused mid-slice — read this before restarting it.** The first artifact was
 going to be the TS -> HEVC extractor (`tsHevc.ts`, the piece that lets the browser decode the
 provider's own MPEG-TS bytes with no server work at all): walk 188-byte packets, find the video PID
