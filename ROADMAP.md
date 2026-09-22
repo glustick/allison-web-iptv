@@ -516,6 +516,38 @@ failures live, name them plainly, and let the operator fix them from just the me
 
 ## Open work
 
+### 0. Client-side decoding, so the NAS never transcodes video
+
+**The rule, decided 2026-09-22 on the operator's instruction:** *this NAS has no CPU headroom for
+video transcoding, and demanding it overloads the box. If transcoding can be done at the client edge,
+that is where it belongs — the client has an RTX 3090.*
+
+The measurements back it: a 4K10 HDR HEVC -> H.264 re-encode runs at **1.43x realtime on a fast Mac
+with hardware decode**, and nowhere near realtime on the NAS (ffmpeg at 376-498% CPU, one segment,
+then it falls behind the live edge). So server-side video transcoding is off the table on this
+hardware, permanently — and the client it would be competing with has an RTX 3090.
+
+**Why this is more than "run ffmpeg on the client":**
+
+- **MSE cannot decode HEVC in Chrome** — that limit is what started all of this. But **WebCodecs can**:
+  `VideoDecoder` with `hvc1` uses the platform decoder, i.e. NVDEC on a 3090, and decoded
+  `VideoFrame`s draw straight to a `<canvas>`. That is full-quality HEVC playback with **no re-encode
+  at all**, and no server CPU.
+- **Dolby audio is the one piece that cannot move.** WebCodecs' `AudioDecoder` has no AC-3/E-AC-3, and
+  this provider's audio is E-AC-3 5.1 or AC-3 5.1. So the split is: **server does the audio** (its
+  existing copy path already re-encodes audio to AAC while copying the video — an audio-only decode,
+  trivial next to a 4K video decode) and **client does the video**. Video stays bit-exact.
+- **What it needs:** an fMP4 sample parser to feed the decoder (`mp4box.js`, or a minimal one for the
+  single-video-track shape this transcoder emits), A/V sync against the MSE-fed audio, and a
+  capability gate so a browser without WebCodecs or an HEVC decoder keeps today's honest error. That is
+  a feature rather than a tweak: its own release, its own tests, and a real measurement of decode
+  headroom on the 3090 before anything is promised.
+
+**Interim, and true today:** UHD plays natively in a browser with its own HLS pipeline (Safari) after
+the container remux — no server decode, no re-encode — and does not play in Chrome on this hardware at
+any resolution. The desktop sibling app (`~/Desktop/Development/iptv-app`) is the other obvious client:
+a native player there can hardware-decode HEVC on the same 3090 and needs nothing from the NAS.
+
 ### 1. Live TV & playback
 
 - **~~Settle whether Safari's native pipeline takes HEVC-in-MPEG-TS.~~ Answered 2026-09-22 — then
