@@ -44,9 +44,9 @@ quality for smoothness, unasked**, on a player whose job is to show the stream t
   replaced in the shape it already has. The tier remains the media-error ladder's last resort (v0.45.0),
   where the alternative is no picture at all.
 
-472 tests; typecheck, lint and both builds green. *Not verified live:* the provider has been answering
-every channel with a repeating placeholder (see the measurement note in `ROADMAP.md`), so there is
-nothing real to play yet.
+472 tests; typecheck, lint and both builds green. **Confirmed working 2026-09-22** — deployed to the
+NAS and reported by the operator: *"UHD looks ok."* That is the live proof this release shipped
+without, on the real UHD tier.
 
 **v0.46.2** closes the last hole in the ladder v0.46.1 opened. A **direct** stream — the provider's own
 feed, relayed — that stalled through every reload it was allowed ended in the terminal error, while

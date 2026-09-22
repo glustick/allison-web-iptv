@@ -60,9 +60,10 @@ to play correctly"*, and they were right.
   path — otherwise a browser that can play a channel perfectly would still be handed a re-encode
   because hls.js once struggled with it.
 
-472 tests; typecheck, lint and both builds green. *Not verified live:* the provider has been answering
-every channel with a repeating placeholder (see the measurement note below), so there is nothing real
-to play.
+472 tests; typecheck, lint and both builds green. **Confirmed working 2026-09-22** — the operator
+deployed it and reported UHD playback looking correct, on the real 4K feeds (the provider had returned
+by then; see the note below). That is the live proof this entry was shipped without, and it is the one
+that closed the UHD question this file had been circling since v0.44.1.
 
 **v0.46.2 — the stall ladder is complete.** v0.46.1 gave a stalled *session* an escape; a stalled
 **direct** stream — the provider's feed, relayed — still ended in the terminal error, the one place a
@@ -481,7 +482,8 @@ failures live, name them plainly, and let the operator fix them from just the me
   decode HEVC (Chromium). The harness is worth keeping: `swift` + AVFoundation against a local HLS
   origin answered in minutes a question that had been argued from documentation for a day — and the
   first version of it was wrong in a way that matters (see the note below).
-- **Verify native playback live, and let it reach further.** *Open (v0.46.3, unverified).* Live TV now
+- **Verify native playback live, and let it reach further.** *Confirmed by the operator 2026-09-22 —
+  "UHD looks ok" — on the real UHD tier, with no transcoding.* Live TV now
   prefers the browser's own HLS pipeline wherever one exists — Safari has had one all along, and
   forcing hls.js instead is what put every HEVC / 10-bit HDR / Dolby stream through a JavaScript demux
   into MSE, and therefore what made transcoding look necessary at all. What is left: prove it against a
