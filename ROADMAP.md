@@ -8,12 +8,34 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-22 against v0.48.0**.
+Recommended enhancements for future development, refreshed **2026-09-22 against v0.48.1**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.48.1 — a conversion that cannot succeed is no longer offered, and the notice stops guessing the
+browser.** Found by using it: a Chrome user on the UHD channels got *"this browser cannot decode… Safari
+plays it natively"* (an assumption, not a test), pressed **Convert this channel**, and landed back in the
+same place — twice. Measured since:
+
+- 4K10 HDR HEVC -> H.264 4K runs at **1.43x realtime on this Mac**, with hardware decode; 3.04x when
+  downscaled to 720p.
+- The same job on the NAS: ffmpeg pegged at **376-498% CPU**, **one segment produced**, then it falls
+  behind the live edge and stalls.
+
+**Downscaling is not a rescue**: the speedup is in the encoder, while decoding 4K10 at 50 fps is the
+fixed cost, and the NAS does it in software. Chrome cannot decode these channels itself (no native HLS;
+MSE + HEVC fails on the measured build), so **in Chrome the UHD channels are not watchable on this
+server at any resolution**. The honest answer is the one the app now gives: a browser with its own HLS
+pipeline (Safari) plays them untouched after the container remux, because then nothing on the server has
+to decode anything.
+
+**Open, and a product decision rather than an engineering one:** what Chrome users on this hardware
+should be offered for UHD — a loudly-labelled low-resolution compatibility mode that still has to pay
+the decode, or simply the truth. The evidence above says the decode is the wall, so the second is more
+honest; the first is worth a measurement on the real box before it is dismissed.
 
 **v0.48.0 — the UHD channels play video: HEVC live is remuxed, not re-encoded.** The complaint that
 started this whole line — "the UHD channels don't play well" — is now explained and fixed, and it was

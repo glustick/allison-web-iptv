@@ -6,6 +6,31 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.48.1 — and what Chrome cannot do, measured)
+
+**v0.48.1** stops the player presuming which browser the viewer uses, and stops offering a conversion
+that cannot succeed. Reported live by a **Chrome** user on the UHD channels: the notice said *"Safari
+plays it natively"* — an assumption, not a test — the **Convert this channel** button was pressed, and
+the same dead end came back, twice.
+
+The measurements behind the honest version:
+
+| | throughput |
+| --- | --- |
+| 4K10 HDR HEVC -> H.264 4K, on this Mac (hardware decode) | **1.43x realtime** |
+| the same downscaled to 720p | 3.04x realtime |
+| the same job on the NAS | ffmpeg at **376-498% CPU**, **one segment**, then it falls behind the live edge and stalls |
+
+So on this hardware a 4K re-encode cannot keep up — and **downscaling does not rescue it**: the extra
+speed comes from the encoder, while the **decode** of 4K10 50fps is the fixed cost, and the NAS pays it
+in software. Chrome cannot decode these channels itself (no native HLS, and MSE+HEVC fails), so in
+**Chrome the UHD channels are not watchable on this server at all** — at any quality setting.
+
+The path that *does* work needs no decode: **Safari**, where v0.48.0's stream-copy remux hands the
+browser fMP4 and the browser decodes HEVC in hardware. The notice now says that as a capability rather
+than as advice about what the viewer is running, and a conversion that has already been tried shows
+what happened instead of offering itself again.
+
 ## Current state (v0.48.0 — HEVC live plays at full quality: stream-copy remux, no re-encode)
 
 **v0.48.0 fixes the video on the UHD channels, which v0.46.3's native-first path did not.** Measured by

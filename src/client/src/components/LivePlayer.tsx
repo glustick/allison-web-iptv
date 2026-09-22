@@ -702,12 +702,24 @@ let stallCount = 0
           </button>
         </div>
       )}
-      {!sessionExpired && !error && videoUnplayable && (
+      {!sessionExpired && !error && videoUnplayable && hasTriedVideoTranscode() && (
         <div className="player-error" role="status">
           <span>
-            This browser cannot decode the video this channel uses ({videoUnplayable}). Safari plays it
-            natively. Converting here re-encodes the video on the server — heavier, and it may reduce
-            quality.
+            This channel has already been converted and still could not be played here. Its video is
+            {videoUnplayable}, which this browser cannot decode, and re-encoding it did not produce a
+            stream this browser could keep up with. A browser with its own HLS pipeline (Safari) plays
+            these channels without conversion.
+          </span>
+        </div>
+      )}
+      {!sessionExpired && !error && videoUnplayable && !hasTriedVideoTranscode() && (
+        <div className="player-error" role="status">
+          <span>
+            This browser cannot decode the video this channel uses ({videoUnplayable}) — and this
+            provider serves every channel as HEVC. A browser with its own HLS pipeline (Safari, on a
+            Mac that decodes HEVC in hardware) plays these channels without any conversion. Converting
+            re-encodes the video to H.264 on the server: heavier, it may reduce quality, and a 4K
+            re-encode may not keep up.
           </span>
           <button
             type="button"
