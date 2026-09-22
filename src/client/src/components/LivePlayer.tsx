@@ -675,7 +675,8 @@ let stallCount = 0
       <button
         type="button"
         className="admin-small-btn"
-        style={{ position: 'absolute', top: 8, left: 8, zIndex: 40 }}
+        /* Top-right: away from the native control strip, which every browser puts along the bottom. */
+        style={{ position: 'absolute', top: 8, right: 8, zIndex: 40 }}
         onClick={() => setShowStats((open) => !open)}
         aria-pressed={showStats}
       >

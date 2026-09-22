@@ -8,14 +8,22 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-22 against v0.49.0**.
+Recommended enhancements for future development, refreshed **2026-09-23 against v0.49.2**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
 
-**v0.49.0 — the media stats panel.** The operator's suggestion, shipped as the next build: a **Stats**
+**v0.49.2 — the stats panel shows, and keeps out of the controls' way.** Reported on sight by the
+operator: the Stats button sat **on top of** the native PiP and fullscreen controls, and the panel came
+up **blank**. One cause: `.player-wrap` had no `position: relative`, so the absolutely positioned
+overlays anchored to a different ancestor — the button over the control strip, the panel behind the
+opaque video. Both now anchor to the player and sit top-right, away from the controls every browser
+places along the bottom. *Verified by reading the stylesheet and the built CSS; not verified on screen,
+because the deployed build is still the one with the bug.*
+
+**v0.49.1 — client-side decoding, step one: the provider's own bytes come out of MPEG-TS.** The operator's suggestion, shipped as the next build: a **Stats**
 button in the live player opening a panel that reports what the player is actually doing — engine in
 use, stream codec and audio track count, presented resolution, played/buffered, dropped frames,
 bandwidth estimate, and the browser's capability lines (native HLS, MSE+HEVC, WebCodecs 4K Main 10 with

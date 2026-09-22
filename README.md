@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.49.2 — the stats panel actually shows, and stays off the controls)
+
+**v0.49.2 fixes the stats panel the operator reported broken on sight**: its toggle button sat on top of
+the native PiP and fullscreen controls, and the panel itself came up blank. One cause, found by reading
+the stylesheet rather than guessing: `.player-wrap` had no `position: relative`, so the absolutely
+positioned button and panel anchored to a different ancestor entirely — the button landing over the
+control strip, the panel behind the opaque video. Both overlays now anchor to the player, and both live
+at the top-right, where no browser puts its controls.
+
 ## Current state (v0.49.1 — client-side decoding, step one: the provider's own bytes come out of TS)
 
 **v0.49.1 lands the first piece of moving video work to the client** — the direction decided on

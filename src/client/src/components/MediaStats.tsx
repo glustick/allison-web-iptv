@@ -163,7 +163,8 @@ export function MediaStats({ video, engine, videoCodec, audioTrackCount, readBan
     <div
       style={{
         position: 'absolute',
-        top: 8,
+        // Below the toggle button, so the two never overlap each other.
+        top: 40,
         right: 8,
         zIndex: 40,
         maxWidth: 320,
