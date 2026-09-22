@@ -527,21 +527,41 @@ with hardware decode**, and nowhere near realtime on the NAS (ffmpeg at 376-498%
 then it falls behind the live edge). So server-side video transcoding is off the table on this
 hardware, permanently — and the client it would be competing with has an RTX 3080 Ti.
 
-**Why this is more than "run ffmpeg on the client":**
+**It is an option per browser, because the two browsers need different answers:**
 
-- **MSE cannot decode HEVC in Chrome** — that limit is what started all of this. But **WebCodecs can**:
-  `VideoDecoder` with `hvc1` uses the platform decoder, i.e. NVDEC on a 3080 Ti, and decoded
-  `VideoFrame`s draw straight to a `<canvas>`. That is full-quality HEVC playback with **no re-encode
-  at all**, and no server CPU.
-- **Dolby audio is the one piece that cannot move.** WebCodecs' `AudioDecoder` has no AC-3/E-AC-3, and
-  this provider's audio is E-AC-3 5.1 or AC-3 5.1. So the split is: **server does the audio** (its
-  existing copy path already re-encodes audio to AAC while copying the video — an audio-only decode,
-  trivial next to a 4K video decode) and **client does the video**. Video stays bit-exact.
-- **What it needs:** an fMP4 sample parser to feed the decoder (`mp4box.js`, or a minimal one for the
-  single-video-track shape this transcoder emits), A/V sync against the MSE-fed audio, and a
-  capability gate so a browser without WebCodecs or an HEVC decoder keeps today's honest error. That is
-  a feature rather than a tweak: its own release, its own tests, and a real measurement of decode
-  headroom on the 3080 Ti before anything is promised.
+- **Safari** has its own HLS pipeline, and it handles HEVC-in-fMP4 natively (measured). With the
+  container remux in front of it, Safari is already done — native playback, no client decode, no GPU
+  work at all.
+- **Chrome** has no native HLS *and* MSE cannot decode HEVC, so hls.js can never work here. But
+  **WebCodecs can**: `VideoDecoder` with `hvc1` uses the platform decoder — NVDEC on the 3080 Ti — and
+  there are two client-side routes from there, in order of preference:
+  1. **Decode only, render to canvas** — decoded `VideoFrame`s draw straight to a `<canvas>`, so there
+     is **no re-encode at all** and the picture is bit-exact with the source. A/V is synced manually
+     against the MSE-fed audio.
+  2. **Decode + re-encode on the client** — `VideoDecoder` (NVDEC) -> `VideoEncoder` (NVENC, H.264) ->
+     MSE, keeping the existing pipeline. Costs an encode the GPU can do easily, but reuses everything
+     else. Kept as the fallback if manual A/V sync proves too fiddly.
+- **Dolby audio is the one piece that cannot move in either case.** WebCodecs' `AudioDecoder` has no
+  AC-3/E-AC-3, and this provider's audio is E-AC-3 5.1 / AC-3 5.1. So the server keeps the audio-only
+  re-encode its copy path already does (`-c:v copy -c:a aac`), which is an audio-only decode — trivial
+  next to a 4K video decode. The video stays bit-exact.
+
+**Build order for v0.49, so the first step answers the go/no-go question:**
+
+1. **Decode-headroom probe** — a small page behind the app (`/uhd-probe`) that fetches a real fMP4
+   segment from a running session, demuxes it, and runs `VideoDecoder` at the stream's own resolution
+   (3840x2160 Main 10) while counting decoded frames per second. On the 3080 Ti this should read in the
+   hundreds of fps on NVDEC; if it does, the rest is worth building, and if it does not, we have learned
+   it in an hour.
+2. **fMP4 sample demuxer** — `mp4box.js`, or a minimal parser for the single-video-track shape this
+   transcoder emits (`hev1`/`hvc1`, one init segment, in-band parameter sets).
+3. **Canvas presentation + A/V sync** (decode-only route), with the NVENC re-encode as the fallback.
+4. **Capability gate** — `VideoDecoder.isConfigSupported(hvc1)` plus a short decode probe at startup, so
+   a browser that cannot do this gets today's honest error rather than a black canvas.
+
+**Capability gate, decided:** this is an *option where available* — never the only path. Native HLS
+(Safari) keeps playing untouched; WebCodecs is the route for browsers without it, offered only when the
+probe proves it can decode; otherwise the honest error stands.
 
 **Interim, and true today:** UHD plays natively in a browser with its own HLS pipeline (Safari) after
 the container remux — no server decode, no re-encode — and does not play in Chrome on this hardware at
