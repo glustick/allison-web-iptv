@@ -590,9 +590,28 @@ fixture splits a PES across packets and was itself suspect. Nothing broken was l
 work restarts from that debug point, with a *real* captured segment as the fixture rather than a
 hand-built one, since the hand-built one is as likely to be the bug as the parser.
 
-**Build order for v0.49, so the first step answers the go/no-go question:**
+**Next build, on the operator's suggestion (2026-09-22), and it replaces the standalone probe page:**
+a **media stats panel** in the live player — a button that opens what the player is actually doing.
+Every debugging session today needed a guess about the browser's side (which engine was used, whether
+MSE took the append, whether decode was hardware or software), and each guess cost a round trip. A panel
+makes each test self-diagnosing instead.
 
-1. **Decode-headroom probe** — a small page behind the app (`/uhd-probe`) that fetches a real fMP4
+What it shows, and where each number comes from — deliberately only things that are real:
+
+| Shown | Source | Why it earns its place |
+| --- | --- | --- |
+| Engine in use | `engineRef` (native / hls.js / WebCodecs once it exists) | The single fact that would have saved today: Safari silently fell back to hls.js, where HEVC can never work |
+| Codec, container, declared resolution | the existing `probeTracks` result (video codec, audio tracks) | Says what the channel *is*, before any playback decision |
+| Presented resolution and frame size | `videoWidth`/`videoHeight` on the element | Catches a black picture that is decoding fine (0x0 is the signature of the HEVC-in-TS case) |
+| Video/audio bitrate | measured from the bytes the player actually received (hls.js fragment stats, or the relay's own accounting) | Distinguishes "starved by bandwidth" from "cannot decode" |
+| Buffered / played / stalled seconds | `video.buffered`, `currentTime`, `playbackQuality` | The buffering story, in numbers |
+| Dropped frames | `getVideoPlaybackQuality()` where available | Hardware decode that is *nearly* keeping up looks exactly like this |
+| Decode path: hardware or software | `VideoDecoder.isConfigSupported({hardwareAcceleration:'prefer-hardware'})` for WebCodecs; for plain `<video>` there is **no API** — the panel must say "unknown" rather than guess | The honest version of "is the GPU being used" |
+| Browser capabilities | `canPlayType` (native HLS), `MediaSource.isTypeSupported(hvc1)`, WebCodecs `isConfigSupported` at 3840x2160 | Three lines that make every future report unambiguous, and the go/no-go for client-side decoding |
+
+**Build order for v0.49:**
+
+1. **Media stats panel** (above) — capability lines first, then the live numbers. — a small page behind the app (`/uhd-probe`) that fetches a real fMP4
    segment from a running session, demuxes it, and runs `VideoDecoder` at the stream's own resolution
    (3840x2160 Main 10) while counting decoded frames per second. On the 3080 Ti this should read in the
    hundreds of fps on NVDEC; if it does, the rest is worth building, and if it does not, we have learned
