@@ -737,7 +737,19 @@ app at least once.
   channel that was never broadcasting. **"The provider is down" and "the provider is serving a
   placeholder" look nothing alike from the panel and only one of them is a bug worth chasing** — check
   a channel known to be live before debugging the player, and note that an event-only channel outside
-  its event is the most likely source of this.
+  its event is the most likely source of this. And treat it as a *state*, not a condition: the same
+  account served real, distinct streams again the next day (2026-09-22), with an advancing playlist and
+  per-request tokens.
+- **Every channel here is HEVC, and every channel's audio is Dolby.** Measured 2026-09-22 against the
+  recovered streams: the UHD tier is HEVC **Main 10** at 3840x2160 and **50 fps** (59.94 on one CA
+  feed), BT.2020 with a PQ transfer — i.e. 10-bit HDR — at **~14-22 Mbps**, carrying E-AC-3 5.1 at
+  640 kb/s or AC-3 5.1. Even the 1080p HD channels are HEVC (Main, 8-bit, 50 fps) with E-AC-3 stereo,
+  not H.264. Two consequences worth holding onto: **a browser has to decode both HEVC *and* Dolby to
+  play any of this untouched** (Safari does; Chromium usually does not), and **the segments are
+  MPEG-TS**, which is not the container Apple's own HLS authoring rules specify for HEVC (fMP4). So
+  "can Safari's native pipeline take HEVC-in-TS, or does it need the remux first?" is an open,
+  measurable question rather than a settled one — and it is the one that decides whether the app can
+  play these channels untouched.
 
 ## Backup, restore and system health (admin → **System** tab)
 

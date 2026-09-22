@@ -448,6 +448,19 @@ failures live, name them plainly, and let the operator fix them from just the me
 
 ### 1. Live TV & playback
 
+- **Settle whether Safari's native pipeline takes HEVC-in-MPEG-TS — this decides everything else.**
+  *Open, and the top of this list.* The provider's UHD feeds are HEVC Main 10, 3840x2160 at 50 fps,
+  10-bit HDR, ~14-22 Mbps, with E-AC-3/AC-3 5.1 audio — and packed in **MPEG-TS** segments (measured
+  2026-09-22; see the note below). Apple's own HLS authoring rules put HEVC in **fMP4**, so native
+  Safari playback may refuse the container while happily decoding the codec. Two very different
+  outcomes follow, and they need opposite work:
+  - *If native Safari plays it* — nothing more to do; v0.46.3 already plays these untouched, at full
+    quality, with hardware decode, and the re-encode tier is dead weight.
+  - *If it refuses* — the fix is **not** a re-encode. It is the v0.44.1 machinery (a stream-**copy**
+    remux into fMP4, which changes no pixels) applied *before* hls.js is ever attached: detect that
+    the browser will not take this container and remux, rather than falling back to a JavaScript
+    demux into MSE. That keeps full quality and full resolution.
+  Wants one live observation on Safari to settle it.
 - **Verify native playback live, and let it reach further.** *Open (v0.46.3, unverified).* Live TV now
   prefers the browser's own HLS pipeline wherever one exists — Safari has had one all along, and
   forcing hls.js instead is what put every HEVC / 10-bit HDR / Dolby stream through a JavaScript demux
@@ -504,7 +517,33 @@ failures live, name them plainly, and let the operator fix them from just the me
   exhausting its reloads and giving up rather than converting — **shipped in v0.46.2**, as the last
   rung of `stallRecoveryShape`.
 
+### Measured 2026-09-22: the real streams, now that the provider is back
+
+Everything the playback work depends on, measured through the deployed app against real segments
+(ffprobe of fetched fragments):
+
+| Channel | Video | Resolution / fps | Colour | Bitrate | Audio |
+| --- | --- | --- | --- | --- | --- |
+| Sky Sports Main Event UHD | HEVC Main 10 | 3840x2160 @ 50 | BT.2020 + PQ (HDR) | 14.2 Mbps | E-AC-3 5.1 640k |
+| TNT Sports Ultimate 4K | HEVC Main 10 | 3840x2160 @ 50 | BT.2020 + PQ (HDR) | 13.9 Mbps | E-AC-3 5.1 640k |
+| Sportsnet 4K | HEVC Main 10 | 3840x2160 @ 59.94 | BT.2020, 10-bit | 21.9 Mbps | AC-3 5.1 384k |
+| Sky News HD | HEVC Main | 1920x1080 @ 50 | BT.709 (SDR) | 3.6 Mbps | E-AC-3 stereo 224k |
+
+Three things follow directly:
+
+1. **HEVC is not a UHD problem here — it is the whole provider.** Even 1080p news is HEVC, and every
+   channel's audio is Dolby. A browser must handle both to play anything untouched.
+2. **The relay carries 14-22 Mbps per UHD viewer** (every segment is relayed through this app, by
+   design, to keep credentials out of the browser). That is a real, sustained load on the host and a
+   real thing to surface in the System tab.
+3. **A re-encode of this is hopeless on a small NAS** — 10-bit 4K at 50 fps, to H.264, in real time —
+   which is exactly why v0.46.3's "play natively, never trade quality" direction is the right one, and
+   why the fMP4 **remux** (stream-copy) is the tool to reach for if the native path needs help.
+
 ### Measured 2026-09-21: the provider serves a repeating placeholder on every channel
+
+*This was a provider state, not a condition — the same account served real streams again on
+2026-09-22, above.
 
 Read this before chasing a playback bug that is not ours. Measured through the deployed app against
 the live provider, sampling across unrelated categories (Sky Sports UHD / TNT Ultimate 4K, Sky News,
