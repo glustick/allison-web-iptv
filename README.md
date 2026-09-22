@@ -6,7 +6,20 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.47.0 — the app asks before it re-encodes, and the viewer decides)
+## Current state (v0.48.0 — HEVC live plays at full quality: stream-copy remux, no re-encode)
+
+**v0.48.0 fixes the video on the UHD channels, which v0.46.3's native-first path did not.** Measured by
+counting **decoded video frames** rather than trusting a playhead: an audio-only stream advances a
+playhead exactly as happily as a playing one, and the first version of this test said "PLAYED" about a
+stream with **no video at all**. Counted properly, the macOS native pipeline presents **no video** for
+HEVC in MPEG-TS — `presentationSize 0x0`, zero frames — while playing the audio track, which is
+precisely the reported symptom (*"only playing audio... no video, then both audio and video is blank
+after around 20 seconds"*). The same Mac decodes the *same bitstream* from fMP4 without effort (28
+frames at 3840x2160), so this is the container — and Apple's HLS rules are explicit that HEVC belongs
+in fMP4. The fix is the cheapest one available: **an HEVC live channel now goes through the
+transcoder's stream copy**, which changes the container and not one pixel of the video, into HLS that
+both engines present natively. No re-encode, no resolution change, no quality loss. 486 tests; all
+gates green.
 
 **v0.47.0** stops the app deciding to re-encode on the viewer's behalf. Playback now **asks whether
 this browser can decode the channel's video before playing it**: the server's existing on-play probe
@@ -44,9 +57,10 @@ quality for smoothness, unasked**, on a player whose job is to show the stream t
   replaced in the shape it already has. The tier remains the media-error ladder's last resort (v0.45.0),
   where the alternative is no picture at all.
 
-472 tests; typecheck, lint and both builds green. **Confirmed working 2026-09-22** — deployed to the
-NAS and reported by the operator: *"UHD looks ok."* That is the live proof this release shipped
-without, on the real UHD tier.
+472 tests; typecheck, lint and both builds green. *Later corrected:* the operator first reported the
+UHD channels "looking ok", then — watching properly — found they played **audio only, no video, going
+blank after around twenty seconds**. The cause and the fix are v0.48.0, above. The "confirmed" note
+that briefly sat here was an over-optimistic first look, and is recorded as such rather than deleted.
 
 **v0.46.2** closes the last hole in the ladder v0.46.1 opened. A **direct** stream — the provider's own
 feed, relayed — that stalled through every reload it was allowed ended in the terminal error, while
@@ -762,11 +776,11 @@ app at least once.
   640 kb/s or AC-3 5.1. Even the 1080p HD channels are HEVC (Main, 8-bit, 50 fps) with E-AC-3 stereo,
   not H.264. Two consequences worth holding onto: **a browser has to decode both HEVC *and* Dolby to
   play any of this untouched** (Safari does; Chromium usually does not), and **the segments are
-  MPEG-TS**, which is not the container Apple's own HLS authoring rules specify for HEVC (fMP4).
-  Measured 2026-09-22 against the macOS media stack itself (AVFoundation, Safari's engine): **it plays
-  both** — MPEG-TS and an fMP4 remux of the same content — so the container was never the blocker and
-  no remux is needed. These channels can be played untouched, at full resolution and bitrate, by any
-  browser whose media stack decodes HEVC.
+  MPEG-TS**, and that container *is* the problem: Apple's HLS rules put HEVC in fMP4, and measured
+  against the macOS media stack (AVFoundation, Safari's engine), **an HEVC Main 10 TS stream presents
+  no video at all** — audio only, zero decoded frames. The same bitstream remuxed to fMP4 (`-c:v copy`,
+  no re-encode) decodes immediately at 3840x2160. So an HEVC live channel goes through the stream-copy
+  remux (v0.48.0) before playback, and plays at full resolution and bitrate as fMP4.
 
 ## Backup, restore and system health (admin → **System** tab)
 

@@ -5,7 +5,7 @@ import { noteStreamNeedsTranscode, streamNeedsTranscode, streamNeedsVideoTransco
 import { prefersNativePlayback } from '../lib/nativePlayback'
 import { sniffStreamKind } from '../lib/streamKind'
 import { probeStreamTracks } from '../lib/audioTrackProbe'
-import { canDecodeVideoCodec } from '../lib/videoCapability'
+import { canDecodeVideoCodec, needsStreamCopyRemux } from '../lib/videoCapability'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
@@ -611,11 +611,6 @@ let stallCount = 0
   useEffect(() => {
     if (url.startsWith('/__transcode/')) return
     if (streamNeedsTranscode(url)) return
-    // Under native playback the browser decodes the audio itself, and it decodes considerably more
-    // than MSE does — Safari plays AC-3 and E-AC-3 natively. Asking MSE's opinion here would
-    // transcode a channel whose audio the native pipeline handles perfectly, which is the opposite
-    // of the point.
-    if (engineRef.current === 'native') return
     let cancelled = false
     void (async () => {
       const { audioTracks, videoCodec } = await probeStreamTracks(url)
@@ -623,11 +618,25 @@ let stallCount = 0
       // this effect is a sibling of the hls one, so it cannot see that effect's local probe
       const decodeProbe = (mimeType: string): boolean =>
         typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mimeType)
-      // Video first, and before playback rather than after it fails: every channel this provider
-      // serves is HEVC, and a browser without an HEVC decoder will never play one. Asking up front
-      // turns "fails, recovers, converts 4K" into one sentence — and stops the app reaching for the
-      // most expensive response it has. See lib/videoCapability.ts for why MSE's answer is only the
-      // first half of this, and why the ladder below still exists.
+      // The container check comes first, and applies on *every* engine: an HEVC live stream in
+      // MPEG-TS is unplayable as it arrives — the native pipeline presents no video at all (measured:
+      // 0 decoded frames, presentationSize 0x0, audio-only), and hls.js has no better answer. The
+      // transcoder's stream copy fixes it without touching a pixel. See needsStreamCopyRemux.
+      if (needsStreamCopyRemux({ videoCodec, isLive: true })) {
+        console.warn(
+          `[player] ${videoCodec} live video in an MPEG-TS HLS container; the browser cannot present it — ` +
+            'remuxing the container (stream copy, no re-encode)'
+        )
+        tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
+        return
+      }
+      // Under native playback the browser decodes codecs MSE cannot, so the capability question below
+      // is about the hls.js path only — Safari plays AC-3, E-AC-3 and more without help.
+      if (engineRef.current === 'native') return
+      // Video next, and before playback rather than after it fails: a browser without an HEVC decoder
+      // will never play one. Asking up front turns "fails, recovers, converts 4K" into one sentence —
+      // and stops the app reaching for the most expensive response it has. See lib/videoCapability.ts
+      // for why MSE's answer is only the first half of this, and why the ladder below still exists.
       if (!canDecodeVideoCodec(videoCodec, decodeProbe)) {
         console.warn(`[player] stream video is ${videoCodec}, which this browser cannot decode`)
         setVideoUnplayable(videoCodec ?? 'this channel’s video')

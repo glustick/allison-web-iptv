@@ -8,12 +8,26 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-22 against v0.47.0**.
+Recommended enhancements for future development, refreshed **2026-09-22 against v0.48.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.48.0 — the UHD channels play video: HEVC live is remuxed, not re-encoded.** The complaint that
+started this whole line — "the UHD channels don't play well" — is now explained and fixed, and it was
+not what any of the intervening work assumed. The provider's UHD feeds are HEVC Main 10 in **MPEG-TS**
+segments, and the macOS native pipeline **presents no video at all** for HEVC-in-TS: it plays the audio
+track, reports `presentationSize 0x0` and zero decoded frames, and the session runs out around twenty
+seconds in. That is the reported symptom, word for word. The same Mac decodes the same bitstream from
+fMP4 without effort, so this is the container — and it is why v0.46.3's native-first change produced
+*audio only* rather than a picture: the engine it prefers cannot read this container.
+
+The fix is the cheapest one available and changes no pixels: **an HEVC live channel is routed through
+the transcoder's stream copy** (`-c:v copy` into fMP4), re-wrapping the container into HLS both engines
+present natively, at full resolution and bitrate. `needsStreamCopyRemux` (pure, unit-tested) makes the
+decision from the video codec the probe already reports. 486 tests; all gates green.
 
 **v0.47.0 — ask before re-encoding, and let the viewer decide.** Measured on 2026-09-22 by driving a
 real browser into the deployed app and playing *Sky Sports Main Event UHD*: the relay carried the 4K
@@ -470,8 +484,10 @@ failures live, name them plainly, and let the operator fix them from just the me
 
 ### 1. Live TV & playback
 
-- **~~Settle whether Safari's native pipeline takes HEVC-in-MPEG-TS.~~ Answered 2026-09-22: yes.**
-  *Settled, and it closes the question this list was built around.* The provider's UHD feeds are HEVC
+- **~~Settle whether Safari's native pipeline takes HEVC-in-MPEG-TS.~~ Answered 2026-09-22 — then
+  answered again, better, the same evening: *no, for video.* The first answer ("yes, it plays") was read
+  off a playhead that an audio-only stream advances just as happily, with the probe's own "no video
+  track" line misread as a race. The fix shipped hours later as v0.48.0.** The provider's UHD feeds are HEVC
   Main 10, 3840x2160 at 50 fps, 10-bit HDR, ~14-22 Mbps, in **MPEG-TS** segments, and Apple's HLS
   authoring rules put HEVC in fMP4 — so the container was a real worry. Measured directly against the
   macOS media stack (AVFoundation, the engine Safari sits on), pointed at locally-served copies of

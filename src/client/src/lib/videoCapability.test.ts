@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { canDecodeVideoCodec, mseCodecForVideo } from './videoCapability.js'
+import { canDecodeVideoCodec, mseCodecForVideo, needsStreamCopyRemux } from './videoCapability.js'
 
 describe('mseCodecForVideo', () => {
   it('maps the codec names ffmpeg reports to the question MSE understands', () => {
@@ -52,5 +52,30 @@ describe('canDecodeVideoCodec', () => {
         throw new Error('no MediaSource here')
       })
     ).toBe(true)
+  })
+})
+
+describe('needsStreamCopyRemux', () => {
+  it('remuxes HEVC live video — the container the native pipeline cannot present', () => {
+    // Measured: the same Mac decodes this bitstream from fMP4 (28 frames, 3840x2160) and presents
+    // nothing at all from MPEG-TS (0 frames, 0x0). Container, not codec, not quality.
+    expect(needsStreamCopyRemux({ videoCodec: 'hevc', isLive: true })).toBe(true)
+    expect(needsStreamCopyRemux({ videoCodec: 'HEVC', isLive: true })).toBe(true)
+    expect(needsStreamCopyRemux({ videoCodec: 'h265', isLive: true })).toBe(true)
+  })
+
+  it('leaves H.264 live alone — both engines play that in TS without help', () => {
+    expect(needsStreamCopyRemux({ videoCodec: 'h264', isLive: true })).toBe(false)
+    expect(needsStreamCopyRemux({ videoCodec: 'avc1', isLive: true })).toBe(false)
+  })
+
+  it('does not touch VOD, which is a file the transcoder already handles case by case', () => {
+    expect(needsStreamCopyRemux({ videoCodec: 'hevc', isLive: false })).toBe(false)
+  })
+
+  it('says no when the codec is unknown, rather than converting on a guess', () => {
+    expect(needsStreamCopyRemux({ videoCodec: null, isLive: true })).toBe(false)
+    expect(needsStreamCopyRemux({ videoCodec: undefined, isLive: true })).toBe(false)
+    expect(needsStreamCopyRemux({ videoCodec: '', isLive: true })).toBe(false)
   })
 })

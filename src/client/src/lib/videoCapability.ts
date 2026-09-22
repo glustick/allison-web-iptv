@@ -54,3 +54,39 @@ export function canDecodeVideoCodec(codec: string | null | undefined, probe: Typ
     return true
   }
 }
+
+/**
+ * Does this live stream need its container changed before *any* browser can present it?
+ *
+ * Measured 2026-09-22, by counting decoded video frames rather than trusting a playhead (an audio-only
+ * stream advances one just as happily — the first version of that test said "plays" about a stream
+ * with no video at all):
+ *
+ *   Sky Sports Main Event UHD, HEVC Main 10 in MPEG-TS   -> 0 frames, presentationSize 0x0, audio only
+ *   the same content remuxed to fMP4 (`-c:v copy`)       -> 28 frames, 3840x2160
+ *
+ * The macOS native pipeline — Safari's own engine — parses an HEVC-in-TS playlist happily and then
+ * presents *no video at all*: it plays the audio track and nothing else. That is not a decoding
+ * question (the same Mac decodes the same bitstream from fMP4 without effort) and not a quality
+ * question: it is the container, and Apple's HLS rules are explicit that HEVC belongs in fMP4.
+ * hls.js has no better answer to it — a JavaScript demux of HEVC-in-TS into MSE is exactly the path
+ * that never works — so this is a fact about the *stream*, not about the browser, and it applies
+ * whichever engine would otherwise have been chosen.
+ *
+ * The fix is the cheapest one available: the transcoder's **stream copy**, which changes the container
+ * and not one pixel of the video, into HLS that both engines can present natively.
+ *
+ * Deliberately keyed on the video codec alone. This provider's live playlists are all MPEG-TS
+ * (measured), and a channel already in fMP4 would pay a pointless pass through the transcoder — but the
+ * cost of being wrong that way is a little CPU, while the cost of the opposite mistake is the bug this
+ * exists to fix. When a source is known to be fMP4 the caller can simply skip this; the rule stays
+ * conservative rather than clever.
+ */
+export function needsStreamCopyRemux(state: {
+  videoCodec: string | null | undefined
+  isLive: boolean
+}): boolean {
+  if (!state.isLive) return false
+  const codec = (state.videoCodec ?? '').trim().toLowerCase()
+  return codec === 'hevc' || codec === 'h265'
+}
