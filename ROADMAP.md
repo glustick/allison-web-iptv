@@ -8,7 +8,7 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-23 against v0.52.0**.
+Recommended enhancements for future development, refreshed **2026-09-23 against v0.53.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
@@ -837,6 +837,15 @@ already solved one layer up. The desktop sibling app (`~/Desktop/Development/ipt
 a native player there can hardware-decode HEVC on the same 3090 and needs nothing from the NAS.
 
 ### 1. Live TV & playback
+
+- **Log what ffmpeg actually said.** *Open, small, high value.* The transcoder keeps a character-limited
+  *tail* of ffmpeg's stderr, and on 2026-09-23 that tail ended mid-`Skip(…)` line — so the error that
+  explained fourteen-second session deaths was cut off, and finding it cost an hour of inference. Keep
+  the error line (the first line matching a failure pattern), not just the end of the output.
+- **A dead producer is not a stall.** *Open.* The client recovery ladder handles a *starving* player; a
+  session whose ffmpeg has exited is a different thing, and the operator saw the result — the buffer
+  draining to zero and staying flat with no message. The session's own state should be a first-class
+  recovery case: detect it, replace it, or say so.
 
 *Where to start next session:* the media stats panel (v0.49.0) is the first thing to deploy and use. On
 a machine with the GPU, its WebCodecs line answers whether client-side decoding is real; in Chrome it

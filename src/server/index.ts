@@ -1759,13 +1759,26 @@ app.post('/api/transcode/start', requireAuth, (req, res) => {
   }
   let upstreamUrl: string
   try {
+    // Validates the path and that this account has a provider configured.
     upstreamUrl = resolveUpstreamUrl(sourceUrl, req)
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'No IPTV server configured' })
     return
   }
+  // ffmpeg reads this app's own relay, not the provider URL: the provider signs its URLs and they
+  // expire in tens of seconds, while ffmpeg re-reads the same URL for the life of the session. Measured
+  // 2026-09-23 — sessions dying with exit code 255 about fourteen seconds in, while reading faster than
+  // realtime, on two different channels; the buffer then drained with nothing to recover from. The relay
+  // resolves a fresh upstream URL on every request, which is exactly the machinery that already keeps
+  // browser playback alive through the same expiry.
+  // Only when the caller authenticated with a cookie, which is how this app's own client does it: a
+  // request without one cannot authorise ffmpeg against the relay, and falling back to the provider URL
+  // keeps a session working rather than turning a missing cookie into a dead channel.
+  const cookie = typeof req.headers.cookie === 'string' && req.headers.cookie.length > 0 ? req.headers.cookie : null
+  const inputUrl = cookie ? `http://127.0.0.1:${PUBLIC_PORT}${sourceUrl}` : upstreamUrl
+  const inputHeaders = cookie ? `Cookie: ${cookie}` : undefined
   transcodeService
-    .startTranscode(upstreamUrl, Boolean(isVod), sessionId, subtitleStreamIndex, audioStreamIndex, Boolean(videoTranscode))
+    .startTranscode(inputUrl, Boolean(isVod), sessionId, subtitleStreamIndex, audioStreamIndex, Boolean(videoTranscode), inputHeaders)
     .then(({ playlistPath, subtitleTracks }) => {
       // Same reasoning as the desktop app's own transcode:start handler: the filename varies
       // (playlist.m3u8 normally, master.m3u8 when a subtitle rendition got included), so

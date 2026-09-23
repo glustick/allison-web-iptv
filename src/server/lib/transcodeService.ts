@@ -377,7 +377,9 @@ export interface TranscodeService {
     // source's video untouched, which is free and correct wherever the browser genuinely decodes
     // it; true is the escape hatch for the last tier — a browser that claims HEVC support and then
     // fails the actual decode (see the -c:v comment in the argv below).
-    videoTranscode?: boolean
+    videoTranscode?: boolean,
+    /** Extra HTTP headers for the input (see startTranscode's implementation). */
+    inputHeaders?: string
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }>
   stopTranscode(sessionId: string): Promise<void>
   serveTranscodeFile(url: string, res: ServerResponse): Promise<void>
@@ -500,7 +502,15 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     sessionId: string,
     subtitleStreamIndex = 0,
     audioStreamIndex = 0,
-    videoTranscode = false
+    videoTranscode = false,
+    /**
+     * Extra HTTP headers for the input, when the input is this app's own relay rather than the
+     * provider. The relay is authenticated, so ffmpeg needs the requesting session's cookie — and
+     * reading through the relay is what makes a session survive the provider's URL expiry (see the
+     * transcode route). The token travels in the process arguments; inside the container that is the
+     * same trust boundary as SESSION_SECRET, which is already in the environment.
+     */
+    inputHeaders?: string
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }> {
     const ffmpegPath = await deps.resolveFfmpegPath()
     if (!ffmpegPath) {
@@ -574,6 +584,9 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       // option" before reading a frame; the integration tests and a container run both caught that.
       ...(isHttpSource && !isVod && isHlsSource ? ['-live_start_index', '-1'] : []),
       ...(isHttpSource ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3'] : []),
+      // `-headers` is an option of the HTTP protocol, so it has to sit with the other input options,
+      // before -i — the same rule that caught -live_start_index on a movie.
+      ...(inputHeaders ? ['-headers', inputHeaders] : []),
       '-i',
       sourceUrl,
       // Movies/series routinely carry an embedded subtitle track alongside the audio this fix

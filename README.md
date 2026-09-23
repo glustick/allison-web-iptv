@@ -6,6 +6,37 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.53.0 — transcode sessions read the app's relay, so they survive URL expiry)
+
+**v0.53.0 fixes the draining buffer**, reported live while the operator was testing: *"the video is
+playing, but the buffering is running out and not recovering"* — "it just drains and goes flat".
+
+The cause was in the server's log, not the player: **ffmpeg exited with code 255 about fourteen seconds
+into every session**, on two different channels, while reading *faster* than realtime and doing no
+encoding at all (`q=-1.0`, `size=N/A` — a stream copy). With the producer gone, the playlist stopped
+advancing and the buffer had nothing to recover from.
+
+Why: the transcode session was handed **the provider's URL** and read it directly. This provider *signs*
+its URLs and they expire in tens of seconds, and ffmpeg re-reads the same URL for the life of the session
+— so it dies on schedule. The app already knew this: the v0.44.0 lesson was "fetch a fresh playlist when
+a segment is refused", and the **relay** applies it for every browser request. ffmpeg never got that
+treatment. It does now: a session reads `http://127.0.0.1:<port>/api/stream/…` — this app's own relay,
+which resolves a fresh upstream URL on every request — with the requesting session's cookie as an input
+header.
+
+Two deliberate safeguards: the session falls back to the provider URL if the caller did not authenticate
+with a cookie (so a missing cookie cannot become a dead channel), and the cookie travels in the process
+arguments, which inside the container is the same trust boundary as `SESSION_SECRET` in the environment.
+
+**Not verified end-to-end** — it needs a deploy, and the operator will use it in the morning. What *is*
+verified from here: the relay paths ffmpeg will now use (`/api/stream/…` and `/__fetch/…`, with a cookie)
+are the same ones that already serve the browser through this exact expiry. 521 tests; all gates green.
+
+**Two follow-ups this exposed:** the app logs only a truncated *tail* of ffmpeg's stderr, which cut off
+before the actual error and cost an hour of guessing — it should log the error line. And a dead producer
+is still not a first-class recovery case on the client: a session that goes silent should be detected and
+replaced rather than draining the buffer in silence.
+
 ## Current state (v0.52.0 — playlists are configurable: the manager and the endpoints)
 
 **v0.52.0 is the first part of the playlist feature you can actually use**: a **Playlists** section in the
