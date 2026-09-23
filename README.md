@@ -6,6 +6,23 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.50.0 — a client-side decode check, and the capability answer)
+
+**The operator's own stats panel settled the question this direction was waiting on:** on the machine
+with the RTX 3080 Ti, `WebCodecs HEVC decode (4K Main 10, prefer hardware)` reports **yes** — so
+`VideoDecoder` will decode the provider's HEVC on that hardware, and the client-side plan is real rather
+than aspirational. (Same run: MSE accepts HEVC *yes*, which is why the 1080p channels play directly and
+smoothly after v0.49.3.)
+
+**v0.50.0 adds the decode check to admin → System**: it runs the pipeline a client-side player would use
+— fetch a live segment, demux it to Annex-B HEVC with the shipped extractor, hand it to `VideoDecoder`
+as `hev1` — and reports **frames per second**, the number that decides whether a client-side player is
+worth building (hundreds = the GPU is doing the work; single digits = a slideshow with a green tick
+next to it). It draws decoded frames into a canvas, because a frame count with a black canvas would be a
+lie of omission. Two limits are stated in the page itself: the whole stream is one chunk, so it measures
+throughput rather than frame pacing, and a browser that cannot decode says so — it is a measurement, not
+a fallback.
+
 ## Current state (v0.49.4 — the stats toggle sits clear of the controls)
 
 **v0.49.4** moves the stats overlay down the player on the operator's own measurement (10% of the screen

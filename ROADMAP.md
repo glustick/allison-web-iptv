@@ -8,7 +8,7 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-23 against v0.49.3**.
+Recommended enhancements for future development, refreshed **2026-09-23 against v0.50.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
@@ -627,9 +627,22 @@ extracted stream again (frames counted), and the same test runs against a **real
 captured from the provider** (set `UHD_TS_SEGMENT=/path/to/seg.ts` to exercise it) — where it extracts
 parameter sets (VPS/SPS/PPS) and slices and ffmpeg decodes the result. Ten tests, all green.
 
-**Still to build, in order:** the WebCodecs `VideoDecoder` loop feeding off this extractor, canvas
-presentation with A/V sync against the MSE-fed audio, and the capability gate the stats panel already
-exposes.
+**Step 2 shipped 2026-09-23 (v0.50.0): the decode check**, in admin -> System. The operator's capability
+panel had already answered *whether* WebCodecs can decode this HEVC on the target machine (**yes**, 4K
+Main 10, prefer-hardware); the check answers *how fast* and *on which path* — fetch a live segment,
+demux with the shipped extractor, decode with `VideoDecoder` as `hev1`, and report frames per second
+while drawing decoded frames to a canvas. Hundreds of fps means the GPU is carrying it and the player is
+worth building; single digits means a software path and a different decision.
+
+**Still to build, in order:** wire the decoder into the player — canvas presentation with A/V sync
+against the MSE-fed audio, the playlist/segment loop for live, and the capability gate (a startup probe
+rather than a capability string, since a "yes" from `isConfigSupported` is not proof of throughput).
+
+**Open observation, from the operator's own capability read-out:** the panel reported `Native HLS
+pipeline: yes (maybe)` on a Chromium browser, and `canPlayType` answering `maybe` for HLS is what the
+engine choice keys on (`prefersNativePlayback` treats anything but `''` as "has a native pipeline"). A
+Chromium build that says `maybe` and cannot actually play HLS costs one wasted attach before the
+hls.js fallback rescues it — harmless but not free, and worth tightening if it shows up in a profile.
 
 **Next build, on the operator's suggestion (2026-09-22), and it replaces the standalone probe page:**
 a **media stats panel** in the live player — a button that opens what the player is actually doing.
