@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   MIGRATED_PLAYLIST_ID,
+  applyCredentialPatch,
   channelMatchKey,
   nextPlaylistId,
   parsePlaylists,
@@ -158,5 +159,52 @@ describe('primaryCredentials', () => {
   it('says nothing when there is no playlist, so the caller keeps its old behaviour', () => {
     expect(primaryCredentials(parsePlaylists({ epgUrls: ['g'] }))).toBeNull()
     expect(primaryCredentials(parsePlaylists(null))).toBeNull()
+  })
+})
+
+describe('applyCredentialPatch', () => {
+  const twoPlaylists = parsePlaylists({
+    version: 1,
+    alertWebhook: 'old-hook',
+    playlists: [
+      { id: 'primary', label: 'Main', server: 's1', username: 'u1', password: 'p1' },
+      { id: 'p2', label: 'Backup', server: 's2', username: 'u2', password: 'p2' }
+    ]
+  })
+
+  it('updates an account-level field without touching the playlists — the clobber this prevents', () => {
+    // The concrete failure this exists for: saving a Discord webhook used to spread a derived object
+    // and write it back, which would drop the second playlist.
+    const patched = applyCredentialPatch(twoPlaylists, { alertWebhook: 'new-hook' })
+    expect(patched.carried.alertWebhook).toBe('new-hook')
+    expect(patched.envelope.playlists).toEqual(twoPlaylists.envelope.playlists)
+  })
+
+  it('applies provider fields to the primary playlist only', () => {
+    const patched = applyCredentialPatch(twoPlaylists, { server: 's9', username: 'u9', password: 'p9' })
+    expect(patched.envelope.playlists[0]).toEqual({
+      id: 'primary',
+      label: 'Main',
+      server: 's9',
+      username: 'u9',
+      password: 'p9'
+    })
+    expect(patched.envelope.playlists[1].server).toBe('s2')
+  })
+
+  it('creates the first playlist from a first-time setup, because there is nothing to update', () => {
+    const patched = applyCredentialPatch(parsePlaylists({ epgUrls: ['g'] }), {
+      server: 's',
+      username: 'u',
+      password: 'p'
+    })
+    expect(patched.envelope.playlists).toEqual([
+      { id: MIGRATED_PLAYLIST_ID, label: 'Primary', server: 's', username: 'u', password: 'p' }
+    ])
+    expect(patched.carried).toEqual({ epgUrls: ['g'] })
+  })
+
+  it('clears a field when the patch says so, the way the settings screen does', () => {
+    expect(applyCredentialPatch(twoPlaylists, { alertWebhook: undefined }).carried.alertWebhook).toBeUndefined()
   })
 })

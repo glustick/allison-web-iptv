@@ -6,6 +6,24 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.51.2 — playlists, phase 1b: reads unified, writes cannot clobber)
+
+**v0.51.2 closes the two ways the playlist change could have broken an account**, both found by wiring
+it rather than by thinking about it:
+
+1. **Writes could have dropped a playlist.** Every settings writer read a credentials object, spread its
+   own field over it, and saved the result — and that object is now a *derived* view of the primary
+   playlist. `applyCredentialPatch` (pure, tested) is the fix: account-level fields (guide URLs, alert
+   webhook) merge into what the account carries, provider fields apply to the primary playlist, and the
+   playlist list survives. Saving a Discord webhook can no longer delete your second line.
+2. **Some readers decrypted the column themselves**, bypassing the migration. That would have been a
+   *delayed* breakage: the stored blob becomes a playlist envelope the first time any setting is saved,
+   and after that those readers would find no `server` on it. Every read now goes through one function —
+   `credentialsFromStored` — so the migration stays invisible instead of breaking hours later.
+
+The test for the first one asserts the exact scenario: patch a webhook on a two-playlist account, and
+the playlists come back untouched. 517 tests; typecheck, lint and both builds green.
+
 ## Current state (v0.51.1 — playlists, phase 1b: the credential path resolves through a playlist)
 
 **v0.51.1 puts the playlist model on the path that actually decides whether anything plays.**

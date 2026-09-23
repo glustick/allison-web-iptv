@@ -227,3 +227,50 @@ export function primaryCredentials(parsed: ParsedPlaylists): Record<string, unkn
     password: primary.password
   }
 }
+
+/**
+ * Applies a settings change to a stored account without touching the playlist list.
+ *
+ * This is the answer to the hazard the read-side rewiring exposed: every writer used to read a
+ * credentials object, spread its one field over it, and save the result. That object is now a *derived*
+ * view of the primary playlist, so saving it back would drop the other playlists. Routing writes
+ * through here instead means:
+ *
+ * - **account-level fields** (guide URLs, alert webhook, anything added later) merge into the fields the
+ *   account carries, untouched by playlists;
+ * - **provider fields** (`server`, `username`, `password`) apply to the primary playlist — and create
+ *   one, labelled "Primary", when the account has none yet, which is exactly the first-time setup case.
+ *
+ * Pure, so the rule that matters — saving your Discord webhook cannot delete your second playlist — is
+ * tested rather than hoped for.
+ */
+export function applyCredentialPatch(parsed: ParsedPlaylists, patch: Record<string, unknown>): ParsedPlaylists {
+  const carried = { ...parsed.carried }
+  const providerPatch: Partial<Playlist> = {}
+
+  for (const [key, value] of Object.entries(patch)) {
+    if ((PROVIDER_FIELDS as readonly string[]).includes(key)) {
+      ;(providerPatch as Record<string, unknown>)[key] = value
+    } else {
+      carried[key] = value
+    }
+  }
+
+  const playlists = parsed.envelope.playlists.map((playlist) => ({ ...playlist }))
+  if (Object.keys(providerPatch).length > 0) {
+    if (playlists.length === 0) {
+      playlists.push({
+        id: MIGRATED_PLAYLIST_ID,
+        label: 'Primary',
+        server: '',
+        username: '',
+        password: '',
+        ...providerPatch
+      })
+    } else {
+      playlists[0] = { ...playlists[0], ...providerPatch }
+    }
+  }
+
+  return { envelope: { version: 1, playlists }, carried, migrated: parsed.migrated }
+}

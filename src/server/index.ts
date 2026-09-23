@@ -16,7 +16,7 @@ import { filesystemSpace, isLowSpace , LOW_SPACE_THRESHOLD_BYTES } from './lib/d
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
 import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './lib/sessionStore.js'
-import { parsePlaylists, primaryCredentials } from './lib/playlists.js'
+import { applyCredentialPatch, parsePlaylists, primaryCredentials, serializePlaylists } from './lib/playlists.js'
 import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UserRole } from './lib/usersStore.js'
 import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
@@ -252,7 +252,8 @@ function getProxyTargetBase(req?: IncomingMessage): string | null {
   const stored = usersStore.getIptvCredentials(session.username)
   if (!stored) return null
   try {
-    const credentials = decryptSessionCredentials(stored)
+    const credentials = credentialsFromStored(stored)
+    if (!credentials) return null
     const normalized = normalizeProxyTargetBase(credentials.server)
     sessionProxyTargets.set(session.token, normalized)
     return normalized
@@ -530,7 +531,7 @@ app.post('/api/admin/alerts', requireAuth, requireAdmin, (req, res) => {
   const next = entries.length > 0 ? entries.join(', ') : undefined
   try {
     const updated: SessionCredentials = { ...credentials, alertWebhook: next }
-    usersStore.setIptvCredentials(session.username, encryptSessionCredentials(updated))
+    saveAccountCredentials(session.username, { alertWebhook: next })
     startProviderWatch(session.username, updated)
     res.json({ ok: true, webhookSet: Boolean(next), watching: providerWatches.has(session.username) })
   } catch (err) {
@@ -642,7 +643,8 @@ function resolveEpgCredentials(req: IncomingMessage): (EpgServiceCredentials & {
   const stored = usersStore.getIptvCredentials(session.username)
   if (!stored) return null
   try {
-    const credentials = decryptSessionCredentials(stored)
+    const credentials = credentialsFromStored(stored)
+    if (!credentials) return null
     return { server: credentials.server, username: credentials.username, password: credentials.password, epgUrls: credentials.epgUrls ?? [] }
   } catch {
     return null
@@ -660,7 +662,13 @@ app.get('/api/session', requireAuth, (req, res) => {
             res.json({ ok: true, configured: false, server: null, username: null, passwordSet: false, epgUrls: [], alertWebhookSet: false })
       return
     }
-    const credentials = decryptSessionCredentials(stored)
+    const credentials = credentialsFromStored(stored)
+    if (!credentials) {
+      // Stored, but nothing to derive from — the same answer as "not configured", so the settings
+      // screen offers to set it up rather than failing.
+      res.json({ ok: true, configured: false, server: null, username: null, passwordSet: false, epgUrls: [], alertWebhookSet: false })
+      return
+    }
     // The password is deliberately NOT sent. It used to be, and the client then embedded it in
     // every request it made — `/player_api.php?username=…&password=…` and
     // `/movie/<user>/<pass>/<id>.mp4` — so it ended up in the browser's history, in devtools, and
@@ -829,7 +837,7 @@ function startProviderWatch(username: string, credentials: SessionCredentials): 
     const stored = usersStore.getIptvCredentials(user.username)
     if (!stored) continue
     try {
-      for (const url of parseDiscordWebhookList(decryptSessionCredentials(stored).alertWebhook)) destinations.add(url)
+      for (const url of parseDiscordWebhookList(credentialsFromStored(stored)?.alertWebhook)) destinations.add(url)
     } catch {
       continue
     }
@@ -858,7 +866,8 @@ for (const user of usersStore.listUsers()) {
   const stored = usersStore.getIptvCredentials(user.username)
   if (!stored) continue
   try {
-    startProviderWatch(user.username, decryptSessionCredentials(stored))
+    const watcherCredentials = credentialsFromStored(stored)
+    if (watcherCredentials) startProviderWatch(user.username, watcherCredentials)
   } catch {
     continue
   }
@@ -894,7 +903,7 @@ app.post('/api/session/save', requireAuth, (req, res) => {
                   ? alertWebhook.trim()
                   : existing?.alertWebhook
     }
-    usersStore.setIptvCredentials(session.username, encryptSessionCredentials(credentials))
+    saveAccountCredentials(session.username, credentials as unknown as Record<string, unknown>)
 
     // Point the proxy at the provider right away so the client's first Xtream request works
     // without a separate /api/connect round trip.
@@ -1392,19 +1401,52 @@ app.delete('/api/prefs/categories/:id/channels/:kind/:streamId', requireAuth, (r
  * than write this back, or it will drop every playlist but the primary. With one playlist that is
  * harmless; see the roadmap.
  */
-function resolveAccountCredentials(username: string): SessionCredentials | null {
+/**
+ * Saves a credentials change **without disturbing the playlist list**.
+ *
+ * Every writer used to read a credentials object, spread its own field over it, and save the result —
+ * which, now that reading resolves the primary playlist, would drop every other playlist. Writers route
+ * through here instead: account-level fields merge into what the account carries, provider fields apply
+ * to the primary playlist, and the playlist list is preserved.
+ *
+ * A blob that cannot be decrypted throws rather than saving an empty object, because the alternative is
+ * silently wiping an account's provider configuration on a failed save.
+ */
+function saveAccountCredentials(username: string, patch: Record<string, unknown>): void {
   const stored = usersStore.getIptvCredentials(username)
+  let parsed = parsePlaylists(null)
+  if (stored) {
+    const raw = decryptSessionCredentials(stored) as unknown
+    parsed = parsePlaylists(raw)
+  }
+  const next = applyCredentialPatch(parsed, patch)
+  usersStore.setIptvCredentials(
+    username,
+    encryptSessionCredentials(serializePlaylists(next) as unknown as SessionCredentials)
+  )
+}
+
+function credentialsFromStored(stored: string | null): SessionCredentials | null {
   if (!stored) return null
   try {
     const raw = decryptSessionCredentials(stored) as unknown
     const parsed = parsePlaylists(raw)
-    const derived = primaryCredentials(parsed)
     // No playlist to derive from (an account that has not configured a provider yet): keep the old
     // behaviour rather than inventing an empty one.
-    return (derived ?? raw) as SessionCredentials
+    return (primaryCredentials(parsed) ?? raw) as SessionCredentials
   } catch {
     return null
   }
+}
+
+/**
+ * Everyone reads credentials through here — including the callers that used to decrypt the column
+ * themselves. That matters: the stored blob becomes a *playlist envelope* the first time any setting is
+ * saved, so a direct decrypt after that returns an object with no `server` on it. Routing every read
+ * through one function is what keeps the migration invisible rather than a delayed breakage.
+ */
+function resolveAccountCredentials(username: string): SessionCredentials | null {
+  return credentialsFromStored(usersStore.getIptvCredentials(username))
 }
 
 app.get('/api/epg/config', requireAuth, (req, res) => {
@@ -1455,7 +1497,7 @@ app.post('/api/epg/sources', requireAuth, (req, res) => {
     }
     const epgUrls = sanitizeEpgUrls(raw) ?? []
     const next: SessionCredentials = { ...credentials, epgUrls: epgUrls.length > 0 ? epgUrls : undefined }
-    usersStore.setIptvCredentials(session.username, encryptSessionCredentials(next))
+    saveAccountCredentials(session.username, { epgUrls: epgUrls.length > 0 ? epgUrls : undefined })
     // Kick off any newly-added sources so the screen shows them loading immediately.
     epgService.refresh({ credentials: next, epgUrls })
     res.json({ ok: true, epgUrls })
