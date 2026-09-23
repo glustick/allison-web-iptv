@@ -545,6 +545,61 @@ failures live, name them plainly, and let the operator fix them from just the me
 - **Global search, backup/restore, health page, disk-space reporting** — shipped across
   v0.9.0–v0.10.4.
 
+## Feature: multiple playlists (redundant Xtream profiles)
+
+**Requested 2026-09-23 by the operator:** *"one provider can be unstable, I would like the capability to
+configure two Xtream profiles or playlists for redundancy; show them both in the channel selection, but
+give an option to sort or hide a playlist to avoid having 1000s of channels."*
+
+### What already fits, and what does not
+
+- **Storage is nearly right.** One Xtream profile per account lives in `users.iptv_credentials` as an
+  encrypted blob (`SESSION_SECRET`, AES-256-GCM), and `providerLists.ts` already consumes credentials as
+  a small struct (`{ server, username, password }`). "A playlist" is that struct plus an identity and a
+  label — so the column can hold a **versioned envelope containing a list**, and the migration is a blob
+  rewrite rather than a schema change.
+- **The hard part is threading.** Every client-facing path is currently one provider: `/api/stream/...`,
+  `/api/xtream?action=...`, the EPG endpoints, and — the subtle ones — the *server-generated* segment
+  URLs inside relayed playlists (`/__fetch/<urlencoded upstream>`), the transcode sessions, and the
+  search index built by `providerLists.ts`. Channel ids are **provider-scoped**, so two profiles can and
+  will use the same numeric id for different channels: every id the client sees has to become
+  `playlistId + ':' + streamId`, and every request has to carry which playlist it means.
+- **Everything downstream of a channel id** has to learn the same thing or silently misbehave:
+  favourites, watch history, resume positions, custom categories, timeshift, the search index, EPG
+  matching, and the transcode hints. Denormalised name/category columns (already in the schema for
+  exactly this robustness reason) are what make the migration survivable.
+
+### Phases, smallest useful first
+
+1. **Model + configuration.** Versioned envelope in `iptv_credentials` holding a list of playlists
+   (`{ id, label, server, username, password }`), a settings UI to add/edit/test them, and the existing
+   single-profile blob migrated into a one-entry list on first read. Nothing else changes yet — the app
+   keeps using the first playlist, so this phase is invisible and safe.
+2. **Browse with two sources.** Client-side channel identity becomes composite; the browse endpoints
+   take a playlist id. Channel selection gains playlist **filter chips**, a per-playlist **hide** toggle,
+   and a sort preference — the operator's explicit ask.
+3. **Dedupe by channel, not by row.** The same channel on two playlists is one row with a source badge
+   (matching on normalised name + category, since ids are provider-scoped), with both sources listed
+   under it. This is the part that keeps "1000s of channels" from becoming "2000s".
+4. **Failover.** When a stream fails on one playlist, retry the *matched* channel on another. This is a
+   new rung in the recovery ladder, and it is where the provider-instability benefit actually lands.
+5. **Everything else follows the primary**, with a per-account choice: EPG, search index, probes, and
+   the update/health checks — one playlist is primary, the others are standbys unless a channel is only
+   present on them.
+
+### Decisions needed before phase 1 locks the model
+
+1. **Same provider with two lines, or genuinely different providers?** Near-identical catalogues make
+   name-based matching safe; different catalogues make dedupe a nicety rather than the main event.
+2. **Failover automatic or manual?** Automatic means the ladder retries the other playlist on the
+   operator's behalf (and holds a second provider connection while it does); manual means a button.
+3. **Dedupe or list-both?** The request says show both — the question is whether the *default* view
+   collapses a channel with two sources into one row, or shows two rows and relies on the filters.
+4. **One EPG or two?** A guide per playlist doubles the refresh cost; the sensible default is to match
+   the primary's guide and only fall back to the other playlist's for channels it does not carry.
+
+**Not started.** Phase 1 is self-contained and safe to begin whenever the current UHD line is quiet.
+
 ## Open work
 
 ### 0. Client-side decoding, so the NAS never transcodes video
