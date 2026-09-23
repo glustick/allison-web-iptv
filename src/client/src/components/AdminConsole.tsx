@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties, type JSX } from 'react'
 import type { AppUser, UserRole } from '../lib/appAuth'
 import { useResizableColumns, type ColumnSpec } from '../lib/useResizableColumns'
+import { PlaylistsPanel } from './PlaylistsPanel'
 
 // Column widths are draggable and persisted per table (see useResizableColumns); the tables use
 // fixed layout so a drag actually resizes the column, and the panel's text scales with the total
@@ -490,6 +491,7 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
             )}
           </div>
         </section>
+      <PlaylistsPanel />
     </div>
   )
 }

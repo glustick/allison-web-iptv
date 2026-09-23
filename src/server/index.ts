@@ -16,7 +16,17 @@ import { filesystemSpace, isLowSpace , LOW_SPACE_THRESHOLD_BYTES } from './lib/d
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
 import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './lib/sessionStore.js'
-import { applyCredentialPatch, parsePlaylists, primaryCredentials, serializePlaylists } from './lib/playlists.js'
+import {
+  applyCredentialPatch,
+  nextPlaylistId,
+  parsePlaylists,
+  primaryCredentials,
+  primaryPlaylist,
+  replacePlaylists,
+  serializePlaylists,
+  storedPassword,
+  type Playlist
+} from './lib/playlists.js'
 import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UserRole } from './lib/usersStore.js'
 import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
@@ -1448,6 +1458,103 @@ function credentialsFromStored(stored: string | null): SessionCredentials | null
 function resolveAccountCredentials(username: string): SessionCredentials | null {
   return credentialsFromStored(usersStore.getIptvCredentials(username))
 }
+
+/**
+ * The stored blob as a playlist list.
+ *
+ * Throws rather than returning an empty list when the blob cannot be decrypted: every caller of this is
+ * on the *write* path, and "no playlists" there means "replace the list with nothing" — silently wiping
+ * an account's provider configuration because a secret changed is not an acceptable failure mode.
+ */
+function parseStoredPlaylists(username: string): ReturnType<typeof parsePlaylists> {
+  const stored = usersStore.getIptvCredentials(username)
+  if (!stored) return parsePlaylists(null)
+  let raw: unknown
+  try {
+    raw = decryptSessionCredentials(stored) as unknown
+  } catch {
+    throw new Error('Stored IPTV credentials could not be decrypted — check SESSION_SECRET')
+  }
+  return parsePlaylists(raw)
+}
+
+/** What the settings screen may see: everything except the passwords. */
+function publicPlaylists(playlists: Playlist[]): Array<Omit<Playlist, 'password'> & { passwordSet: boolean }> {
+  return playlists.map(({ password, ...rest }) => ({ ...rest, passwordSet: password.length > 0 }))
+}
+
+// The account's Xtream profiles (v0.52.0). Read without secrets, written whole — and written through
+// the playlist envelope, so an account's guide URLs and alert webhook are untouched by playlist edits.
+app.get('/api/iptv/playlists', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    res.json({ playlists: publicPlaylists(parseStoredPlaylists(session.username).envelope.playlists) })
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Could not read the playlists' })
+  }
+})
+
+app.put('/api/iptv/playlists', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const submitted: unknown = req.body?.playlists
+  if (!Array.isArray(submitted)) {
+    res.status(400).json({ error: 'Expected { playlists: [...] }' })
+    return
+  }
+
+  let current: ReturnType<typeof parsePlaylists>
+  try {
+    current = parseStoredPlaylists(session.username)
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Could not read the playlists' })
+    return
+  }
+
+  const next: Playlist[] = []
+  for (const entry of submitted as Array<Partial<Playlist>>) {
+    const id = typeof entry?.id === 'string' && entry.id.trim().length > 0 ? entry.id.trim() : nextPlaylistId(next)
+    const label = typeof entry?.label === 'string' ? entry.label : ''
+    const server = typeof entry?.server === 'string' ? entry.server.trim() : ''
+    const username = typeof entry?.username === 'string' ? entry.username.trim() : ''
+    // Blank means "keep the stored password", exactly as the provider setup screen treats it, so the
+    // browser never has to round-trip a secret it was never sent.
+    const password =
+      typeof entry?.password === 'string' && entry.password.length > 0 ? entry.password : storedPassword(current, id)
+
+    if (!server || !username) {
+      res.status(400).json({ error: `Playlist "${label || id}" needs a server and a username` })
+      return
+    }
+    try {
+      assertSafeExternalUrl(server)
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : `Unsafe server URL: ${server}` })
+      return
+    }
+    next.push({ id, label, server, username, password })
+  }
+
+  try {
+    const replaced = replacePlaylists(current, next)
+    usersStore.setIptvCredentials(
+      session.username,
+      encryptSessionCredentials(serializePlaylists(replaced) as unknown as SessionCredentials)
+    )
+    // Keep the provider watch in step with what is now configured.
+    const primary = primaryPlaylist(replaced.envelope.playlists)
+    if (primary) {
+      startProviderWatch(session.username, {
+        ...(replaced.carried as unknown as SessionCredentials),
+        server: primary.server,
+        username: primary.username,
+        password: primary.password
+      })
+    }
+    res.json({ ok: true, playlists: publicPlaylists(replaced.envelope.playlists) })
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Could not save the playlists' })
+  }
+})
 
 app.get('/api/epg/config', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession

@@ -6,6 +6,29 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.52.0 — playlists are configurable: the manager and the endpoints)
+
+**v0.52.0 is the first part of the playlist feature you can actually use**: a **Playlists** section in the
+admin console, backed by `GET`/`PUT /api/iptv/playlists`.
+
+- **Add, edit, remove and save** the account's Xtream profiles as a whole list. The first one is the
+  primary — the guide, the search index and the provider checks follow it.
+- **Passwords never come back from the server.** A row carries `passwordSet`, not a value; a blank field
+  means "keep the stored one". The browser is never handed a secret it does not need, and cannot leak one
+  it was never given.
+- **Saving cannot disturb anything else.** The list is merged into the playlist envelope, so an account's
+  guide URLs and alert webhook survive a playlist edit — and a blob that fails to decrypt aborts the save
+  rather than writing an empty list over your provider configuration.
+- Validation is per-entry (a playlist needs a server and a username) and each server URL is checked
+  against the same external-URL rules the guide sources use, so a playlist cannot point at the LAN.
+
+**Not yet: the channel list.** With two playlists configured, the *browse* screen still shows the primary
+one — the Playlist column, the hide and sort controls are phase 2, and they need the browse layer to
+carry a playlist dimension. That is the next step, deliberately not bolted on tonight: the channel list is
+the app's core screen and a half-rewrite of it is not something to hand over to test.
+
+521 tests; typecheck, lint and both builds green.
+
 ## Current state (v0.51.2 — playlists, phase 1b: reads unified, writes cannot clobber)
 
 **v0.51.2 closes the two ways the playlist change could have broken an account**, both found by wiring

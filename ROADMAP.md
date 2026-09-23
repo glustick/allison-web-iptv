@@ -8,7 +8,7 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-23 against v0.51.2**.
+Recommended enhancements for future development, refreshed **2026-09-23 against v0.52.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
@@ -621,8 +621,18 @@ goes through `credentialsFromStored`, because several callers used to decrypt th
 would have found no `server` on it once the blob became an envelope — a delayed breakage that wiring the
 write path exposed.
 
-**Still to build in 1b:** the settings screen (add, edit, test a playlist) and a read endpoint that lists
-playlists without their passwords. Then **phase 2**: the channel list carries a
+**1b complete 2026-09-23 (v0.52.0):** the manager and the endpoints. `GET`/`PUT /api/iptv/playlists`
+with the admin console's **Playlists** section — add, edit, remove, save whole-list. Passwords are never
+returned (a row carries `passwordSet`; blank means keep), the list is merged into the envelope so guide
+URLs and the alert webhook survive an edit, and a decrypt failure aborts the save instead of writing an
+empty list over the account's configuration. Each server URL goes through the same external-URL checks the
+guide sources use.
+
+**Phase 2, next — the part that makes two playlists visible:** the browse layer carries a playlist
+dimension (channel identity becomes `playlistId:streamId`), the channel list gains a **Playlist column**,
+and hide/sort become per-playlist preferences held on the device (the same shape as the transcode hints,
+which need no server support). The relay and the Xtream proxy must resolve credentials for the playlist a
+request names rather than for the account. Then phase 3: the manual "also on…" switch. Then **phase 2**: the channel list carries a
 playlist dimension (identity becomes `playlistId:streamId`), with a **Playlist column**, per-playlist
 hide, and sort. Then **phase 3**: the manual counterpart switch. Phases of the earlier plan that the
 operator's decisions removed — automatic dedupe and automatic failover — are deliberately not built.

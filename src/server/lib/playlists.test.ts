@@ -6,6 +6,8 @@ import {
   nextPlaylistId,
   parsePlaylists,
   primaryCredentials,
+  replacePlaylists,
+  storedPassword,
   primaryPlaylist,
   serializePlaylists,
   type Playlist
@@ -206,5 +208,46 @@ describe('applyCredentialPatch', () => {
 
   it('clears a field when the patch says so, the way the settings screen does', () => {
     expect(applyCredentialPatch(twoPlaylists, { alertWebhook: undefined }).carried.alertWebhook).toBeUndefined()
+  })
+})
+
+describe('replacePlaylists', () => {
+  const base = parsePlaylists({ version: 1, alertWebhook: 'w', playlists: [
+    { id: 'primary', label: 'Main', server: 's1', username: 'u1', password: 'p1' }
+  ] })
+
+  it('keeps the account’s own fields — editing playlists is not a way to lose the webhook', () => {
+    const next = replacePlaylists(base, [
+      { id: 'primary', label: 'Main', server: 's1', username: 'u1', password: 'p1' },
+      { id: 'p2', label: 'Backup', server: 's2', username: 'u2', password: 'p2' }
+    ])
+    expect(next.carried).toEqual({ alertWebhook: 'w' })
+    expect(next.envelope.playlists).toHaveLength(2)
+  })
+
+  it('normalises rather than rejecting: a blank label falls back to the id', () => {
+    const next = replacePlaylists(base, [{ id: 'p2', label: '  ', server: 's', username: 'u', password: 'p' }])
+    expect(next.envelope.playlists[0].label).toBe('p2')
+  })
+
+  it('drops entries that cannot be addressed, and duplicates of an id', () => {
+    const next = replacePlaylists(base, [
+      { id: 'a', label: 'A', server: 's', username: 'u', password: 'p' },
+      { id: 'a', label: 'A again', server: 's', username: 'u', password: 'p' },
+      { id: '  ', label: 'no id', server: 's', username: 'u', password: 'p' }
+    ])
+    expect(next.envelope.playlists.map((p) => p.id)).toEqual(['a'])
+  })
+})
+
+describe('storedPassword', () => {
+  const parsed = parsePlaylists({ version: 1, playlists: [
+    { id: 'primary', label: 'Main', server: 's1', username: 'u1', password: 'p1' },
+    { id: 'p2', label: 'Backup', server: 's2', username: 'u2', password: 'p2' }
+  ] })
+
+  it('gives the settings screen the stored password for a playlist it did not resend', () => {
+    expect(storedPassword(parsed, 'p2')).toBe('p2')
+    expect(storedPassword(parsed, 'gone')).toBe('')
   })
 })

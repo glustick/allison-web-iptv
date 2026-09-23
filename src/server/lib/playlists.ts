@@ -274,3 +274,34 @@ export function applyCredentialPatch(parsed: ParsedPlaylists, patch: Record<stri
 
   return { envelope: { version: 1, playlists }, carried, migrated: parsed.migrated }
 }
+
+/**
+ * Replaces the playlist list, keeping the account's carried fields.
+ *
+ * The write side of the playlist UI. Entries are normalised rather than rejected wholesale: a blank
+ * label falls back to the id, a missing password becomes an empty one (the settings screen sends blank
+ * to mean "keep what is stored", and the caller resolves that before it gets here), and ids are made
+ * unique so two entries cannot address the same channels by accident.
+ */
+export function replacePlaylists(parsed: ParsedPlaylists, playlists: Playlist[]): ParsedPlaylists {
+  const seen = new Set<string>()
+  const cleaned: Playlist[] = []
+  for (const entry of playlists) {
+    const id = entry.id.trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    cleaned.push({
+      id,
+      label: entry.label.trim() || id,
+      server: entry.server.trim(),
+      username: entry.username.trim(),
+      password: entry.password
+    })
+  }
+  return { envelope: { version: 1, playlists: cleaned }, carried: { ...parsed.carried }, migrated: false }
+}
+
+/** The stored password for a playlist, for a settings screen that sends blank to mean "keep". */
+export function storedPassword(parsed: ParsedPlaylists, id: string): string {
+  return parsed.envelope.playlists.find((playlist) => playlist.id === id)?.password ?? ''
+}
