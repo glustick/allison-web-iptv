@@ -587,16 +587,34 @@ give an option to sort or hide a playlist to avoid having 1000s of channels."*
    the update/health checks — one playlist is primary, the others are standbys unless a channel is only
    present on them.
 
-### Decisions needed before phase 1 locks the model
+### Decisions taken — 2026-09-23, by the operator
 
-1. **Same provider with two lines, or genuinely different providers?** Near-identical catalogues make
-   name-based matching safe; different catalogues make dedupe a nicety rather than the main event.
-2. **Failover automatic or manual?** Automatic means the ladder retries the other playlist on the
-   operator's behalf (and holds a second provider connection while it does); manual means a button.
-3. **Dedupe or list-both?** The request says show both — the question is whether the *default* view
-   collapses a channel with two sources into one row, or shows two rows and relies on the filters.
-4. **One EPG or two?** A guide per playlist doubles the refresh cost; the sensible default is to match
-   the primary's guide and only fall back to the other playlist's for channels it does not carry.
+1. **Two genuinely different playlists**, not one provider on two lines.
+2. **No automatic merging and no automatic failover.** Both are manual.
+3. **The channel list must say where a channel came from — a Playlist column.** This is the affordance
+   the whole feature hangs on: if the column is right, "the other line has this channel" is something the
+   operator can see and act on themselves, and nothing has to guess on their behalf.
+4. Sort and hide per playlist, as originally asked, so two catalogues do not become thousands of rows.
+
+**What those decisions remove, and what they leave standing:**
+
+- **Dedupe is out.** Different catalogueues with no merging means the default view shows both rows and
+  the column tells them apart — simpler, and no heuristic ever hides a channel.
+- **Automatic failover is out.** No ladder changes, no second provider connection opened behind the
+  operator's back.
+- **`channelMatchKey` survives, repurposed.** It was written to merge rows; with merging gone it becomes
+  a *lookup*: given a channel on one playlist, find the same channel on another, for a **manual** switch
+  ("also on Backup →"). That is the manual failover the operator asked for, offered rather than taken —
+  and it keeps the region-tag normalisation (the `UK: Sky Sports…` case) doing real work.
+- **The EPG question is now trivial:** each playlist has its own guide, and the guide follows whichever
+  playlist the channel came from.
+
+**Phase 1b, next:** the settings screen that adds, edits and tests playlists, and the server resolving
+credentials through `primaryPlaylist` — which keeps an existing account's behaviour identical, because a
+migrated one-entry list has the same primary it always had. Then **phase 2**: the channel list carries a
+playlist dimension (identity becomes `playlistId:streamId`), with a **Playlist column**, per-playlist
+hide, and sort. Then **phase 3**: the manual counterpart switch. Phases of the earlier plan that the
+operator's decisions removed — automatic dedupe and automatic failover — are deliberately not built.
 
 **Phase 1 landed 2026-09-23 (v0.51.0), model only.** `src/server/lib/playlists.ts` parses a stored blob
 as a list of playlists, migrates the legacy single-profile shape into one playlist ("Primary"), preserves
