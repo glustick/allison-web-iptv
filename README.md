@@ -6,6 +6,27 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.51.1 — playlists, phase 1b: the credential path resolves through a playlist)
+
+**v0.51.1 puts the playlist model on the path that actually decides whether anything plays.**
+`resolveAccountCredentials` — read by the relay, the probe, the guide, the search index, the alerts route
+and the provider watch — now resolves the **primary playlist** and hands back exactly the shape those
+callers already expect. For an account stored in the old single-profile shape, the returned object is
+**field-for-field identical** to what it read before, which is the property that makes this migration
+safe: it is invisible until something edits the list.
+
+The test that guards it asserts precisely that — a legacy blob in, the same object out — because the
+failure mode here is not a crash but a silent loss of the account's provider credentials.
+
+**The hazard this step surfaced, and the first task of the next:** the writers (`/api/admin/alerts` and
+the IPTV config route) merge their change into whatever `resolveAccountCredentials` returns and write it
+back. That is a *derived* view of the primary playlist, so once a second playlist exists, writing it back
+would drop the others. Harmless today — there is one playlist and the write migrates again to the same
+single entry — and it is exactly why the playlist UI has to ship with a merge-into-the-envelope save
+path rather than next to it.
+
+513 tests; typecheck, lint and both builds green.
+
 ## Current state (v0.51.0 — playlists, phase 1: the model and the migration)
 
 **v0.51.0 lands the first piece of the multiple-playlist feature** the operator asked for — more than one

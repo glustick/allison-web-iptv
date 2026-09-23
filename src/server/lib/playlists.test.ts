@@ -4,6 +4,7 @@ import {
   channelMatchKey,
   nextPlaylistId,
   parsePlaylists,
+  primaryCredentials,
   primaryPlaylist,
   serializePlaylists,
   type Playlist
@@ -127,5 +128,35 @@ describe('channelMatchKey', () => {
     expect(channelMatchKey({ name: 'Sky News', category: 'News' })).not.toBe(
       channelMatchKey({ name: 'Sky News', category: 'Sports' })
     )
+  })
+})
+
+describe('primaryCredentials', () => {
+  it('returns a legacy account the object it always read — the property that makes this safe', () => {
+    const legacy = {
+      server: 'https://provider.example',
+      username: 'glustick',
+      password: 'secret',
+      epgUrls: ['g'],
+      alertWebhook: 'w'
+    }
+    expect(primaryCredentials(parsePlaylists(legacy))).toEqual(legacy)
+  })
+
+  it('derives from the primary playlist once the list has more than one', () => {
+    const parsed = parsePlaylists({
+      version: 1,
+      epgUrls: ['g'],
+      playlists: [
+        { id: 'primary', label: 'Main', server: 's1', username: 'u1', password: 'p1' },
+        { id: 'p2', label: 'Backup', server: 's2', username: 'u2', password: 'p2' }
+      ]
+    })
+    expect(primaryCredentials(parsed)).toEqual({ epgUrls: ['g'], server: 's1', username: 'u1', password: 'p1' })
+  })
+
+  it('says nothing when there is no playlist, so the caller keeps its old behaviour', () => {
+    expect(primaryCredentials(parsePlaylists({ epgUrls: ['g'] }))).toBeNull()
+    expect(primaryCredentials(parsePlaylists(null))).toBeNull()
   })
 })

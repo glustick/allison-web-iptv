@@ -199,3 +199,31 @@ export function channelMatchKey(channel: { name: string; category?: string | nul
       .trim()
   return `${normalise(channel.name)}|${normalise(channel.category ?? '')}`
 }
+
+/**
+ * The provider fields an unqualified request should use: the primary playlist's credentials, plus the
+ * account's own carried fields.
+ *
+ * This is what lets every existing caller keep working untouched. For an account still stored in the
+ * legacy single-profile shape, the result is **field-for-field identical to the object those callers
+ * read before** — the migration is invisible until something edits the list, which is the property that
+ * makes it safe to put on the credential path.
+ *
+ * Null when there is no playlist to derive from, so the caller can fall back to whatever it did before
+ * rather than treat an empty list as "no provider configured".
+ *
+ * **Writers, beware:** this returns a *derived* view. Writing it back through the legacy shape drops
+ * every playlist but the primary. Anything that saves credentials must merge into the envelope (see the
+ * note in the roadmap); with one playlist today that is harmless, and it is the first thing to fix when
+ * the playlist UI lands.
+ */
+export function primaryCredentials(parsed: ParsedPlaylists): Record<string, unknown> | null {
+  const primary = primaryPlaylist(parsed.envelope.playlists)
+  if (!primary) return null
+  return {
+    ...parsed.carried,
+    server: primary.server,
+    username: primary.username,
+    password: primary.password
+  }
+}

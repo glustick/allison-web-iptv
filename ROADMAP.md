@@ -8,7 +8,7 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-23 against v0.51.0**.
+Recommended enhancements for future development, refreshed **2026-09-23 against v0.51.1**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
@@ -609,9 +609,21 @@ give an option to sort or hide a playlist to avoid having 1000s of channels."*
 - **The EPG question is now trivial:** each playlist has its own guide, and the guide follows whichever
   playlist the channel came from.
 
-**Phase 1b, next:** the settings screen that adds, edits and tests playlists, and the server resolving
-credentials through `primaryPlaylist` — which keeps an existing account's behaviour identical, because a
-migrated one-entry list has the same primary it always had. Then **phase 2**: the channel list carries a
+**Phase 1b, in progress.** The server half landed 2026-09-23 (v0.51.1): `resolveAccountCredentials`
+resolves the **primary playlist** and returns the shape every caller already reads, so an account stored
+in the old single-profile shape is unaffected — the same object, field for field, which is what the test
+asserts (the failure mode being silent credential loss rather than a crash).
+
+**The first task of the next step, found while wiring it:** the writers — `/api/admin/alerts` and the
+IPTV config route — merge their one field into whatever `resolveAccountCredentials` returns and save it
+back. That result is a *derived* view of the primary playlist, so with two playlists configured their
+save would drop the second. Harmless while there is one playlist (the write migrates again to the same
+single entry), and precisely why the playlist UI must ship **with** a merge-into-the-envelope save path
+rather than after it. Nothing user-visible can create a second playlist until that path exists, so the
+order is safe — but it is not a bug to leave lying around once it does.
+
+**Still to build in 1b:** the settings screen (add, edit, test a playlist), a read endpoint that lists
+playlists without their passwords, and the merge-into-envelope save path those writers need. Then **phase 2**: the channel list carries a
 playlist dimension (identity becomes `playlistId:streamId`), with a **Playlist column**, per-playlist
 hide, and sort. Then **phase 3**: the manual counterpart switch. Phases of the earlier plan that the
 operator's decisions removed — automatic dedupe and automatic failover — are deliberately not built.

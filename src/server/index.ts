@@ -16,6 +16,7 @@ import { filesystemSpace, isLowSpace , LOW_SPACE_THRESHOLD_BYTES } from './lib/d
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
 import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './lib/sessionStore.js'
+import { parsePlaylists, primaryCredentials } from './lib/playlists.js'
 import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UserRole } from './lib/usersStore.js'
 import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
@@ -1379,11 +1380,28 @@ app.delete('/api/prefs/categories/:id/channels/:kind/:streamId', requireAuth, (r
 // poll and show sources coming online instead of hanging on a 98MB guide fetch.
 
 /** Reads this account's stored IPTV credentials (needed by every EPG route). */
+/**
+ * The account's provider credentials, as every caller has always read them.
+ *
+ * v0.51.0 introduced playlists: the stored blob can now hold a *list* of Xtream profiles. This resolves
+ * the primary one and hands back the same shape callers already expect, which is what makes the
+ * migration invisible — a legacy single-profile account gets back exactly the object it always did.
+ *
+ * The API answer and the role checks are unchanged. Note for whoever adds the playlist UI: this is a
+ * *derived* view, so anything that **saves** credentials must merge into the playlist envelope rather
+ * than write this back, or it will drop every playlist but the primary. With one playlist that is
+ * harmless; see the roadmap.
+ */
 function resolveAccountCredentials(username: string): SessionCredentials | null {
   const stored = usersStore.getIptvCredentials(username)
   if (!stored) return null
   try {
-    return decryptSessionCredentials(stored)
+    const raw = decryptSessionCredentials(stored) as unknown
+    const parsed = parsePlaylists(raw)
+    const derived = primaryCredentials(parsed)
+    // No playlist to derive from (an account that has not configured a provider yet): keep the old
+    // behaviour rather than inventing an empty one.
+    return (derived ?? raw) as SessionCredentials
   } catch {
     return null
   }
