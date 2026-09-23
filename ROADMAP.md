@@ -627,9 +627,8 @@ extracted stream again (frames counted), and the same test runs against a **real
 captured from the provider** (set `UHD_TS_SEGMENT=/path/to/seg.ts` to exercise it) — where it extracts
 parameter sets (VPS/SPS/PPS) and slices and ffmpeg decodes the result. Ten tests, all green.
 
-**Step 2 shipped 2026-09-23 (v0.50.0): the decode check**, in admin -> System. The operator's capability
-panel had already answered *whether* WebCodecs can decode this HEVC on the target machine (**yes**, 4K
-Main 10, prefer-hardware); the check answers *how fast* and *on which path* — fetch a live segment,
+**Step 2 shipped 2026-09-23 (v0.50.0): the decode check**, in admin -> System. It answers *how fast* and
+*on which path* — fetch a live segment,
 demux with the shipped extractor, decode with `VideoDecoder` as `hev1`, and report frames per second
 while drawing decoded frames to a canvas. Hundreds of fps means the GPU is carrying it and the player is
 worth building; single digits means a software path and a different decision.
@@ -638,11 +637,17 @@ worth building; single digits means a software path and a different decision.
 against the MSE-fed audio, the playlist/segment loop for live, and the capability gate (a startup probe
 rather than a capability string, since a "yes" from `isConfigSupported` is not proof of throughput).
 
-**Open observation, from the operator's own capability read-out:** the panel reported `Native HLS
-pipeline: yes (maybe)` on a Chromium browser, and `canPlayType` answering `maybe` for HLS is what the
-engine choice keys on (`prefersNativePlayback` treats anything but `''` as "has a native pipeline"). A
-Chromium build that says `maybe` and cannot actually play HLS costs one wasted attach before the
-hls.js fallback rescues it — harmless but not free, and worth tightening if it shows up in a profile.
+**Where the capability evidence actually comes from, and where it does not:** the operator's three
+readings — `Native HLS pipeline: yes (maybe)`, `MSE accepts HEVC: yes`, `WebCodecs HEVC: yes` — were
+taken **in Safari on their Mac**, not on the Chrome/Windows machine with the RTX 3080 Ti that this whole
+direction exists for. So Safari is known-capable (all three pieces), the target machine is *unmeasured*,
+and the decode check exists to measure it. Run it there first: a "yes" from `isConfigSupported` is a
+capability, and a capability is not a throughput.
+
+**Also open:** UHD still errors in Safari even though the container remux runs (measured 2026-09-22
+evening: the session is fetched for ~13 seconds, then playback stops). That is the *last hop* — playing
+the app's own fMP4 live output — and the next diagnostic is to reproduce it against a real running
+session's live playlist rather than the VOD playlist the earlier AVFoundation proof used.
 
 **Next build, on the operator's suggestion (2026-09-22), and it replaces the standalone probe page:**
 a **media stats panel** in the live player — a button that opens what the player is actually doing.

@@ -8,11 +8,13 @@ See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started fro
 
 ## Current state (v0.50.0 — a client-side decode check, and the capability answer)
 
-**The operator's own stats panel settled the question this direction was waiting on:** on the machine
-with the RTX 3080 Ti, `WebCodecs HEVC decode (4K Main 10, prefer hardware)` reports **yes** — so
-`VideoDecoder` will decode the provider's HEVC on that hardware, and the client-side plan is real rather
-than aspirational. (Same run: MSE accepts HEVC *yes*, which is why the 1080p channels play directly and
-smoothly after v0.49.3.)
+**The operator's stats panel reports `WebCodecs HEVC decode (4K Main 10, prefer hardware): yes` — but
+that reading was taken in Safari on their Mac, not on the machine this direction is *for*.** It settles
+that Safari has all three pieces (native HLS, MSE+HEVC, WebCodecs), which is worth knowing, and it
+settles nothing about the Chrome/Windows box with the RTX 3080 Ti. That box is where UHD is meant to be
+watched, so its capability lines and the decode-check number are still outstanding — and until they are
+in, the client-side plan is a well-founded hypothesis rather than a measured one. (Corrected here the
+same hour it was written: a reading from one browser on one machine is not a reading from another.)
 
 **v0.50.0 adds the decode check to admin → System**: it runs the pipeline a client-side player would use
 — fetch a live segment, demux it to Annex-B HEVC with the shipped extractor, hand it to `VideoDecoder`
