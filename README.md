@@ -6,6 +6,17 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.49.4 — the stats toggle sits clear of the controls)
+
+**v0.49.4** moves the stats overlay down the player on the operator's own measurement (10% of the screen
+height) — at the top edge the toggle sat over the browser's volume control. The toggle and the panel are
+now one stacked container with a single offset, so they cannot cover each other and one number moves
+both.
+
+**Confirmed by the operator after v0.49.3:** Sky News HD plays smoothly again, the stats panel renders
+properly, and the UHD channels still show the honest error — which is the remaining gap, and the reason
+the client-side decoder is the next piece of work.
+
 ## Current state (v0.49.3 — remux only what the browser cannot decode)
 
 **v0.49.3 fixes a regression I introduced in v0.48.0**, reported as *"Sky News HD is not playing

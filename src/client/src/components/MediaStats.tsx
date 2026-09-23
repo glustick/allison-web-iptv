@@ -162,12 +162,11 @@ export function MediaStats({ video, engine, videoCodec, audioTrackCount, readBan
   return (
     <div
       style={{
-        position: 'absolute',
-        // Below the toggle button, so the two never overlap each other.
-        top: 40,
-        right: 8,
-        zIndex: 40,
+        // A flow child of the player's overlay container (see LivePlayer): positioned by that, never
+        // itself, so the toggle and this panel stay in one stack.
         maxWidth: 320,
+        maxHeight: '45vh',
+        overflow: 'hidden',
         padding: '10px 12px',
         borderRadius: 8,
         background: 'rgba(10, 14, 20, 0.88)',

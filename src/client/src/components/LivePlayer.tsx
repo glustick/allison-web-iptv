@@ -679,28 +679,43 @@ let stallCount = 0
 
   return (
     <div className="player-wrap">
-      <button
-        type="button"
-        className="admin-small-btn"
-        /* Top-right: away from the native control strip, which every browser puts along the bottom. */
-        style={{ position: 'absolute', top: 8, right: 8, zIndex: 40 }}
-        onClick={() => setShowStats((open) => !open)}
-        aria-pressed={showStats}
+      {/* One container for both overlays: the toggle and the panel stack inside it, so they cannot
+          cover each other, and a single offset clears the browser's own controls. 10% down the screen
+          is the operator's own measurement — at the very top edge the button sat over the volume
+          control. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: '10vh',
+          right: 8,
+          zIndex: 40,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+          gap: 6
+        }}
       >
-        {showStats ? 'Hide stats' : 'Stats'}
-      </button>
-      {showStats && (
-        <MediaStats
-          video={videoRef.current}
-          engine={engineRef.current}
-          videoCodec={probeInfo?.videoCodec ?? null}
-          audioTrackCount={probeInfo?.audioTrackCount ?? null}
-          readBandwidth={() => {
-            const instance = hlsRef.current as { bandwidthEstimate?: number } | null
-            return typeof instance?.bandwidthEstimate === 'number' ? instance.bandwidthEstimate : null
-          }}
-        />
-      )}
+        <button
+          type="button"
+          className="admin-small-btn"
+          onClick={() => setShowStats((open) => !open)}
+          aria-pressed={showStats}
+        >
+          {showStats ? 'Hide stats' : 'Stats'}
+        </button>
+        {showStats && (
+          <MediaStats
+            video={videoRef.current}
+            engine={engineRef.current}
+            videoCodec={probeInfo?.videoCodec ?? null}
+            audioTrackCount={probeInfo?.audioTrackCount ?? null}
+            readBandwidth={() => {
+              const instance = hlsRef.current as { bandwidthEstimate?: number } | null
+              return typeof instance?.bandwidthEstimate === 'number' ? instance.bandwidthEstimate : null
+            }}
+          />
+        )}
+      </div>
       <video ref={videoRef} controls />
       <TrackControls
         audioTracks={audioTracks}
