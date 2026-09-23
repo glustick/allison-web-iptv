@@ -8,7 +8,7 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-23 against v0.50.0**.
+Recommended enhancements for future development, refreshed **2026-09-23 against v0.51.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
@@ -598,7 +598,19 @@ give an option to sort or hide a playlist to avoid having 1000s of channels."*
 4. **One EPG or two?** A guide per playlist doubles the refresh cost; the sensible default is to match
    the primary's guide and only fall back to the other playlist's for channels it does not carry.
 
-**Not started.** Phase 1 is self-contained and safe to begin whenever the current UHD line is quiet.
+**Phase 1 landed 2026-09-23 (v0.51.0), model only.** `src/server/lib/playlists.ts` parses a stored blob
+as a list of playlists, migrates the legacy single-profile shape into one playlist ("Primary"), preserves
+every account-level field it does not recognise (the blob is not only credentials — it carries
+`epgUrls` and `alertWebhook` too), answers "which playlist does an unqualified request mean" with the
+operator's own order rather than a flag that can disagree with it, hands out readable ids, and provides
+the cross-playlist channel key. Thirteen tests, including the one that caught providers prefixing a
+channel with a region tag (`UK: Sky Sports Main Event` vs plain).
+
+**Deliberately not wired.** Nothing calls it yet, and that is the point: the credential read path
+decides whether anything plays at all, so rewiring it goes with the configuration UI rather than being
+bolted on. Next: phase 1b — a settings screen that reads and writes the new envelope, with the server
+resolving credentials through `primaryPlaylist`, which keeps an existing account's behaviour identical
+after migration. Then phase 2 (playlist-aware browse with filter chips, hide and sort).
 
 ## Open work
 

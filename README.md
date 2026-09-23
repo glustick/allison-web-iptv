@@ -6,6 +6,31 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.51.0 — playlists, phase 1: the model and the migration)
+
+**v0.51.0 lands the first piece of the multiple-playlist feature** the operator asked for — more than one
+Xtream profile per account, for redundancy. This phase is the **model and the migration only**, and it
+deliberately changes no behaviour: `src/server/lib/playlists.ts` reads a stored blob as a *list* of
+playlists, migrating today's single-profile shape into one playlist labelled "Primary", and preserves
+every account-level field it finds alongside the credentials (`epgUrls`, `alertWebhook`, and anything a
+future build adds) so reading and writing back loses nothing.
+
+Three things it settles, all tested (13 cases):
+
+- **The stored object is not only credentials.** It also carries the guide URLs and alert webhook, so a
+  migration that dropped unknown fields would silently take those with it. Unknown fields survive.
+- **Parsing never throws.** It runs on the path that decides whether an account can play anything, so
+  anything unreadable becomes "no playlists" rather than an exception.
+- **Channel identity cannot be a stream id.** Ids are provider-scoped: two lines use different ids for
+  the same channel and the same id for different ones. `channelMatchKey` matches on normalised name and
+  category — and its first test immediately caught a real case, providers prefixing the same channel
+  with a region tag (`UK: Sky Sports Main Event` on one line, plain on another).
+
+**Deliberately not wired yet.** Nothing calls the new module. The credential read path is the one that
+decides whether anything plays at all, and rewiring it belongs with the configuration UI, reviewed
+fresh — not bolted on at the end of a session. That is the next step, and it is why this release is a
+model rather than a feature.
+
 ## Current state (v0.50.0 — a client-side decode check, and the capability answer)
 
 **The operator's stats panel reports `WebCodecs HEVC decode (4K Main 10, prefer hardware): yes` — but
