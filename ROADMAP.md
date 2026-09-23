@@ -701,8 +701,20 @@ capability, and a capability is not a throughput.
 
 **Also open:** UHD still errors in Safari even though the container remux runs (measured 2026-09-22
 evening: the session is fetched for ~13 seconds, then playback stops). That is the *last hop* — playing
-the app's own fMP4 live output — and the next diagnostic is to reproduce it against a real running
-session's live playlist rather than the VOD playlist the earlier AVFoundation proof used.
+the app's own fMP4 live output.
+
+**The local AVFoundation harness is not evidence — stop using it for this.** Tried again on 2026-09-23
+against the app's own live playlist, copied verbatim with every segment it listed and served with
+correct content types: `Cannot Open`, zero frames — and the same result with `#EXT-X-ENDLIST` added to
+rule out the playlist type. That is the **second false negative this harness has produced in two days**
+(the first was the main-run-loop bug, which made every stream look dead). Meanwhile the same harness
+played an ffmpeg-generated fMP4 VOD playlist without trouble, so it is not simply broken — it is
+*unreliable*, and unreliable in one direction: it says "cannot play" about things that may be fine.
+
+The lesson, recorded before it costs another evening: **when a hand-built reproduction disagrees with
+the real thing, the real thing wins**, and the instrument to reach for is the app's own stats panel —
+engine, presented resolution, buffered, dropped frames — read on the screen that is actually failing.
+That is what to ask for next, not another local experiment.
 
 **Next build, on the operator's suggestion (2026-09-22), and it replaces the standalone probe page:**
 a **media stats panel** in the live player — a button that opens what the player is actually doing.
