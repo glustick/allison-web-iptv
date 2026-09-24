@@ -39,12 +39,43 @@ describe('parsePlaylists (migration)', () => {
   it('round-trips a migrated blob without losing anything', () => {
     const legacy = { server: 's', username: 'u', password: 'p', epgUrls: ['g'], alertWebhook: 'w' }
     const stored = serializePlaylists(parsePlaylists(legacy))
-    expect(stored).toEqual({ epgUrls: ['g'], alertWebhook: 'w', version: 1, playlists: [
-      { id: MIGRATED_PLAYLIST_ID, label: 'Primary', server: 's', username: 'u', password: 'p' }
-    ] })
+    expect(stored).toEqual({
+      epgUrls: ['g'],
+      alertWebhook: 'w',
+      // The primary's provider fields are written at the top level as well as in the list — see
+      // serializePlaylists.
+      server: 's',
+      username: 'u',
+      password: 'p',
+      version: 1,
+      playlists: [{ id: MIGRATED_PLAYLIST_ID, label: 'Primary', server: 's', username: 'u', password: 'p' }]
+    })
     // Reading the written shape back is a no-op migration, which is what makes the write safe to do.
     expect(parsePlaylists(stored).migrated).toBe(false)
     expect(parsePlaylists(stored).envelope.playlists).toHaveLength(1)
+    // And the account's own fields survive the round trip rather than being absorbed into carried twice.
+    expect(parsePlaylists(stored).carried).toEqual({ epgUrls: ['g'], alertWebhook: 'w' })
+  })
+
+  it('writes a payload the strict credentials reader still accepts — the 2026-09-23 lockout', () => {
+    // decryptSessionCredentials refuses any payload without server/username/password as strings, so an
+    // envelope that replaced them outright left the account unreadable and unsavable: the operator hit
+    // exactly that error the first time they saved a playlist. This is the regression test for it.
+    const stored = serializePlaylists(
+      parsePlaylists({
+        version: 1,
+        playlists: [
+          { id: 'primary', label: 'Main', server: 's1', username: 'u1', password: 'p1' },
+          { id: 'p2', label: 'Backup', server: 's2', username: 'u2', password: 'p2' }
+        ]
+      })
+    )
+    expect(typeof stored.server).toBe('string')
+    expect(typeof stored.username).toBe('string')
+    expect(typeof stored.password).toBe('string')
+    // The top-level copy is the *primary* playlist's, not the last one written.
+    expect(stored.server).toBe('s1')
+    expect(parsePlaylists(stored).envelope.playlists).toHaveLength(2)
   })
 
   it('carries unrecognised fields through, so a newer build’s setting survives an older one', () => {

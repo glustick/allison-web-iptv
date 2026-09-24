@@ -8,7 +8,7 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-23 against v0.53.0**.
+Recommended enhancements for future development, refreshed **2026-09-24 against v0.53.1**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
@@ -627,6 +627,15 @@ returned (a row carries `passwordSet`; blank means keep), the list is merged int
 URLs and the alert webhook survive an edit, and a decrypt failure aborts the save instead of writing an
 empty list over the account's configuration. Each server URL goes through the same external-URL checks the
 guide sources use.
+
+**Lockout fixed 2026-09-24 (v0.53.1).** The envelope replaced the provider fields that
+`decryptSessionCredentials` validates, so the first save wrote a payload the app refused to read — and
+because the save path read first, the account could not be repaired from the settings screen either.
+`serializePlaylists` now writes the primary's provider fields at the top level alongside the list, and
+reads use the lenient `decryptSecret`, which also recovers blobs the buggy build already wrote (only the
+validator rejected them; the cryptography was intact). The regression test asserts a serialized envelope
+still satisfies the strict reader. **Lesson: when a stored format changes, every reader of it is part of
+the format, and the migration should stay additive until they have all been found.**
 
 **Phase 2, next — the part that makes two playlists visible:** the browse layer carries a playlist
 dimension (channel identity becomes `playlistId:streamId`), the channel list gains a **Playlist column**,

@@ -6,6 +6,32 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.53.1 — the playlist envelope no longer locks an account out)
+
+**v0.53.1 fixes a lockout I introduced in v0.51.2**, reported live: *"Storage error: Session credential
+payload is corrupted or signed with a different secret"* the first time a playlist was saved.
+
+`decryptSessionCredentials` **validates** that a stored payload has `server`, `username` and `password`
+as strings — and the playlist envelope replaced those with a list, so the first save wrote a blob the app
+refused to read. Worse, the *save* path read the blob first, so the account could not be fixed through
+the settings screen either: locked out of its own configuration.
+
+Two changes, both deliberately backwards-compatible:
+
+- **`serializePlaylists` writes the primary playlist's provider fields at the top level as well as in
+  the list.** The list stays the source of truth; the top-level copy is what the strict reader requires.
+  Provider fields are also stripped from an account's carried fields, so there is only ever one copy of
+  the truth in the list.
+- **Reads go through `decryptSecret`** (the plaintext, no field validation) and parse it here. That also
+  *recovers* an account whose blob the buggy build already wrote — only the validator rejected those
+  payloads, never the cryptography, so nothing was actually lost.
+
+522 tests, including a regression test that asserts a serialized envelope still satisfies the strict
+reader — because "the storage format changed and one of its readers disagreed" is the whole failure.
+
+**Lesson, recorded:** when a stored format changes, every *reader* of it is part of the format — and a
+migration should be additive until they have all been found.
+
 ## Current state (v0.53.0 — transcode sessions read the app's relay, so they survive URL expiry)
 
 **v0.53.0 fixes the draining buffer**, reported live while the operator was testing: *"the video is

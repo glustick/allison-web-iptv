@@ -15,7 +15,12 @@ import { dataDirRecoveryHint, describeDataDirMount } from './lib/dataDirMount.js
 import { filesystemSpace, isLowSpace , LOW_SPACE_THRESHOLD_BYTES } from './lib/diskSpace.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
 import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
-import { decryptSessionCredentials, encryptSessionCredentials, type SessionCredentials } from './lib/sessionStore.js'
+import {
+  decryptSecret,
+  decryptSessionCredentials,
+  encryptSessionCredentials,
+  type SessionCredentials
+} from './lib/sessionStore.js'
 import {
   applyCredentialPatch,
   nextPlaylistId,
@@ -1426,7 +1431,9 @@ function saveAccountCredentials(username: string, patch: Record<string, unknown>
   const stored = usersStore.getIptvCredentials(username)
   let parsed = parsePlaylists(null)
   if (stored) {
-    const raw = decryptSessionCredentials(stored) as unknown
+    // Lenient on purpose, for the same reason as credentialsFromStored: an account holding a playlist
+    // envelope must be *savable*, not locked out of its own settings.
+    const raw = JSON.parse(decryptSecret(stored)) as unknown
     parsed = parsePlaylists(raw)
   }
   const next = applyCredentialPatch(parsed, patch)
@@ -1439,7 +1446,12 @@ function saveAccountCredentials(username: string, patch: Record<string, unknown>
 function credentialsFromStored(stored: string | null): SessionCredentials | null {
   if (!stored) return null
   try {
-    const raw = decryptSessionCredentials(stored) as unknown
+    // `decryptSecret` rather than `decryptSessionCredentials`: the latter validates that the payload
+    // *is* a legacy credentials object, and a playlist envelope is not one. Reading the plaintext and
+    // parsing it ourselves also recovers an account whose stored blob was written by the buggy build
+    // that produced the envelope in the first place — only the validator rejected those, never the
+    // cryptography, so the data is intact.
+    const raw = JSON.parse(decryptSecret(stored)) as unknown
     const parsed = parsePlaylists(raw)
     // No playlist to derive from (an account that has not configured a provider yet): keep the old
     // behaviour rather than inventing an empty one.
@@ -1471,7 +1483,7 @@ function parseStoredPlaylists(username: string): ReturnType<typeof parsePlaylist
   if (!stored) return parsePlaylists(null)
   let raw: unknown
   try {
-    raw = decryptSessionCredentials(stored) as unknown
+    raw = JSON.parse(decryptSecret(stored)) as unknown
   } catch {
     throw new Error('Stored IPTV credentials could not be decrypted — check SESSION_SECRET')
   }

@@ -115,6 +115,9 @@ export function parsePlaylists(raw: unknown): ParsedPlaylists {
     const carried = { ...blob }
     delete carried.playlists
     delete carried.version
+    // Provider fields live in the list, never loose on the account as well: two copies of the same
+    // truth is how they end up disagreeing.
+    for (const field of PROVIDER_FIELDS) delete carried[field]
     return { envelope: { version: 1, playlists }, carried, migrated: false }
   }
 
@@ -153,7 +156,18 @@ export function parsePlaylists(raw: unknown): ParsedPlaylists {
  * nothing.
  */
 export function serializePlaylists(parsed: ParsedPlaylists): Record<string, unknown> {
-  return { ...parsed.carried, version: parsed.envelope.version, playlists: parsed.envelope.playlists }
+  // The primary playlist's provider fields are written at the top level *as well as* in the list.
+  // That is not redundancy for its own sake: `decryptSessionCredentials` refuses any payload without
+  // `server`, `username` and `password`, so an envelope that replaced them outright produced a blob the
+  // app could no longer read — found live on 2026-09-23, and exactly the kind of delayed breakage a
+  // storage-format change invites. Writing them alongside keeps the strict reader happy while the list
+  // stays the source of truth.
+  const derived = primaryCredentials(parsed)
+  return {
+    ...(derived ?? parsed.carried),
+    version: parsed.envelope.version,
+    playlists: parsed.envelope.playlists
+  }
 }
 
 /**
