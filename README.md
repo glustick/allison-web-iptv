@@ -6,6 +6,13 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.53.5 — the provider guide's error is visible)
+
+A failing provider guide used to show only the word `error` — the actual message appeared nowhere
+on the EPG screen, which made the app's most important guide undiagnosable from its own settings
+page. The error now renders inline under the provider guide's name, on the status pill's tooltip,
+and in the hint paragraph alongside external sources' errors.
+
 ## Current state (v0.53.4 — the sniff authenticates; raw-TS channels play again)
 
 **v0.53.4 fixes the all-channels-down regression** reported the moment v0.53.2/3 were deployed.

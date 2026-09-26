@@ -15,6 +15,15 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.53.5 — the provider guide's error message becomes visible.** Reported as "an error on the EPG
+sources on the provider guide, this is the most essential guide" — and the diagnosis kept stalling
+on an embarrassing discovery: **the provider guide's error text was never displayed anywhere.** The
+status cell said `error`, the message-bearing hint paragraph rendered for *external* sources only,
+and a failing guide could not be diagnosed from the screen that shows it — not by the operator, and
+not by anyone reading a screenshot. The error now appears inline under the provider guide's own
+name, as a tooltip on its status pill, and in the hint paragraph with the externals. Client-only;
+typecheck, lint and build green.
+
 **v0.53.4 — every raw-TS channel died at spawn: the demuxer sniff couldn't authenticate.** The
 serious one, reported live as *"all channels are failing"* the moment v0.53.2/3 reached the
 deployment. v0.53.0 moved the transcode input behind the app's own authenticated relay (to survive

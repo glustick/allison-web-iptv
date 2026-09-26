@@ -280,8 +280,19 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
                     <span className="epg-source-url" title="The provider's own guide">
                       {sourceUrlWithoutCredentials(provider.url)}
                     </span>
+                    {/* The provider guide's error was previously invisible — the status cell said
+                        "error" and the message appeared nowhere, so a failing guide could not be
+                        diagnosed from the screen that shows it. */}
+                    {provider.error && <span className="epg-source-url">{provider.error}</span>}
                   </td>
-                  <td><span className={`epg-status epg-status-${provider.status}`}>{statusLabel(provider)}</span></td>
+                  <td>
+                    <span
+                      className={`epg-status epg-status-${provider.status}`}
+                      title={provider.error ?? undefined}
+                    >
+                      {statusLabel(provider)}
+                    </span>
+                  </td>
                   <td>{formatCount(provider.channelCount)}</td>
                   <td>{formatCount(provider.programmeCount)}</td>
                   <td>{formatMatched(matchedBySource.get(provider.url))}</td>
@@ -313,11 +324,11 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
             </tbody>
           </table>
         </div>
-        {externals.some((source) => source.error) && (
+        {(externals.some((source) => source.error) || provider?.error) && (
           <p className="setup-hint">
-            {externals
+            {sources
               .filter((source) => source.error)
-              .map((source) => `${shortUrl(source.url)}: ${source.error}`)
+              .map((source) => `${source.kind === 'provider' ? 'Provider guide' : shortUrl(source.url)}: ${source.error}`)
               .join(' · ')}
           </p>
         )}
