@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.53.3 — the guide sources table carries the matching report)
+
+The operator asked for the EPG screen to stop saying everything twice: the separate "Where the
+matches came from" report is gone, and its two numbers — **Channels matched** and **Share of
+matches** — are now columns in the guide sources table, per source, next to each source's own
+health row. A source that contributes nothing is now visible where you configure it, not on a
+second screen. `—` means matching has not run for that source yet; `0` means it ran and the source
+answered for zero channels.
+
 ## Current state (v0.53.2 — a session that finishes successfully no longer reports failure)
 
 **v0.53.2 fixes the "ffmpeg exited before producing output" the UHD channels were showing on every

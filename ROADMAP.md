@@ -15,6 +15,14 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.53.3 — the EPG screen merges "where the matches came from" into the guide sources table.**
+The operator's suggestion, and an obvious one once made: the matching report duplicated every
+source row on its own screen. The guide sources table now carries **Channels matched** and **Share
+of matches** inline per source — a source that contributes nothing, or everything, is visible on
+its own row without a second screen. `—` and `0` are deliberately different: matching has not run
+for that source yet, versus matching ran and the source answered for zero channels. Client-only
+change; typecheck, lint and the client build green.
+
 **v0.53.2 — a session that succeeds is no longer reported as "exited before producing output".**
 The UHD channels failed on every attempt with that message, and the cause was an old, documented
 assumption breaking. The transcoder's ffmpeg `exit` handler deleted the session directory on every

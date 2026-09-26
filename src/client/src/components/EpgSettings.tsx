@@ -3,11 +3,13 @@ import type { Session } from '../lib/appAuth'
 import { useResizableColumns, type ColumnSpec } from '../lib/useResizableColumns'
 
 const SOURCE_COLUMNS: ColumnSpec[] = [
-  { key: 'source', label: 'Source', defaultWidth: 360, min: 160, max: 700 },
-  { key: 'status', label: 'Status', defaultWidth: 120, min: 80, max: 300 },
-  { key: 'channels', label: 'Guide channels', defaultWidth: 140, min: 90, max: 360 },
-  { key: 'programmes', label: 'Programmes', defaultWidth: 140, min: 90, max: 360 },
-  { key: 'fetched', label: 'Last fetched', defaultWidth: 140, min: 100, max: 360 },
+  { key: 'source', label: 'Source', defaultWidth: 340, min: 160, max: 700 },
+  { key: 'status', label: 'Status', defaultWidth: 110, min: 80, max: 300 },
+  { key: 'channels', label: 'Guide channels', defaultWidth: 130, min: 90, max: 360 },
+  { key: 'programmes', label: 'Programmes', defaultWidth: 130, min: 90, max: 360 },
+  { key: 'matched', label: 'Channels matched', defaultWidth: 140, min: 90, max: 360 },
+  { key: 'share', label: 'Share of matches', defaultWidth: 130, min: 90, max: 300 },
+  { key: 'fetched', label: 'Last fetched', defaultWidth: 130, min: 100, max: 360 },
   { key: 'actions', label: '', defaultWidth: 110, min: 90, max: 260 }
 ]
 
@@ -51,6 +53,18 @@ function formatCount(value: number): string {
   return value.toLocaleString()
 }
 
+// '—' (matching hasn't run for this source yet) and 0 (matching ran; the source contributes
+// nothing) mean different things — a source that silently answers for zero channels is exactly
+// what these columns exist to expose.
+function formatMatched(matched: number | undefined): string {
+  return matched === undefined ? '—' : formatCount(matched)
+}
+
+function formatShare(matched: number | undefined, summary: MatchSummary | null): string {
+  if (matched === undefined || !summary || summary.matched === 0) return '—'
+  return `${Math.round((matched / summary.matched) * 100)}%`
+}
+
 function statusLabel(source: EpgSourceStatus): string {
   if (source.status === 'ok') return 'ready'
   if (source.status === 'loading') return 'loading'
@@ -59,18 +73,6 @@ function statusLabel(source: EpgSourceStatus): string {
 
 function shortUrl(url: string): string {
   return url.length > 68 ? `${url.slice(0, 65)}…` : url
-}
-
-// A source is a long URL; name what it is where the shape allows it, and trim where it does not.
-function sourceLabel(url: string, sources: EpgConfigResponse['sources']): string {
-  const match = sources.find((source) => source.url === url)
-  if (match?.kind === 'provider') return 'Provider guide'
-  try {
-    const parsed = new URL(url)
-    return `${parsed.host}${parsed.pathname}`.slice(0, 62)
-  } catch {
-    return url.slice(0, 62)
-  }
 }
 
 import { sourceUrlWithoutCredentials } from '../lib/sourceLabel'
@@ -189,6 +191,9 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
   const externals = sources.filter((source) => source.kind === 'external')
   const summary = config?.summary ?? null
   const coverage = summary && summary.streams > 0 ? Math.round((summary.matched / summary.streams) * 100) : null
+  // Which guide each match came from, shown inline in the sources table: a source that
+  // contributes nothing — or everything — is visible on its own row without a second screen.
+  const matchedBySource = new Map((summary?.bySource ?? []).map((entry) => [entry.url, entry.matched]))
 
   return (
     <div className="admin-console">
@@ -229,36 +234,6 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
         )}
       </section>
 
-      {/* Which guide each match came from. The totals say how well matching went; this says who did it,
-          which is what you need when a source you added contributes nothing — or everything. */}
-      {summary && (summary.bySource?.length ?? 0) > 0 && (
-        <section className="admin-section">
-          <div className="epg-section-head">
-            <h2>Where the matches came from</h2>
-          </div>
-          <div className="admin-table-wrap">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Guide source</th>
-                  <th>Channels matched</th>
-                  <th>Share of matches</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.bySource?.map((entry) => (
-                  <tr key={entry.url}>
-                    <td>{sourceLabel(entry.url, config?.sources ?? [])}</td>
-                    <td>{formatCount(entry.matched)}</td>
-                    <td>{summary.matched > 0 ? Math.round((entry.matched / summary.matched) * 100) : 0}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
       <section className="admin-section">
         <div className="epg-section-head">
           <h2>Guide sources</h2>
@@ -294,7 +269,7 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
             <tbody>
               {sources.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="admin-empty">No guide sources yet</td>
+                  <td colSpan={8} className="admin-empty">No guide sources yet</td>
                 </tr>
               )}
               {provider && (
@@ -309,6 +284,8 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
                   <td><span className={`epg-status epg-status-${provider.status}`}>{statusLabel(provider)}</span></td>
                   <td>{formatCount(provider.channelCount)}</td>
                   <td>{formatCount(provider.programmeCount)}</td>
+                  <td>{formatMatched(matchedBySource.get(provider.url))}</td>
+                  <td>{formatShare(matchedBySource.get(provider.url), summary)}</td>
                   <td>{provider.fetchedAt ? new Date(provider.fetchedAt).toLocaleTimeString() : '—'}</td>
                   <td><span className="admin-muted">built in</span></td>
                 </tr>
@@ -323,6 +300,8 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
                   <td><span className={`epg-status epg-status-${source.status}`}>{statusLabel(source)}</span></td>
                   <td>{formatCount(source.channelCount)}</td>
                   <td>{formatCount(source.programmeCount)}</td>
+                  <td>{formatMatched(matchedBySource.get(source.url))}</td>
+                  <td>{formatShare(matchedBySource.get(source.url), summary)}</td>
                   <td>{source.fetchedAt ? new Date(source.fetchedAt).toLocaleTimeString() : '—'}</td>
                   <td>
                     <button type="button" className="admin-small-btn danger" onClick={() => void handleRemove(source.url)} disabled={busy}>
