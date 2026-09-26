@@ -3,13 +3,15 @@ import type { Session } from '../lib/appAuth'
 import { useResizableColumns, type ColumnSpec } from '../lib/useResizableColumns'
 
 const SOURCE_COLUMNS: ColumnSpec[] = [
-  { key: 'source', label: 'Source', defaultWidth: 340, min: 160, max: 700 },
-  { key: 'status', label: 'Status', defaultWidth: 110, min: 80, max: 300 },
-  { key: 'channels', label: 'Guide channels', defaultWidth: 130, min: 90, max: 360 },
-  { key: 'programmes', label: 'Programmes', defaultWidth: 130, min: 90, max: 360 },
-  { key: 'matched', label: 'Channels matched', defaultWidth: 140, min: 90, max: 360 },
-  { key: 'share', label: 'Share of matches', defaultWidth: 130, min: 90, max: 300 },
-  { key: 'fetched', label: 'Last fetched', defaultWidth: 130, min: 100, max: 360 },
+  { key: 'source', label: 'Source', defaultWidth: 300, min: 160, max: 700 },
+  { key: 'status', label: 'Status', defaultWidth: 100, min: 80, max: 300 },
+  { key: 'downloaded', label: 'Downloaded', defaultWidth: 150, min: 100, max: 360 },
+  { key: 'progress', label: 'Progress', defaultWidth: 100, min: 80, max: 300 },
+  { key: 'channels', label: 'Guide channels', defaultWidth: 125, min: 90, max: 360 },
+  { key: 'programmes', label: 'Programmes', defaultWidth: 125, min: 90, max: 360 },
+  { key: 'matched', label: 'Channels matched', defaultWidth: 135, min: 90, max: 360 },
+  { key: 'share', label: 'Share of matches', defaultWidth: 125, min: 90, max: 300 },
+  { key: 'fetched', label: 'Last fetched', defaultWidth: 125, min: 100, max: 360 },
   { key: 'actions', label: '', defaultWidth: 110, min: 90, max: 260 }
 ]
 
@@ -26,6 +28,8 @@ interface EpgSourceStatus {
   programmeCount: number
   fetchedAt: number | null
   error?: string
+  /** Download progress while loading — and where a failed download got to. */
+  progress?: { receivedBytes: number; totalBytes: number | null } | null
 }
 
 interface MatchSummary {
@@ -51,6 +55,30 @@ const POLL_IDLE_MS = 15000
 
 function formatCount(value: number): string {
   return value.toLocaleString()
+}
+
+function formatBytes(value: number): string {
+  if (value >= 1_048_576) return `${(value / 1_048_576).toFixed(1)} MB`
+  if (value >= 1024) return `${(value / 1024).toFixed(0)} KB`
+  return `${value} B`
+}
+
+// Downloaded so far, against the size the server declared when it declares one. Persisted after
+// the fetch ends too — a guide's size is worth seeing, and a FAILED download's last reading is
+// the diagnosis (12 MB of 97 MB says the edge dropped it midway; 0 bytes says it never started).
+function downloadedLabel(source: EpgSourceStatus): string {
+  if (!source.progress || source.progress.receivedBytes === 0) return '—'
+  const { receivedBytes, totalBytes } = source.progress
+  return totalBytes ? `${formatBytes(receivedBytes)} / ${formatBytes(totalBytes)}` : formatBytes(receivedBytes)
+}
+
+// Percent while loading; '—' once settled (the size column carries the finished number) or when
+// the server declared no length and a percentage would be invented.
+function progressLabel(source: EpgSourceStatus): string {
+  if (source.status !== 'loading' || !source.progress) return '—'
+  const { receivedBytes, totalBytes } = source.progress
+  if (!totalBytes) return receivedBytes > 0 ? 'unknown size' : '—'
+  return `${Math.min(100, Math.round((receivedBytes / totalBytes) * 100))}%`
 }
 
 // '—' (matching hasn't run for this source yet) and 0 (matching ran; the source contributes
@@ -269,7 +297,7 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
             <tbody>
               {sources.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="admin-empty">No guide sources yet</td>
+                  <td colSpan={10} className="admin-empty">No guide sources yet</td>
                 </tr>
               )}
               {provider && (
@@ -293,6 +321,8 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
                       {statusLabel(provider)}
                     </span>
                   </td>
+                  <td>{downloadedLabel(provider)}</td>
+                  <td>{progressLabel(provider)}</td>
                   <td>{formatCount(provider.channelCount)}</td>
                   <td>{formatCount(provider.programmeCount)}</td>
                   <td>{formatMatched(matchedBySource.get(provider.url))}</td>
@@ -308,7 +338,16 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
                     {/* In full. Truncating it in code meant a wider column could never reveal the rest. */}
                     <span className="epg-source-url" title={source.url}>{source.url}</span>
                   </td>
-                  <td><span className={`epg-status epg-status-${source.status}`}>{statusLabel(source)}</span></td>
+                  <td>
+                    <span
+                      className={`epg-status epg-status-${source.status}`}
+                      title={source.error ?? undefined}
+                    >
+                      {statusLabel(source)}
+                    </span>
+                  </td>
+                  <td>{downloadedLabel(source)}</td>
+                  <td>{progressLabel(source)}</td>
                   <td>{formatCount(source.channelCount)}</td>
                   <td>{formatCount(source.programmeCount)}</td>
                   <td>{formatMatched(matchedBySource.get(source.url))}</td>

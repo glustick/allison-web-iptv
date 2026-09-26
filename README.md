@@ -6,6 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.53.6 — guide downloads show progress and size)
+
+The guide sources table gained **Downloaded** and **Progress** columns: bytes received against the
+server's declared size while a guide loads, persisting after the attempt ends — including after a
+failure, where the last reading turns "error" into a diagnosis (12 MB of 97 MB says the provider's
+edge dropped the transfer midway). A percentage requires the server to declare a length; otherwise
+the column honestly says "unknown size".
+
 ## Current state (v0.53.5 — the provider guide's error is visible)
 
 A failing provider guide used to show only the word `error` — the actual message appeared nowhere

@@ -68,6 +68,8 @@ export interface EpgSourceStatus {
   programmeCount: number
   fetchedAt: number | null
   error?: string
+  /** Download progress while a guide is loading — and where a failed download got to. */
+  progress?: { receivedBytes: number; totalBytes: number | null } | null
 }
 
 export interface EpgMatchSummary {
@@ -114,6 +116,9 @@ interface GuideCacheEntry {
   index?: GuideIndexes | null
   channelCount?: number
   programmeCount?: number
+  /** Download progress while a fetch is in flight — and, after it ends, where it got to.
+   *  A stalled ~97MB provider guide used to be indistinguishable from a working one. */
+  progress?: { receivedBytes: number; totalBytes: number | null } | null
 }
 
 interface ChannelListCacheEntry {
@@ -196,8 +201,11 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     return entry.index
   }
 
-  function fetchGuideOnce(url: string): Promise<XmltvGuide | null> {
-    return fetchTextViaUpstream(createUpstreamRequest, url, guideStallTimeoutMs, guideStallCheckIntervalMs).then((xml) =>
+  function fetchGuideOnce(
+    url: string,
+    onProgress?: (receivedBytes: number, totalBytes: number | null) => void
+  ): Promise<XmltvGuide | null> {
+    return fetchTextViaUpstream(createUpstreamRequest, url, guideStallTimeoutMs, guideStallCheckIntervalMs, undefined, onProgress).then((xml) =>
       parseXmltv(xml, { now: now() })
     )
   }
@@ -210,9 +218,23 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     const inFlight = guideCache.get(url)?.fetchPromise
     if (inFlight) return inFlight.then(() => guideCache.get(url) as GuideCacheEntry)
 
-    const promise = fetchGuideOnce(url)
+    // The cache entry goes in BEFORE the fetch starts: the download's progress callbacks update
+    // it in place, which is what the status poll reads while the ~97MB guide is in flight.
+    const current: GuideCacheEntry = guideCache.get(url) ?? {
+      guide: null,
+      status: 'error',
+      error: 'not fetched yet',
+      fetchedAt: now(),
+      fetchPromise: null
+    }
+    const promise = fetchGuideOnce(url, (receivedBytes, totalBytes) => {
+      current.progress = { receivedBytes, totalBytes }
+    })
       .then((guide) => {
-        const success: GuideCacheEntry = { guide, status: 'ok', fetchedAt: now(), fetchPromise: null, failures: 0 }
+        const success: GuideCacheEntry = {
+          guide, status: 'ok', fetchedAt: now(), fetchPromise: null, failures: 0,
+          progress: current.progress
+        }
         guideCache.set(url, success)
         return success
       })
@@ -225,19 +247,15 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
           fetchedAt: now(),
           fetchPromise: null,
           failures,
-          nextRetryAt: now() + epgRetryDelayMs(failures)
+          nextRetryAt: now() + epgRetryDelayMs(failures),
+          // Where the download died — bytes received before the failure — which turns "error"
+          // into a diagnosis when the provider's edge drops a ~97MB transfer midway.
+          progress: current.progress
         }
         guideCache.set(url, failed)
         return failed
       })
 
-    const current: GuideCacheEntry = guideCache.get(url) ?? {
-      guide: null,
-      status: 'error',
-      error: 'not fetched yet',
-      fetchedAt: now(),
-      fetchPromise: null
-    }
     current.fetchPromise = promise
     guideCache.set(url, current)
     return promise
@@ -293,7 +311,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       const entry = guideCache.get(url)
       if (!entry) {
         void getGuideOrError(url)
-        return { kind, url, status: 'loading' as EpgSourceState, channelCount: 0, programmeCount: 0, fetchedAt: null }
+        return { kind, url, status: 'loading' as EpgSourceState, channelCount: 0, programmeCount: 0, fetchedAt: null, progress: null }
       }
       ensureGuideStats(entry)
       const stale = now() - entry.fetchedAt >= guideTtlMs
@@ -310,7 +328,8 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
         channelCount: entry.channelCount ?? 0,
         programmeCount: entry.programmeCount ?? 0,
         fetchedAt: entry.fetchedAt,
-        error: entry.error
+        error: entry.error,
+        progress: entry.progress ?? null
       }
     })
   }
@@ -352,7 +371,8 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       channelCount: entry.channelCount ?? 0,
       programmeCount: entry.programmeCount ?? 0,
       fetchedAt: entry.fetchedAt,
-      error: entry.error
+      error: entry.error,
+      progress: entry.progress ?? null
     }
   }
 

@@ -39,7 +39,10 @@ export function fetchTextViaUpstream(
   stallCheckIntervalMs?: number,
   // Time to wait for response headers. Passed through so a health check can answer promptly
   // instead of inheriting the (deliberately generous) default meant for bulk downloads.
-  responseTimeoutMs?: number
+  responseTimeoutMs?: number,
+  // Bytes received so far and the response's content-length, if it declares one. Progress is
+  // counted on the wire bytes (the encoded size), which is what content-length describes.
+  onProgress?: (receivedBytes: number, totalBytes: number | null) => void
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const req: UpstreamClientRequest = createUpstreamRequest({
@@ -65,11 +68,17 @@ export function fetchTextViaUpstream(
         reject(new Error(`HTTP ${res.statusCode} fetching ${url}`))
         return
       }
+      const totalHeader = res.headers['content-length']
+      const totalBytes = typeof totalHeader === 'string' && /^\d+$/.test(totalHeader) ? Number(totalHeader) : null
+      let receivedBytes = 0
       const chunks: Buffer[] = []
       let settled = false
       const sink = new Writable({
         write(chunk: Buffer, _encoding, callback) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+          chunks.push(buf)
+          receivedBytes += buf.length
+          onProgress?.(receivedBytes, totalBytes)
           callback()
         }
       })

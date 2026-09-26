@@ -15,6 +15,18 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.53.6 — guide downloads show progress: bytes received, declared size, and where a failed
+download died.** The operator's request, and the missing half of the provider-guide diagnosis: a
+~97MB download on a flaky edge reported only "loading", so a stalled fetch was indistinguishable
+from a working one, and a transfer that died midway had no position. The fetch now counts wire
+bytes against the response's declared content-length, the status API carries the reading, and the
+guide sources table gained **Downloaded** ("43.2 MB / 97.1 MB") and **Progress** ("44%") columns —
+with the last reading persisting after a failure, so "error at 12 MB of 97 MB" is a diagnosis
+rather than a dead end. A server-declared length is required for the percentage; without one the
+column says "unknown size" instead of inventing a number. 527 tests, including a real-HTTP test
+that streams a ~400KB guide in slices and polls the status mid-flight; verified in CI's Linux
+container.
+
 **v0.53.5 — the provider guide's error message becomes visible.** Reported as "an error on the EPG
 sources on the provider guide, this is the most essential guide" — and the diagnosis kept stalling
 on an embarrassing discovery: **the provider guide's error text was never displayed anywhere.** The

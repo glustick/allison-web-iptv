@@ -127,6 +127,68 @@ describe('createEpgService', () => {
     expect(providerGuideHits).toBe(1)
   })
 
+  it('reports download progress (bytes against content-length) while a guide is in flight', async () => {
+    // The provider guide is a ~97MB download on a flaky edge; a bare "loading" made a stalled
+    // fetch indistinguishable from a working one, and a download that died midway reported no
+    // position. The origin streams a declared content-length in slices, and the non-blocking
+    // status is polled while aggregate() is still running — the exact reading the EPG screen
+    // shows the operator.
+    // A realistic ~400KB guide: thousands of real channel entries, streamed in slices against a
+    // declared content-length — not blank padding, which is not what a big guide looks like.
+    const entry = '<channel id="c1"><display-name>Chan</display-name><programme start="20260115120000 +0000" stop="20260115130000 +0000"><title>t</title></programme></channel>'
+    const body = Buffer.from(`<?xml version="1.0"?><tv>${entry.repeat(2400)}</tv>`)
+    const provider = await listen((req, res) => {
+      if (req.url?.startsWith('/xmltv.php')) {
+        res.writeHead(200, { 'content-type': 'application/xml', 'content-length': String(body.length) })
+        let offset = 0
+        const timer = setInterval(() => {
+          if (offset >= body.length) {
+            clearInterval(timer)
+            res.end()
+            return
+          }
+          const slice = body.subarray(offset, Math.min(offset + 25_000, body.length))
+          offset += slice.length
+          res.write(slice)
+        }, 50)
+        res.on('close', () => clearInterval(timer))
+        return
+      }
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('[]')
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+    const service = createEpgService({ createUpstreamRequest: createNodeUpstreamRequest, now: fakeClock().now })
+    const credentials = { server: provider, username: 'user', password: 'pass' }
+    const aggregatePromise = service.aggregate({
+      credentials,
+      epgUrls: [],
+      startMs: NOW - HOUR,
+      endMs: NOW + HOUR
+    })
+
+    // Mid-flight: bytes received so far, against the size the server declared.
+    await until(() => {
+      const s = service.peekStatus({ credentials, epgUrls: [] }).find((x) => x.kind === 'provider')
+      return Boolean(s?.progress && s.progress.receivedBytes > 0)
+    })
+    const mid = service.peekStatus({ credentials, epgUrls: [] }).find((x) => x.kind === 'provider')
+    expect(mid?.progress?.totalBytes).toBe(body.length)
+    expect(mid?.progress?.receivedBytes).toBeGreaterThan(0)
+    expect(mid?.progress?.receivedBytes).toBeLessThan(body.length)
+
+    // Completed: the final reading persists, so the guide's size stays visible.
+    const result = await aggregatePromise
+    const done = result.sources.find((s) => s.kind === 'provider')
+    expect(done?.status).toBe('ok')
+    expect(done?.progress?.receivedBytes).toBe(body.length)
+    expect(done?.progress?.totalBytes).toBe(body.length)
+  })
+
   it('reports a failing external source as an error while still serving the provider guide', async () => {
     const provider = await listen((req, res) => {
       if (req.url?.startsWith('/xmltv.php')) {
