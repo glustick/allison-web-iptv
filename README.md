@@ -6,6 +6,33 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.53.2 — a session that finishes successfully no longer reports failure)
+
+**v0.53.2 fixes the "ffmpeg exited before producing output" the UHD channels were showing on every
+attempt** — reported live, reproduced the same day end-to-end against the real chain with a fake
+provider, and the root cause turned out to be documented in this repo's own tests: the race was
+*known*, judged "practically unreachable in production", and that assumption was wrong.
+
+ffmpeg's `exit` handler deleted the session directory **on every exit, success included**. For live
+TV that was fine in practice — a live feed never ends — until it does: a live playlist that carries
+`#EXT-X-ENDLIST` (the provider's placeholder / off-air shape), or an upstream that closes, makes
+ffmpeg consume everything at copy speed and exit 0 in well under one poll interval, *after* writing
+the output. The handler erased the playlist it had just written; the start poll then saw "exited, no
+playlist" and reported a failure about a session that had succeeded. Measured on the deployed code:
+ffmpeg's own last lines said `exit 0` with a full success summary while the app showed the error.
+
+The fix is ownership, not timing: the exit handler no longer cleans up while the start flow is still
+running. The start flow settles the session at every exit point (success, subtitle retry, failure,
+deadline) and owns the directory until then; afterwards an exit is the natural end of the line and
+cleans up as before. The race the old test comment throttled around is closed instead.
+
+523 tests, including a real-ffmpeg regression test — a live session whose playlist carries ENDLIST
+must resolve — verified to fail against the unfixed code and pass against the fix.
+
+**Lesson, recorded:** the error's stderr tail rode along with `No trailing CRLF found in HTTP field`
+and `Skip (...)` lines that were warnings, not causes — the verdict line of a tail is not
+automatically the culprit line.
+
 ## Current state (v0.53.1 — the playlist envelope no longer locks an account out)
 
 **v0.53.1 fixes a lockout I introduced in v0.51.2**, reported live: *"Storage error: Session credential

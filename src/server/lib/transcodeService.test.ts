@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileS
 import { basename, dirname, join } from 'path'
 import { tmpdir } from 'os'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
+import type { AddressInfo } from 'net'
 import { spawn } from 'child_process'
 import { createRequire } from 'module'
 import {
@@ -537,6 +538,73 @@ describe('real ffmpeg integration', () => {
       rmSync(fixtureDir, { recursive: true, force: true })
     }
   }, 20000)
+
+  // Regression for the 2026-09-26 UHD failure ("ffmpeg exited before producing output" on
+  // every attempt): a live playlist that carries #EXT-X-ENDLIST — the provider's placeholder /
+  // off-air shape — lets ffmpeg consume everything at copy speed and exit 0, potentially
+  // before the poll loop runs even once. The exit handler used to delete the session
+  // directory on EVERY exit, success included, so the just-written playlist was erased and
+  // the start flow reported a failure about a session that had actually succeeded. (The
+  // throttle note on startSyntheticOrigin above documents the same race seen through a
+  // VOD-shaped fixture and judged unreachable in production — an assumption that held only
+  // for movie-length inputs; this is the live-TV shape that made it reachable.)
+  it('resolves a live session whose ENDLIST playlist lets ffmpeg exit cleanly before the first poll', async () => {
+    if (!ffmpegStaticPath) throw new Error('ffmpeg-static did not resolve a binary for this platform')
+
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-test-endlist-'))
+    const segment = join(fixtureDir, 'seg.ts')
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpegStaticPath as string, [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=2:size=320x240:rate=10',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '5', '-keyint_min', '5',
+        '-c:a', 'aac',
+        segment
+      ])
+      proc.on('error', reject)
+      proc.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`fixture build exited ${code}`))))
+    })
+
+    // The decisive property is #EXT-X-ENDLIST on a media playlist; absolute segment URLs keep
+    // the fixture honest about what a provider actually serves.
+    let originBase = ''
+    const origin = createServer((req: IncomingMessage, res: ServerResponse) => {
+      const path = (req.url ?? '/').split('?')[0]
+      if (path.endsWith('.m3u8')) {
+        res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' })
+        res.end(
+          '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n' +
+            '#EXT-X-PROGRAM-DATE-TIME:2026-09-26T12:00:00.000Z\n' +
+            `#EXTINF:2.0,\n${originBase}/seg.ts\n#EXT-X-ENDLIST\n`
+        )
+        return
+      }
+      res.writeHead(200, { 'content-type': 'video/mp2t' })
+      res.end(readFileSync(segment))
+    })
+    await new Promise<void>((resolve) => origin.listen(0, '127.0.0.1', resolve))
+    originBase = `http://127.0.0.1:${(origin.address() as AddressInfo).port}`
+
+    try {
+      // pollIntervalMs deliberately long: the whole point is ffmpeg reaching a clean exit
+      // BEFORE the first poll — the exact ordering that used to delete the output.
+      const service = track(
+        createTranscodeService({
+          resolveFfmpegPath: resolverFor(ffmpegStaticPath as string),
+          liveDeadlineMs: 30000,
+          pollIntervalMs: 5000
+        })
+      )
+
+      const result = await service.startTranscode(`${originBase}/9001.m3u8`, false, 'endlist-1')
+
+      expect(readFileSync(result.playlistPath, 'utf8')).toContain('#EXTM3U')
+    } finally {
+      origin.close()
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 30000)
 
   // The subtitle-mapping change this covers was added after a real, if less severe, prior
   // failure in this exact fallback (a deferred-write bug caused by a different ffmpeg command

@@ -737,6 +737,11 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       inputStreamListEnded: false
     }
     transcodeSessions.set(sessionId, session)
+    // Ownership flag for the session directory: ffmpeg's exit handler must not clean up while
+    // the start flow below is still running, because that flow decides the start's outcome
+    // from files on disk. Set true at every point the start flow settles (success, retry,
+    // failure, deadline), after which a subsequent exit is the natural end of the line.
+    let startSettled = false
 
     // A stall-detection scheme keyed on "time since ffmpeg last wrote to stderr" was tried here
     // and had to be abandoned: ffmpeg's stderr is a pipe, not a tty, and glibc/libSystem's stdio
@@ -799,7 +804,16 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         console.error(`[transcode] ffmpeg exited with code ${code}:`, session.stderrTail.join('\n'))
       }
       transcodeSessions.delete(sessionId)
-      rm(dir, { recursive: true, force: true }).catch(() => {})
+      // A clean, fast exit is not a failed start. An input whose playlist carries
+      // #EXT-X-ENDLIST (a provider placeholder / off-air window) or whose upstream closed
+      // reaches exit 0 with the output already written, before the poll below has run even
+      // once. Deleting the directory here erased a playlist that existed, and the poll then
+      // reported "ffmpeg exited before producing output" about a session that had succeeded —
+      // measured 2026-09-26 against the real chain with a fake provider serving exactly that
+      // shape. The start flow owns cleanup until it settles; afterwards this is the old behavior.
+      if (startSettled) {
+        rm(dir, { recursive: true, force: true }).catch(() => {})
+      }
       void signal
     })
 
@@ -824,6 +838,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     while (Date.now() < deadline) {
       if (cancelledSessions.has(sessionId)) {
         cancelledSessions.delete(sessionId)
+        startSettled = true
         await stopTranscode(sessionId)
         throw new Error('Transcode cancelled')
       }
@@ -837,6 +852,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         // languages) — the source might have fewer tracks than the one asked for.
         const mappedTrackExists = session.subtitleTracks.some((t) => t.index === subtitleStreamIndex && t.supported)
         if (!isVod || !mappedTrackExists) {
+          startSettled = true
           return { sessionId, playlistPath: playlistFile, subtitleTracks: session.subtitleTracks }
         }
         videoReadyAt = Date.now()
@@ -882,15 +898,26 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         // whole fallback exists for. subtitleStreamIndex >= 0 guards against retrying forever —
         // the retry itself always passes -1, which can never hit this same failure again.
         if (subtitleStreamIndex >= 0 && SUBTITLE_CODEC_INCOMPATIBLE_PATTERN.test(session.stderrTail.join('\n'))) {
+          // The retry starts a fresh session in a fresh directory; this attempt's directory
+          // holds nothing usable, and the exit handler already ran with startSettled still
+          // false (that is why this branch fired), so it is this flow's job to remove it.
+          startSettled = true
+          await rm(dir, { recursive: true, force: true }).catch(() => {})
           return startTranscode(sourceUrl, isVod, sessionId, -1, audioStreamIndex, videoTranscode)
         }
+        // The exit handler deliberately left the directory in place (the start flow owns it
+        // until settled) — a failed start has no use for it, so clean it here.
+        startSettled = true
+        await rm(dir, { recursive: true, force: true }).catch(() => {})
         throw new Error(`ffmpeg exited before producing output: ${session.stderrTail.slice(-10).join('\n')}`)
       }
       await sleep(pollIntervalMs)
     }
     if (videoReadyAt !== null) {
+      startSettled = true
       return { sessionId, playlistPath: playlistFile, subtitleTracks: session.subtitleTracks }
     }
+    startSettled = true
     await stopTranscode(sessionId)
     // Carry ffmpeg's own last words through. A bare "timed out" is unactionable: it cannot
     // distinguish a slow origin still delivering from a fetch loop hammering a dead URL, and those

@@ -15,6 +15,19 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.53.2 — a session that succeeds is no longer reported as "exited before producing output".**
+The UHD channels failed on every attempt with that message, and the cause was an old, documented
+assumption breaking. The transcoder's ffmpeg `exit` handler deleted the session directory on every
+exit — success included — on the theory (written into the test suite's own throttle note) that no
+real input finishes within one poll interval. Live TV broke the theory: a live playlist carrying
+`#EXT-X-ENDLIST` — the provider's placeholder/off-air shape — or an upstream that closes reaches a
+clean exit 0 *after writing the output*, and the handler erased the playlist the start poll was
+about to see. Reproduced end-to-end against a fake provider on the deployed code (ffmpeg's own
+summary said success; the app said failure), fixed by giving the start flow ownership of the
+directory until it settles, and pinned by a real-ffmpeg regression test proven to fail against the
+unfixed code. 523 tests; typecheck clean. The CRLF and `Skip (...)` lines riding along in the error
+tail were warnings, not the cause — a tail's last line is not automatically its verdict.
+
 **v0.49.3 — remux only what the browser cannot decode.** The operator reported *"Sky News HD is not
 playing smoothly"* — a regression from v0.48.0, which routed **every** HEVC live channel through the
 container remux on the codec alone. A browser's MSE can decode **Main** (8-bit) HEVC and refuse **Main
