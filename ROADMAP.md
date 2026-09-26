@@ -15,6 +15,25 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.53.4 — every raw-TS channel died at spawn: the demuxer sniff couldn't authenticate.** The
+serious one, reported live as *"all channels are failing"* the moment v0.53.2/3 reached the
+deployment. v0.53.0 moved the transcode input behind the app's own authenticated relay (to survive
+provider URL expiry) — and silently broke the guard that decides between HLS and raw-TS input
+arguments: `sniffsAsPlaylist` fetched the source URL **without the session cookie**, the relay
+answered the sniff with a 401, and the sniff fell back to its optimistic "treat as playlist". The
+provider, serving raw MPEG-TS on its `.m3u8` URLs (its documented flip), then handed ffmpeg a TS
+stream carrying `-live_start_index` — an HLS-demuxer-only option — and ffmpeg exited with
+`Option live_start_index not found.` before reading a frame. Measured: the deployment's exact
+two-line tail reproduced with its own ffmpeg 5.1.9 in a bookworm container against a TS origin.
+Three fixes: **the sniff now sends the same headers ffmpeg gets**, so it sees what ffmpeg sees; **a
+one-shot retry without the HLS-only arguments** fires when ffmpeg rejects them anyway (the
+provider's flip can race any sniff, including a correct one); and the `-headers` option gets its
+CRLF terminator, silencing the cosmetic `No trailing CRLF found in HTTP header. Adding it.` that
+was sitting in every tail looking like a suspect. Two regression tests: the authenticated-sniff
+shape (origin refuses without the cookie, serves TS with it) and the retry (the fixture dies with
+the real error; the retry's argv must lack the argument). 526 tests; verified under
+`node:22-bookworm linux/amd64` with `CI=true`.
+
 **v0.53.3 — the EPG screen merges "where the matches came from" into the guide sources table.**
 The operator's suggestion, and an obvious one once made: the matching report duplicated every
 source row on its own screen. The guide sources table now carries **Channels matched** and **Share

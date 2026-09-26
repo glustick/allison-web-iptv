@@ -6,6 +6,19 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.53.4 — the sniff authenticates; raw-TS channels play again)
+
+**v0.53.4 fixes the all-channels-down regression** reported the moment v0.53.2/3 were deployed.
+v0.53.0's change of transcode input to the app's own authenticated relay left the demuxer sniff
+fetching without the session cookie: the relay 401'd the sniff, the sniff optimistically said
+"playlist", and every channel the provider serves as raw MPEG-TS (its documented flip) died at
+spawn with `Option live_start_index not found.` — the one error the guard exists to prevent. The
+sniff now carries the same credentials ffmpeg does; a one-shot retry drops the HLS-only arguments
+if ffmpeg rejects them regardless (the provider's flip can race any sniff); and the `-headers`
+option is CRLF-terminated, which silences the cosmetic "No trailing CRLF found in HTTP header"
+warning that had been squatting in every error tail. 526 tests, including two regressions for
+this, verified in CI's own Linux/ffmpeg-5.1 environment.
+
 ## Current state (v0.53.3 — the guide sources table carries the matching report)
 
 The operator asked for the EPG screen to stop saying everything twice: the separate "Where the

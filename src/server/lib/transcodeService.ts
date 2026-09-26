@@ -37,6 +37,14 @@ const TEXT_SUBTITLE_CODECS = new Set(['subrip', 'srt', 'ass', 'ssa', 'mov_text',
 // stream — this is the safety net for that case specifically.
 const SUBTITLE_CODEC_INCOMPATIBLE_PATTERN = /Subtitle encoding currently only possible from text to text or bitmap to bitmap/
 
+// The demuxer-sniff losing to reality: these are the HLS demuxer's input-only arguments, and
+// this exact exit means ffmpeg picked a non-HLS demuxer (this provider answers .m3u8 URLs with
+// raw MPEG-TS depending on the moment) while the sniff said playlist — either the provider's
+// flip raced the sniff, or the sniff could not authenticate to see the real content (measured
+// live 2026-09-26: every raw-TS channel died at spawn this way). One retry without the
+// arguments turns that death into a playing session.
+const LIVE_START_INDEX_REJECTED_PATTERN = /Option live_start_index not found/
+
 // Same idea and same source line (ffmpeg's own "Input #0 ... Stream #0:N(lang): Audio: codec
 // ..." line) as SUBTITLE_STREAM_PATTERN above, for audio. This exists for a real, confirmed gap:
 // a live channel's actual MPEG-TS multiplex can carry more than one audio elementary stream
@@ -259,11 +267,23 @@ export function looksLikePlaylist(bytes: Uint8Array | undefined): boolean {
  * playlist": that is the shape the URL claimed, so the worst case is today's behaviour rather than a
  * transcode that refuses to start.
  */
-async function sniffsAsPlaylist(url: string): Promise<boolean> {
+// The `-headers` option's own line format ("Name: value", newline-separated) re-expressed as
+// fetch headers, so the demuxer sniff can authenticate exactly like the ffmpeg process will.
+function headersFromInputOption(inputHeaders?: string): Record<string, string> | undefined {
+  if (!inputHeaders) return undefined
+  const headers: Record<string, string> = {}
+  for (const line of inputHeaders.split(/\r?\n/)) {
+    const idx = line.indexOf(':')
+    if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
+  }
+  return Object.keys(headers).length > 0 ? headers : undefined
+}
+
+async function sniffsAsPlaylist(url: string, inputHeaders?: string): Promise<boolean> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 5000)
   try {
-    const res = await fetch(url, { signal: controller.signal })
+    const res = await fetch(url, { signal: controller.signal, headers: headersFromInputOption(inputHeaders) })
     if (!res.ok || !res.body) return true
     const reader = res.body.getReader()
     const { value } = await reader.read()
@@ -510,7 +530,14 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
      * transcode route). The token travels in the process arguments; inside the container that is the
      * same trust boundary as SESSION_SECRET, which is already in the environment.
      */
-    inputHeaders?: string
+    inputHeaders?: string,
+    /**
+     * Internal: set by this function's own retry when ffmpeg rejected the HLS-only input
+     * arguments (`Option live_start_index not found`) — the demuxer sniff lost a race against
+     * the provider's playlist↔raw-TS flip, or could not see the real content at all. The retry
+     * re-runs the exact same session without those arguments.
+     */
+    hlsInputArgsDisabled = false
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }> {
     const ffmpegPath = await deps.resolveFfmpegPath()
     if (!ffmpegPath) {
@@ -541,8 +568,14 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     // HLS-only `-live_start_index` is not a valid option at all and ffmpeg exits with
     //     Option live_start_index not found.
     // before reading a single frame. That is the error this guards against; the URL is only a hint.
+    //
+    // The sniff must see what ffmpeg will see: when the input is this app's own relay it needs the
+    // same cookie ffmpeg gets, or an authenticated relay answers the sniff with a 401 and the sniff
+    // falls back to its optimistic "treat as playlist" — which re-armed this exact failure for every
+    // raw-TS channel the moment v0.53.0 moved the input behind the relay (measured live 2026-09-26:
+    // every channel died at spawn with `Option live_start_index not found.`).
     const looksHls = /\.m3u8(\?|#|$)/i.test(sourceUrl)
-    const isHlsSource = looksHls && (await sniffsAsPlaylist(sourceUrl))
+    const isHlsSource = looksHls && !hlsInputArgsDisabled && (await sniffsAsPlaylist(sourceUrl, inputHeaders))
     const isHttpSource = /^https?:\/\//i.test(sourceUrl)
 
     const dir = await mkdtemp(join(tmpDir, TRANSCODE_DIR_PREFIX))
@@ -585,8 +618,11 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       ...(isHttpSource && !isVod && isHlsSource ? ['-live_start_index', '-1'] : []),
       ...(isHttpSource ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3'] : []),
       // `-headers` is an option of the HTTP protocol, so it has to sit with the other input options,
-      // before -i — the same rule that caught -live_start_index on a movie.
-      ...(inputHeaders ? ['-headers', inputHeaders] : []),
+      // before -i — the same rule that caught -live_start_index on a movie. The option's lines must
+      // be CRLF-terminated; ffmpeg tolerates a missing trailing CRLF but warns about it on every
+      // session ("No trailing CRLF found in HTTP header. Adding it."), which then sits in the
+      // stderr tail looking like a suspect. Append it here, once, and the tail stays honest.
+      ...(inputHeaders ? ['-headers', inputHeaders.endsWith('\r\n') ? inputHeaders : `${inputHeaders}\r\n`] : []),
       '-i',
       sourceUrl,
       // Movies/series routinely carry an embedded subtitle track alongside the audio this fix
@@ -897,6 +933,21 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         // at all, is what keeps that codec incompatibility from taking down the audio fix this
         // whole fallback exists for. subtitleStreamIndex >= 0 guards against retrying forever —
         // the retry itself always passes -1, which can never hit this same failure again.
+        // ffmpeg rejected the HLS-only input arguments outright — the sniff said playlist but the
+        // content was not. One retry without those arguments (see LIVE_START_INDEX_REJECTED_PATTERN);
+        // it cannot loop, because the retry passes hlsInputArgsDisabled, which suppresses both the
+        // arguments and this branch.
+        if (
+          isHlsSource &&
+          !hlsInputArgsDisabled &&
+          LIVE_START_INDEX_REJECTED_PATTERN.test(session.stderrTail.join('\n'))
+        ) {
+          startSettled = true
+          await rm(dir, { recursive: true, force: true }).catch(() => {})
+          return startTranscode(
+            sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex, videoTranscode, inputHeaders, true
+          )
+        }
         if (subtitleStreamIndex >= 0 && SUBTITLE_CODEC_INCOMPATIBLE_PATTERN.test(session.stderrTail.join('\n'))) {
           // The retry starts a fresh session in a fresh directory; this attempt's directory
           // holds nothing usable, and the exit handler already ran with startSettled still

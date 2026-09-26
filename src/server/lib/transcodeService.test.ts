@@ -121,6 +121,76 @@ describe('startTranscode', () => {
     expect(existsSync(result.playlistPath)).toBe(true)
   })
 
+  it('sniffs the input with the same credentials ffmpeg gets, so a raw-TS channel through the authenticated relay does not get HLS-only arguments', async () => {
+    // Regression for the 2026-09-26 outage ("every channel fails"): v0.53.0 moved the transcode
+    // input behind the app's own authenticated relay, but sniffsAsPlaylist fetched WITHOUT the
+    // session cookie — the relay answered the sniff with a 401, the sniff fell back to its
+    // optimistic "treat as playlist", and every channel the provider was serving as raw MPEG-TS
+    // died at spawn with "Option live_start_index not found." The origin here refuses requests
+    // without the cookie and serves raw MPEG-TS with it, so only a correctly-authenticated sniff
+    // can detect the true shape.
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-test-sniff-'))
+    const argsFile = join(fixtureDir, 'argv.txt')
+    const packet = Buffer.concat([Buffer.from([0x47, 0x40, 0x00, 0x10]), Buffer.alloc(184)])
+    const origin = createServer((req: IncomingMessage, res: ServerResponse) => {
+      if (req.headers.cookie !== 'auth=1') {
+        res.writeHead(401, { 'content-type': 'application/json' })
+        res.end('{"error":"unauthorised"}')
+        return
+      }
+      res.writeHead(200, { 'content-type': 'video/mp2t' })
+      res.end(Buffer.concat([packet, packet]))
+    })
+    await new Promise<void>((resolve) => origin.listen(0, '127.0.0.1', resolve))
+    const sniffUrl = `http://127.0.0.1:${(origin.address() as AddressInfo).port}/stream.m3u8`
+
+    try {
+      const service = track(
+        makeService({ resolveFfmpegPath: resolverFor(FAKE_FFMPEG), pollIntervalMs: 200 })
+      )
+      const result = await withEnv({ FAKE_FFMPEG_ARGS_FILE: argsFile }, () =>
+        withFakeFfmpegMode('dump_args_exit0', () =>
+          service.startTranscode(sniffUrl, false, 's-sniff', 0, 0, false, 'Cookie: auth=1')
+        )
+      )
+      const args = readFileSync(argsFile, 'utf8').split('\n').filter(Boolean)
+      expect(args).not.toContain('-live_start_index')
+      expect(result.sessionId).toBe('s-sniff')
+      expect(existsSync(result.playlistPath)).toBe(true)
+    } finally {
+      origin.close()
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  })
+
+  it('retries once without the HLS-only arguments when ffmpeg rejects them for a non-HLS input', async () => {
+    // The provider's playlist↔raw-TS flip can race the sniff even with credentials; when ffmpeg
+    // dies with "Option live_start_index not found.", one retry without those arguments is the
+    // difference between a dead channel and a playing one. The fixture dies exactly that way on
+    // the first attempt, then records the retry's argv: the offending argument must be gone, and
+    // the session must still have resolved.
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-test-lsi-retry-'))
+    const argsFile = join(fixtureDir, 'argv.txt')
+    const markerFile = join(fixtureDir, 'marker')
+    try {
+      const service = track(
+        makeService({ resolveFfmpegPath: resolverFor(FAKE_FFMPEG), pollIntervalMs: 200 })
+      )
+      const result = await withEnv(
+        { FAKE_FFMPEG_ARGS_FILE: argsFile, FAKE_FFMPEG_MARKER_FILE: markerFile },
+        () =>
+          withFakeFfmpegMode('live_start_index_rejected_then_dump', () =>
+            service.startTranscode('https://upstream.example/live/u/p/1.m3u8', false, 's-retry')
+          )
+      )
+      const args = readFileSync(argsFile, 'utf8').split('\n').filter(Boolean)
+      expect(args).not.toContain('-live_start_index')
+      expect(readFileSync(result.playlistPath, 'utf8')).toContain('#EXTM3U')
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  })
+
   it('rejects with the stderr tail when ffmpeg exits immediately with an error', async () => {
     const service = track(makeService({ resolveFfmpegPath: resolverFor(FAKE_FFMPEG) }))
 

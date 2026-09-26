@@ -23,6 +23,28 @@ case "${FAKE_FFMPEG_MODE:-}" in
     printf '#EXTM3U\n#EXT-X-ENDLIST\n' > "$last_arg"
     sleep 5
     ;;
+  dump_args_exit0)
+    # dump_args without the sleep: records the argv, writes the playlist, and exits
+    # immediately — for asserting which INPUT options were emitted on a session that ends
+    # before the first poll (see the ENDLIST/off-air and raw-TS sniff regressions).
+    printf '%s\n' "$@" > "${FAKE_FFMPEG_ARGS_FILE:?FAKE_FFMPEG_ARGS_FILE must be set}"
+    printf '#EXTM3U\n#EXT-X-ENDLIST\n' > "$last_arg"
+    ;;
+  live_start_index_rejected_then_dump)
+    # First invocation: die exactly like real ffmpeg when the HLS demuxer's input-only
+    # arguments reach a non-HLS demuxer ("Option live_start_index not found."). The retry
+    # (marker exists): record the retry's argv and succeed with a playlist — proving the
+    # retry dropped the offending arguments.
+    marker="${FAKE_FFMPEG_MARKER_FILE:?FAKE_FFMPEG_MARKER_FILE must be set for this mode}"
+    if [ -f "$marker" ]; then
+      printf '%s\n' "$@" > "${FAKE_FFMPEG_ARGS_FILE:?FAKE_FFMPEG_ARGS_FILE must be set}"
+      printf '#EXTM3U\n#EXT-X-ENDLIST\n' > "$last_arg"
+    else
+      touch "$marker"
+      echo "Option live_start_index not found." >&2
+      exit 1
+    fi
+    ;;
   success)
     printf '#EXTM3U\n#EXT-X-ENDLIST\n' > "$last_arg"
     sleep 5
