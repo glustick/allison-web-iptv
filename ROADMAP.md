@@ -15,6 +15,21 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.53.7 — a guide download the provider drops midway now retries itself.** The first reading off
+v0.53.6's progress columns diagnosed the provider-guide failure in one glance: the guide is now
+**168 MB** (the fetch machinery was sized for ~97 MB), the provider declares **no content-length**
+(hence "unknown size" in the Progress column), and the operator's first attempt died at
+**26.5 MB** — `Connection closed before the download finished`, this edge's documented drop —
+before a manual reload succeeded whole. The app worked; the manual step was the gap.
+`fetchTextViaUpstream` now retries a premature close in-attempt (up to three tries, two seconds
+apart — only that failure, since an HTTP error or a stall timeout will simply recur), and the
+error names the position: *"the provider dropped the transfer 26.5 MB in"*. The progress column
+restarts from zero per attempt, which is honest about what a retry is. Verified by a test whose
+origin drops the first request midway and serves a complete guide on the second — the fetch must
+resolve with two upstream hits. 528 tests. **Sized differently now: the streaming-parse item
+below.** This download is buffered whole before parsing, which a 168 MB — and growing — guide
+will eventually outgrow no matter how well the transfer is retried.
+
 **v0.53.6 — guide downloads show progress: bytes received, declared size, and where a failed
 download died.** The operator's request, and the missing half of the provider-guide diagnosis: a
 ~97MB download on a flaky edge reported only "loading", so a stalled fetch was indistinguishable

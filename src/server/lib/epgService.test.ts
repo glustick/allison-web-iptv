@@ -189,6 +189,49 @@ describe('createEpgService', () => {
     expect(done?.progress?.totalBytes).toBe(body.length)
   })
 
+  it('retries a guide download the provider dropped midway, and succeeds within the same fetch', async () => {
+    // Measured live on the deployment: the provider's edge closed a 1.7GB guide 26.5MB in
+    // ("connection closed before the download finished") and the same URL succeeded whole on
+    // the next manual reload. The in-attempt retry turns that manual step into a delay; the
+    // origin here drops the first request partway, then serves a complete guide.
+    let hits = 0
+    const body = Buffer.from(
+      `<?xml version="1.0"?><tv>${'<channel id="c1"><display-name>Chan</display-name></channel>'.repeat(50)}</tv>`
+    )
+    const provider = await listen((req, res) => {
+      if (req.url?.startsWith('/xmltv.php')) {
+        hits++
+        if (hits === 1) {
+          res.writeHead(200, { 'content-type': 'application/xml' })
+          res.write(body.subarray(0, 1000))
+          setTimeout(() => res.destroy(), 30)
+          return
+        }
+        res.writeHead(200, { 'content-type': 'application/xml', 'content-length': String(body.length) })
+        res.end(body)
+        return
+      }
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('[]')
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+    const service = createEpgService({ createUpstreamRequest: createNodeUpstreamRequest, now: fakeClock().now })
+    const result = await service.aggregate({
+      credentials: { server: provider, username: 'user', password: 'pass' },
+      epgUrls: [],
+      startMs: NOW - HOUR,
+      endMs: NOW + HOUR
+    })
+    expect(hits).toBe(2)
+    const done = result.sources.find((s) => s.kind === 'provider')
+    expect(done?.status).toBe('ok')
+    expect(done?.progress?.receivedBytes).toBe(body.length)
+  })
+
   it('reports a failing external source as an error while still serving the provider guide', async () => {
     const provider = await listen((req, res) => {
       if (req.url?.startsWith('/xmltv.php')) {

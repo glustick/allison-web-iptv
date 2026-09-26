@@ -41,65 +41,87 @@ export function fetchTextViaUpstream(
   // instead of inheriting the (deliberately generous) default meant for bulk downloads.
   responseTimeoutMs?: number,
   // Bytes received so far and the response's content-length, if it declares one. Progress is
-  // counted on the wire bytes (the encoded size), which is what content-length describes.
+  // counted on the wire bytes (the encoded size), which is what content-length describes. A
+  // premature-close retry restarts the count from zero — which is honest about what a retry is.
   onProgress?: (receivedBytes: number, totalBytes: number | null) => void
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const req: UpstreamClientRequest = createUpstreamRequest({
-      method: 'GET',
-      url,
-      stallTimeoutMs,
-      stallCheckIntervalMs,
-      responseTimeoutMs
-    })
-    let redirects = 0
-    req.on('redirect', () => {
-      if (redirects >= MAX_REDIRECTS) {
-        req.abort()
-        reject(new Error(`Too many redirects fetching ${url}`))
-        return
-      }
-      redirects++
-      req.followRedirect()
-    })
-    req.on('response', (res) => {
-      if (res.statusCode >= 400) {
-        req.abort()
-        reject(new Error(`HTTP ${res.statusCode} fetching ${url}`))
-        return
-      }
-      const totalHeader = res.headers['content-length']
-      const totalBytes = typeof totalHeader === 'string' && /^\d+$/.test(totalHeader) ? Number(totalHeader) : null
-      let receivedBytes = 0
-      const chunks: Buffer[] = []
-      let settled = false
-      const sink = new Writable({
-        write(chunk: Buffer, _encoding, callback) {
-          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-          chunks.push(buf)
-          receivedBytes += buf.length
-          onProgress?.(receivedBytes, totalBytes)
-          callback()
+  // The provider's edge intermittently drops long transfers midway — measured live on the
+  // operator's deployment: a 1.7GB guide died at 26.5 MB ("connection closed before the download
+  // finished") and then succeeded whole on the next manual reload. Retrying inside the fetch
+  // turns that into a delay instead of a failed guide and a manual step. Only the premature-close
+  // failure is retried — an HTTP error or a stall timeout will happen again, and the stall
+  // watchdog already owns that case. Progress callbacks restart from zero per attempt.
+  const PREMATURE_CLOSE = 'Connection closed before the download finished'
+  const attempt = (attemptsLeft: number): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const req: UpstreamClientRequest = createUpstreamRequest({
+        method: 'GET',
+        url,
+        stallTimeoutMs,
+        stallCheckIntervalMs,
+        responseTimeoutMs
+      })
+      let redirects = 0
+      req.on('redirect', () => {
+        if (redirects >= MAX_REDIRECTS) {
+          req.abort()
+          reject(new Error(`Too many redirects fetching ${url}`))
+          return
         }
+        redirects++
+        req.followRedirect()
       })
-      sink.on('finish', () => {
-        if (settled) return
-        settled = true
-        decodeBody(Buffer.concat(chunks)).then(resolve, reject)
+      req.on('response', (res) => {
+        if (res.statusCode >= 400) {
+          req.abort()
+          reject(new Error(`HTTP ${res.statusCode} fetching ${url}`))
+          return
+        }
+        const totalHeader = res.headers['content-length']
+        const totalBytes = typeof totalHeader === 'string' && /^\d+$/.test(totalHeader) ? Number(totalHeader) : null
+        let receivedBytes = 0
+        const chunks: Buffer[] = []
+        let settled = false
+        const sink = new Writable({
+          write(chunk: Buffer, _encoding, callback) {
+            const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+            chunks.push(buf)
+            receivedBytes += buf.length
+            onProgress?.(receivedBytes, totalBytes)
+            callback()
+          }
+        })
+        sink.on('finish', () => {
+          if (settled) return
+          settled = true
+          decodeBody(Buffer.concat(chunks)).then(resolve, reject)
+        })
+        sink.on('close', () => {
+          if (settled) return
+          settled = true
+          reject(
+            new Error(
+              `${PREMATURE_CLOSE}: the provider dropped the transfer ${(receivedBytes / 1_048_576).toFixed(1)} MB in`
+            )
+          )
+        })
+        sink.on('error', (err) => {
+          if (settled) return
+          settled = true
+          reject(err)
+        })
+        res.pipe(sink as unknown as ServerResponse)
       })
-      sink.on('close', () => {
-        if (settled) return
-        settled = true
-        reject(new Error(`Connection closed before the download finished: ${url}`))
-      })
-      sink.on('error', (err) => {
-        if (settled) return
-        settled = true
-        reject(err)
-      })
-      res.pipe(sink as unknown as ServerResponse)
+      req.on('error', (err) => reject(err instanceof Error ? err : new Error(String(err))))
+      ;(req as unknown as { end: () => void }).end()
     })
-    req.on('error', (err) => reject(err instanceof Error ? err : new Error(String(err))))
-    ;(req as unknown as { end: () => void }).end()
-  })
+  const maxAttempts = 3
+  const run = (n: number): Promise<string> =>
+    attempt(n).catch((err) => {
+      if (n < maxAttempts && err instanceof Error && err.message.startsWith(PREMATURE_CLOSE)) {
+        return new Promise<void>((resolve) => setTimeout(resolve, 2_000)).then(() => run(n + 1))
+      }
+      throw err
+    })
+  return run(1)
 }

@@ -6,6 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.53.7 — dropped guide downloads retry themselves)
+
+The provider's guide is now a 168 MB transfer with no declared size, and its edge intermittently
+closes it midway — measured at 26.5 MB on the operator's deployment, with the identical URL
+succeeding whole on the next attempt. A premature close now retries inside the fetch (up to three
+tries) instead of failing into a manual reload, and the error names the byte position. The
+progress columns restart from zero per attempt by design.
+
 ## Current state (v0.53.6 — guide downloads show progress and size)
 
 The guide sources table gained **Downloaded** and **Progress** columns: bytes received against the
