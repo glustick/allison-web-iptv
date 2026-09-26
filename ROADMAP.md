@@ -24,9 +24,12 @@ real input finishes within one poll interval. Live TV broke the theory: a live p
 clean exit 0 *after writing the output*, and the handler erased the playlist the start poll was
 about to see. Reproduced end-to-end against a fake provider on the deployed code (ffmpeg's own
 summary said success; the app said failure), fixed by giving the start flow ownership of the
-directory until it settles, and pinned by a real-ffmpeg regression test proven to fail against the
-unfixed code. 523 tests; typecheck clean. The CRLF and `Skip (...)` lines riding along in the error
-tail were warnings, not the cause — a tail's last line is not automatically its verdict.
+directory until it settles, and pinned by two regression tests — a real-ffmpeg ENDLIST session
+(verified failing unfixed, passing fixed; skipped on CI, whose ffmpeg-static 7.0.2 build segfaults
+on that fixture for reasons this app's code cannot reach, autopsy in the test) and a portable
+fake-ffmpeg twin that runs everywhere. 524 tests; typecheck clean. The CRLF and `Skip (...)` lines
+riding along in the error tail were warnings, not the cause — a tail's last line is not
+automatically its verdict.
 
 **v0.49.3 — remux only what the browser cannot decode.** The operator reported *"Sky News HD is not
 playing smoothly"* — a regression from v0.48.0, which routed **every** HEVC live channel through the

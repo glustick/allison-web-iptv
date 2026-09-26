@@ -27,6 +27,13 @@ case "${FAKE_FFMPEG_MODE:-}" in
     printf '#EXTM3U\n#EXT-X-ENDLIST\n' > "$last_arg"
     sleep 5
     ;;
+  success_then_exits_before_first_poll)
+    # The ENDLIST/off-air shape (see the real-ffmpeg regression beside it): the input ends
+    # immediately, so ffmpeg writes its output and exits 0 *before* startTranscode's first
+    # poll. The start flow must still resolve — a clean exit that produced the playlist is a
+    # success, not "exited before producing output".
+    printf '#EXTM3U\n#EXT-X-ENDLIST\n' > "$last_arg"
+    ;;
   success_with_subtitles)
     echo "Stream #0:2(eng): Subtitle: subrip" >&2
     printf '#EXTM3U\n#EXT-X-ENDLIST\n' > "$last_arg"

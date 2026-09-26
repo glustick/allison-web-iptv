@@ -99,6 +99,28 @@ describe('startTranscode', () => {
     await service.stopTranscode('s1')
   })
 
+  it('resolves when ffmpeg writes the playlist and exits cleanly before the first poll (the ENDLIST/off-air shape)', async () => {
+    // Regression for the 2026-09-26 UHD failure ("ffmpeg exited before producing output" on
+    // every attempt): a live playlist that carries #EXT-X-ENDLIST — the provider's
+    // placeholder / off-air shape — makes real ffmpeg consume everything at copy speed and
+    // exit 0 before startTranscode's first poll. The exit handler used to delete the session
+    // directory on EVERY exit, success included, erasing the playlist it had just written,
+    // and the poll then reported a failure about a session that had succeeded. This
+    // fake-ffmpeg shape produces exactly that ordering — write, exit, first poll — on every
+    // platform including CI, whose ffmpeg-static 7.0.2 build segfaults on the real-ffmpeg
+    // version of this test (see that test's own comment for the autopsy).
+    const service = track(
+      makeService({ resolveFfmpegPath: resolverFor(FAKE_FFMPEG), pollIntervalMs: 1000 })
+    )
+
+    const result = await withFakeFfmpegMode('success_then_exits_before_first_poll', () =>
+      service.startTranscode('irrelevant-source', false, 's1')
+    )
+
+    expect(result.sessionId).toBe('s1')
+    expect(existsSync(result.playlistPath)).toBe(true)
+  })
+
   it('rejects with the stderr tail when ffmpeg exits immediately with an error', async () => {
     const service = track(makeService({ resolveFfmpegPath: resolverFor(FAKE_FFMPEG) }))
 
@@ -548,7 +570,16 @@ describe('real ffmpeg integration', () => {
   // throttle note on startSyntheticOrigin above documents the same race seen through a
   // VOD-shaped fixture and judged unreachable in production — an assumption that held only
   // for movie-length inputs; this is the live-TV shape that made it reachable.)
-  it('resolves a live session whose ENDLIST playlist lets ffmpeg exit cleanly before the first poll', async () => {
+  // skipped on CI: ffmpeg-static's Linux 7.0.2 build segfaults reading ANY synthetic TS
+  // segment served over HTTP by its HLS demuxer — isolated to that binary, not to this app's
+  // arguments: five argument variants (full session args, no reconnect flags, no
+  // -live_start_index, bare -i, and with/without #EXT-X-PROGRAM-DATE-TIME in the playlist)
+  // all crash identically ~66ms in, at "Opening '<segment>' for reading", before writing
+  // anything. Same verdict as the multi-audio test below: a genuine third-party binary bug,
+  // reproduced under node:22-bookworm linux/amd64. The regression this test pins still runs
+  // on CI through its fake-ffmpeg twin ("exits cleanly before the first poll", above) and
+  // runs for real on macOS/ffmpeg 6.0 locally, where this passes reliably.
+  it.skipIf(process.env.CI)('resolves a live session whose ENDLIST playlist lets ffmpeg exit cleanly before the first poll', async () => {
     if (!ffmpegStaticPath) throw new Error('ffmpeg-static did not resolve a binary for this platform')
 
     const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-test-endlist-'))

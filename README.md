@@ -26,8 +26,10 @@ running. The start flow settles the session at every exit point (success, subtit
 deadline) and owns the directory until then; afterwards an exit is the natural end of the line and
 cleans up as before. The race the old test comment throttled around is closed instead.
 
-523 tests, including a real-ffmpeg regression test — a live session whose playlist carries ENDLIST
-must resolve — verified to fail against the unfixed code and pass against the fix.
+524 tests, including two regression tests for this: a real-ffmpeg ENDLIST session (runs on macOS;
+CI's ffmpeg-static 7.0.2 build segfaults on that fixture regardless of this app's code, documented
+in the test) and a portable fake-ffmpeg twin that runs everywhere — the real one verified to fail
+against the unfixed code and pass against the fix.
 
 **Lesson, recorded:** the error's stderr tail rode along with `No trailing CRLF found in HTTP field`
 and `Skip (...)` lines that were warnings, not causes — the verdict line of a tail is not
