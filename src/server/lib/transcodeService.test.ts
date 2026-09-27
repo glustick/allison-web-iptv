@@ -1313,6 +1313,25 @@ describe('live input resilience', () => {
     expect(args).toContain('-reconnect_streamed')
   })
 
+  it('paces the live input at native rate (-re) so the output window advances at 1x', async () => {
+    // The provider serves raw TS at a sustained ~10x realtime (measured 2026-09-27); unpaced,
+    // the whole delete_segments window churns every ~1.5s of wallclock and every fragment fetch
+    // 404s (the desktop sibling's 0.7.112 root-caused this exact failure). Pinned before -i so
+    // a future "cleanup" can't quietly drop the pacing flag or move it to the output side,
+    // where it would be an unrecognized option.
+    const args = await argsFor(false)
+    expect(args).toContain('-re')
+    expect(args.indexOf('-re')).toBeLessThan(args.indexOf('-i'))
+    // The window must also outlive the player's live-sync target (hls.js default 3 segments
+    // behind the edge) with margin — see the argv comment in transcodeService.ts.
+    expect(args[args.indexOf('-hls_list_size') + 1]).toBe('15')
+  })
+
+  it('does not pace a movie at native rate, which would pin VOD scrubbing to 1x', async () => {
+    const args = await argsFor(true)
+    expect(args).not.toContain('-re')
+  })
+
   it('does not apply a live start index to a movie, which has no live window', async () => {
     const args = await argsFor(true)
     expect(args).not.toContain('-live_start_index')

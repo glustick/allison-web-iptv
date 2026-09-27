@@ -583,6 +583,22 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
 
     const proc = spawn(ffmpegPath, [
       '-y',
+      // Live only: pace the input read to native frame rate. Measured 2026-09-27 against the
+      // real provider (same account the desktop sibling verified against): the panel's
+      // raw-MPEG-TS "live" connections deliver at a sustained ~10x realtime (78 4-second
+      // segments of media per 30 seconds of wallclock, steady for 8+ minutes — not a finite
+      // catch-up buffer, a firehose). Unpaced, the remux's own live edge then advances at 10x
+      // too, and a delete_segments window covering a handful of segments spans barely a second
+      // of wallclock — segments are evicted between the player's playlist refresh and its
+      // fragment fetch, every fragment 404s, and the channel dies with a terminal fragLoadError
+      // (the desktop sibling's 0.7.112 fixed exactly this with this same flag). -re makes ffmpeg
+      // read at 1x media time; TCP backpressure flow-controls the provider (how VLC consumes
+      // the same firehose), and the output playlist advances at a steady 1x whatever the
+      // source's delivery rate. Playback necessarily starts where the connection opened — the
+      // firehose has no joinable live edge — same as VLC. VOD must NOT get this flag: its remux
+      // is meant to race ahead of playback (scrub-anywhere event playlist) and -re would pin it
+      // to 1x, i.e. no scrubbing ahead ever again.
+      ...(isVod ? [] : ['-re']),
       // Input-side resilience, ahead of -i. Not cosmetic: this provider signs segment URLs with a
       // lifetime measured in tens of seconds — measured directly against its live CDN, a segment
       // URL returns 200 at t+17s and 400 Bad Request from t+28s onwards, permanently. ffmpeg's
@@ -747,7 +763,19 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       // #EXT-X-ENDLIST, so this is a drop-in behavior change, not a player-side one.
       ...(isVod
         ? ['-hls_list_size', '0', '-hls_playlist_type', 'event']
-        : ['-hls_list_size', '6', '-hls_flags', 'delete_segments+omit_endlist']),
+        : [
+            // 15 segments (~60s at 4s each), not the 6 this used to be: the window has to
+            // outlive the *player's* live-sync target (hls.js default liveSyncDurationCount 3,
+            // i.e. it deliberately plays ~3 segments behind the edge) with margin — a 6-window
+            // left that target one playlist refresh away from delete_segments evicting the very
+            // fragment the player was about to fetch (a 404, and a fatal fragLoadError once its
+            // retry ladder is spent — the desktop sibling root-caused this exact shape in
+            // 0.7.111). Cheap insurance: ~60s of 1080p segments is a couple of MB.
+            '-hls_list_size',
+            '15',
+            '-hls_flags',
+            'delete_segments+omit_endlist'
+          ]),
       '-hls_segment_filename',
       join(dir, 'seg_%05d.m4s'),
       playlistFile

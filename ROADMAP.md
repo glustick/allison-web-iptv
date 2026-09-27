@@ -15,6 +15,23 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.53.8 — live remux input is paced at 1x, because the provider now firehoses raw TS at ~10x
+realtime.** Ported from the desktop sibling's 0.7.112 the same afternoon it was root-caused there:
+the panel's raw-MPEG-TS "live" connections deliver at a **sustained ~10x realtime** (78 four-second
+segments of media per 30 seconds of wallclock, holding steady 8+ minutes — a firehose, not a finite
+catch-up buffer). Unpaced, the relay's own output edge advanced at 10x too, so a `delete_segments`
+window spanning a handful of segments covered barely a second of wallclock — segments were evicted
+between the player's playlist refresh and its fragment fetch, every fragment 404'd, and the channel
+died with a terminal fragLoadError once hls.js's retry ladder was spent. Two argv changes, both
+pinned in the live-input-resilience tests: **`-re` on the live input** (pacing ffmpeg's read to
+native frame rate, TCP backpressure flow-controlling the provider — exactly how VLC consumes the
+same firehose — so the output playlist advances at a steady 1x; VOD deliberately keeps the unpaced
+read, which is what makes scrub-anywhere work), and **`-hls_list_size` 6 → 15** (~60s of window),
+matching the desktop's invariant that the window must outlive the player's live-sync target (hls.js
+default: 3 segments behind the edge) with real margin. Playback necessarily starts where the
+connection opened — a stream served faster than realtime has no joinable live edge; same as VLC.
+530 tests, typecheck and lint clean.
+
 **v0.53.7 — a guide download the provider drops midway now retries itself.** The first reading off
 v0.53.6's progress columns diagnosed the provider-guide failure in one glance: the guide is now
 **168 MB** (the fetch machinery was sized for ~97 MB), the provider declares **no content-length**
