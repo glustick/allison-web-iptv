@@ -6,6 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.53.9 — an ffmpeg failure leads with its cause)
+
+The transcoder keeps a rolling tail of ffmpeg's stderr, and on a failed start reported only its
+last ten lines — which, in the 2026-09-23 incident, ended mid-`Skip(…)` warning while the line
+that actually explained the failure had already rolled past the window. The message now names that
+line first, then the recent tail for context; nothing about playback changed. 533 tests, typecheck
+and lint clean.
+
 ## Current state (v0.53.8 — live remux input is paced at 1x)
 
 The provider's raw-MPEG-TS "live" connections deliver at a sustained ~10x realtime — a firehose,

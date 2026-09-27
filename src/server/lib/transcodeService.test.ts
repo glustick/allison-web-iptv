@@ -9,6 +9,8 @@ import { createRequire } from 'module'
 import {
   averageBytesPerSecond,
   createTranscodeService,
+  describeFfmpegFailure,
+  firstStderrFailure,
   resolveVideoEncodeProfile,
   looksLikePlaylist,
   type TranscodeService,
@@ -1571,5 +1573,41 @@ describe('averageBytesPerSecond', () => {
   it('treats absent or impossible numbers as "no reading yet"', () => {
     expect(averageBytesPerSecond(NaN, 10)).toBeNull()
     expect(averageBytesPerSecond(100, NaN)).toBeNull()
+  })
+})
+
+describe('ffmpeg failure-line summary', () => {
+  // The 2026-09-23 lesson: a tail's last line is not automatically its verdict. A session died
+  // with the tail ending on a `Skip(…)` warning while the line that actually explained it had
+  // been trimmed past the 10-line window, and finding it cost an hour of inference.
+  it('leads with the first line that names a failure', () => {
+    const tail = [
+      'Input #0, mpegts, from ...',
+      '[https @ 0x1] HTTP error 403 Forbidden',
+      '[hls @ 0x1] Failed to open segment 5 of playlist 0',
+      'Last message repeated 3 times'
+    ]
+    expect(firstStderrFailure(tail)).toBe('[https @ 0x1] HTTP error 403 Forbidden')
+    const summary = describeFfmpegFailure(tail)
+    expect(summary.startsWith('[https @ 0x1] HTTP error 403 Forbidden')).toBe(true)
+    expect(summary).toContain('[hls @ 0x1] Failed to open segment 5 of playlist 0')
+    // Not repeated when the recent tail already carries it.
+    expect(summary.split('\n').filter((line) => line.includes('403 Forbidden'))).toHaveLength(1)
+  })
+
+  it('surfaces a failure that has rolled out of the last ten lines', () => {
+    const tail = [
+      'Option live_start_index not found.',
+      ...Array.from({ length: 12 }, (_, i) => `frame= ${i} fps=0.0`)
+    ]
+    // The failure line is 13 lines back — outside the tail's own display window, which is exactly
+    // the shape that hid the cause in the 2026-09-23 incident.
+    expect(describeFfmpegFailure(tail).startsWith('Option live_start_index not found.')).toBe(true)
+  })
+
+  it('returns null, and the plain trimmed tail, when nothing reads like a failure', () => {
+    const tail = ['Stream #0:0: Video: h264', '  encoder         : Lavf60', '']
+    expect(firstStderrFailure(tail)).toBeNull()
+    expect(describeFfmpegFailure(tail)).toBe(`${tail[0]}\n${tail[1].trim()}`)
   })
 })

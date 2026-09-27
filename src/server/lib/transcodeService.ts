@@ -45,6 +45,39 @@ const SUBTITLE_CODEC_INCOMPATIBLE_PATTERN = /Subtitle encoding currently only po
 // arguments turns that death into a playing session.
 const LIVE_START_INDEX_REJECTED_PATTERN = /Option live_start_index not found/
 
+// ffmpeg's last line is not automatically its verdict. On 2026-09-23 a fourteen-second session
+// died with a tail that ended mid-`Skip(…)` *warning*, while the line that actually explained the
+// failure had already been trimmed past the 10-line window — an hour went to inference that one
+// line would have settled. Keep the failure line: the first stderr line that reads like one, so
+// the message leads with the cause rather than the noise after it.
+const STDERR_FAILURE_PATTERN =
+  /\b(?:error|failed|failure|invalid|unable|denied|refused|forbidden|unauthorized|unrecognized|not found|no such|could not|couldn't|bad request|connection (?:reset|refused)|timed out|unreachable)\b/i
+
+/** The first stderr line that names a failure, or null when nothing in the tail reads like one. */
+export function firstStderrFailure(tail: string[]): string | null {
+  for (const raw of tail) {
+    const line = raw.trim()
+    if (line.length > 0 && STDERR_FAILURE_PATTERN.test(line)) return line
+  }
+  return null
+}
+
+/**
+ * ffmpeg's own account of why it died — the failure line first, then the recent tail for context,
+ * with the failure line not repeated when it is already among the last lines. Falls back to the
+ * plain (trimmed) tail when nothing in it reads like a failure.
+ */
+export function describeFfmpegFailure(tail: string[]): string {
+  const recent = tail
+    .slice(-10)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+  const failure = firstStderrFailure(tail)
+  if (!failure) return recent.join('\n')
+  const rest = recent.filter((line) => line !== failure)
+  return rest.length > 0 ? `${failure}\n${rest.join('\n')}` : failure
+}
+
 // Same idea and same source line (ffmpeg's own "Input #0 ... Stream #0:N(lang): Audio: codec
 // ..." line) as SUBTITLE_STREAM_PATTERN above, for audio. This exists for a real, confirmed gap:
 // a live channel's actual MPEG-TS multiplex can carry more than one audio elementary stream
@@ -988,7 +1021,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         // until settled) — a failed start has no use for it, so clean it here.
         startSettled = true
         await rm(dir, { recursive: true, force: true }).catch(() => {})
-        throw new Error(`ffmpeg exited before producing output: ${session.stderrTail.slice(-10).join('\n')}`)
+        throw new Error(`ffmpeg exited before producing output: ${describeFfmpegFailure(session.stderrTail)}`)
       }
       await sleep(pollIntervalMs)
     }
@@ -1003,7 +1036,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     // two need opposite responses. The buffered stderr is already kept for the exited-early path
     // (below) — this path just wasn't using it.
     const waitedSeconds = Math.round((isVod ? vodDeadlineMs : liveDeadlineMs) / 1000)
-    const stalledTail = session.stderrTail.slice(-10).join('\n').trim()
+    const stalledTail = describeFfmpegFailure(session.stderrTail).trim()
     throw new Error(
       `Timed out after ${waitedSeconds}s waiting for ffmpeg to produce transcoded output` +
         (stalledTail ? `: ${stalledTail}` : ' (ffmpeg said nothing — it may be waiting on the origin)')

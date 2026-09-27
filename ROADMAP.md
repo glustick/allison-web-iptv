@@ -8,12 +8,22 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.53.8**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.53.9**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.53.9 — an ffmpeg failure now leads with the line that names it.** The transcoder keeps a
+40-line rolling tail of ffmpeg's stderr, and on a failed start reported only its last ten lines —
+which on 2026-09-23 ended mid-`Skip(…)` *warning* while the line that actually explained the death
+had already been trimmed past the window. An hour went to inference a single line would have
+settled. The error message now leads with the first tail line that reads like a failure (`error` /
+`failed` / `invalid` / `403 Forbidden` / `Option … not found` …), then the recent tail for context,
+without repeating the failure line when it is already there; with nothing failure-shaped it falls
+back to the plain tail exactly as before. Server-only; 533 tests (three new, pinning the summary
+and the rolled-out-of-window case), typecheck and lint clean.
 
 **v0.53.8 — live remux input is paced at 1x, because the provider now firehoses raw TS at ~10x
 realtime.** Ported from the desktop sibling's 0.7.112 the same afternoon it was root-caused there:
