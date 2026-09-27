@@ -9,6 +9,12 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # A documentation-only push (README/ROADMAP/EFFORT-ASSESSMENT) no longer triggers a full
+    # multi-arch build — ~13–20 min, linux/arm64 better-sqlite3 under QEMU. Until now that depended
+    # on remembering `[skip ci]` in the commit message; the filter makes it automatic. A push that
+    # touches any non-`.md` file still builds, and `workflow_dispatch` stays the manual override.
+    paths-ignore:
+      - '**.md'
   workflow_dispatch: {}
 
 jobs:
