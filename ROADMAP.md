@@ -766,6 +766,96 @@ bolted on. Next: phase 1b — a settings screen that reads and writes the new en
 resolving credentials through `primaryPlaylist`, which keeps an existing account's behaviour identical
 after migration. Then phase 2 (playlist-aware browse with filter chips, hide and sort).
 
+## Feature: a Sports tab (the desktop app's, brought to the web)
+
+**Requested 2026-09-28 by the operator:** *"the sport tab feature that is in the fat application … it
+would also be good to have that in this web driven application."* The desktop sibling
+(`glustick/iptv-app`) has had one since its 0.7.109 and extended it in 0.8.0 with api-football.com
+fixtures. This is the plan to bring it here.
+
+### What the desktop app actually has — two independent layers
+
+1. **A provider-name-driven schedule, with no external service.** `src/renderer/src/lib/sports.ts`
+   (521 lines, pure — its own header says *"no window/document/Electron imports … so it stays
+   unit-testable and shareable with the web sibling"*) classifies the provider's live catalogue into
+   sport groups from **category names** (Football/Soccer pinned first, then by channel count; carrier
+   categories like "Sky Sports" become their own browse group) and parses the fixtures **out of channel
+   names**, because this provider's `get_short_epg` is empty — the same finding this repo's EPG work
+   already records. It handles the shapes the provider really emits (`Soccer01: Brentford vs Chelsea (
+   Sky Sports Main Event Feed ) @ 3:00 pm`, `EPL 05ⓧ: Newcastle United vs. Hull City AFC | Saturday, 19
+   September 2026 15:00`, the separator-less `EPL01: Brentford 20:00 Chelsea`, UK numeric dates,
+   `ET`/`AEST`/`GMT±N` suffixes), collapses one fixture carried under several categories into **one game
+   with several feeds**, keeps unscheduled games in their own section, and offers a Today ± 7 day
+   picker. One bulk catalogue fetch, no extra provider requests, and a feed click reuses the ordinary
+   player path.
+2. **api-football.com fixtures.** An optional per-user key (desktop: encrypted at rest with Electron
+   `safeStorage`, entered in Settings → "Sports data") fetched through a main-process handler that
+   **pins the host** to `v3.football.api-sports.io`, allows relative paths only, and injects the
+   `x-apisports-key` header; the renderer normalizes the v3 shape (in-play vs. terminal status codes,
+   null goals preserved). On the surface: a fixtures strip above the schedule, live-first, refetched
+   every five minutes, failures contained to one status line — and **nothing extra rendered when no key
+   is set**.
+
+Kickoffs are always shown twice — the venue's wall clock with its DST-correct zone name, and the
+viewer's local time (`3:00 pm BST · 10:00 pm`, with a `+1d` marker when the date shifts) — from a
+second pure module, `lib/gameTimes.ts`, which maps a league's country to its IANA zone and does the
+arithmetic with `Intl` rather than a fixed offset.
+
+### What already fits here, and what does not
+
+**Fits — and is why this is a port rather than a build:**
+
+- Both logic modules are pure and were written to be shareable; they come across as `lib/sports.ts`
+  and `lib/gameTimes.ts`, tests and all.
+- The catalogue they need is already fetched and cached server-side (`providerLists.ts`, the search
+  index) — the same one bulk pull the desktop uses.
+- `tabs.ts` already has the shape for a new top-level surface, and the desktop's drag-resizable panes
+  map to the existing resizable-column hooks. Day and pane widths have a home in the existing prefs.
+
+**Does not fit — the desktop's Electron assumptions:**
+
+- **The api-football key must not live in the browser.** The desktop keeps it in the main process and
+  the renderer never sees it; here there is no main process, so it becomes a **server-side pinned-host
+  proxy** (`/api/sports/fixtures`) with the key stored **encrypted at rest with `SESSION_SECRET`** — the
+  rule this app settled in v0.11.0 ("provider credentials never reach the browser") applied to a second
+  secret. It rides in the account's credential envelope, which already carries account-level fields
+  (`epgUrls`, `alertWebhook`), and the API answers `keySet`, never the key.
+- **The five-minute refetch belongs on the server**, not per tab: one cached fetch shared by every
+  session is cheaper and is what keeps the key server-side, the rate limit in one place, and a failed
+  fetch recorded once.
+- `ensureChannelCatalog` (Electron store) → the existing server catalogue path; the desktop's watch
+  history → this app's server-side library.
+
+### Phases, smallest useful first
+
+1. **The schedule alone — no new service, no key.** Port `sports.ts` and `gameTimes.ts` with their
+   tests, add the Sports tab (top-level, like the desktop's, beside Live TV), and render
+   groups → day → games → feeds from the catalogue already in hand. This is the whole 0.7.109 feature
+   and needs nothing stored and no decision from anyone. **If only one phase ever ships, ship this one.**
+2. **The api-football proxy.** `GET/PUT /api/sports/settings` (set/clear the key; return `keySet` only)
+   and `GET /api/sports/fixtures?date=`, with the key in the account envelope, the host pinned, a shared
+   cache and a rate limit, plus a Settings → "Sports data" section written the way the Playlists screen
+   already is.
+3. **The fixtures strip.** Above the schedule, live-first, with the api-football-style league grouping
+   and the "N feeds" badge; failures stay one line.
+4. **Later, and labelled as such:** click-through from a fixture to its channel — the desktop's own
+   known alpha limit — and scores on the provider's game rows (its names carry none).
+
+### Decisions to confirm before phase 2
+
+1. **Is there an api-football.com key, and is a server-side proxy acceptable?** It is the only shape
+   consistent with v0.11.0; the key must not be shipped to the browser.
+2. **Pane layout** — the desktop's three resizable panes (leagues / channels / fixtures), or something
+   that fits this app's existing channel-list layout?
+3. **A top-level tab, or a surface inside Live TV?** The desktop made it top-level; as a detached tab
+   here it would keep playback alive while open (the `tabs.ts` rule).
+4. **Phase 1 alone first** (schedule only, no key) — recommended — or phases 1 and 2 together?
+
+**Why the split matters, and decides how much the fixtures layer is worth:** layer 1 needs no external
+account and no key, and it is what makes the tab work at all; layer 2 is an enrichment that degrades to
+nothing when the key is absent. The desktop app built them as two releases, which is what lets this one
+be ported in two independent pieces — and lets the first land without anyone answering a question.
+
 ## Open work
 
 ### 0. Client-side decoding, so the NAS never transcodes video
