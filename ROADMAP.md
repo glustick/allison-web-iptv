@@ -8,7 +8,7 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-24 against v0.53.1**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.53.8**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
@@ -1111,11 +1111,12 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
   44.7 GB on the NAS before anyone noticed, the same drift that caused the earlier disk-full incident
   (89 images / 55 GB). `scripts/dockhand-update.sh` now prunes unused images after a successful deploy,
   bounded so a Dockhand that stops answering cannot hold the script open; `PRUNE=0` skips it.
-- **Expose a transcode's `idle` reading in the System tab.** *Open (small, high diagnostic value).*
-  Tonight's hardest bugs were all visible as that one number: a session whose output nothing had fetched
-  for 60+ seconds was a session nobody was watching. The server tracks `idleSeconds` and the admin health
-  endpoint reports it; surfacing it in the UI would let the *user* see a stuck transcode rather than
-  report a black screen.
+- **Expose a transcode's `idle` reading in the System tab.** *Shipped — and it was already shipped;
+  the entry below was stale.* The System tab's **Active transcodes** table has carried an **Idle**
+  column (`{idleSeconds}s`, flagged *“— nothing is fetching this”* past 60s) alongside Rate and Disk
+  used since the bandwidth work landed; the admin health endpoint it reads was never the only place
+  this number lived. Corrected here so it is not proposed again — the same class of correction the
+  note at the top of this file records.
 - **The guide parse blocks the event loop for about four seconds.** *Open (measured).* A refresh keeps the
   app responsive at 12–20 ms, then stalls once for **3.9 s** while the parser runs. Not enough to explain
   the 502s of 2026-09-19 — those were an OOM crash loop — but on a slow day it is the difference between a

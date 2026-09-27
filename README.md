@@ -6,6 +6,18 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.53.8 — live remux input is paced at 1x)
+
+The provider's raw-MPEG-TS "live" connections deliver at a sustained ~10x realtime — a firehose,
+not a finite catch-up buffer. Unpaced, the relay's own output edge advanced at 10x too, so a
+`delete_segments` window spanning a handful of segments covered barely a second of wallclock:
+segments were evicted between the player's playlist refresh and its fragment fetch, every fragment
+404'd, and the channel died. The live input is now read with `-re` (pacing ffmpeg to native frame
+rate, TCP backpressure flow-controlling the provider — exactly how VLC consumes the same firehose)
+and the live window widened to 15 segments (~60s), matching the desktop sibling's invariant that
+the window must outlive the player's live-sync target. VOD deliberately keeps the unpaced read,
+which is what makes scrub-anywhere work. 530 tests, typecheck and lint clean.
+
 ## Current state (v0.53.7 — dropped guide downloads retry themselves)
 
 The provider's guide is now a 168 MB transfer with no declared size, and its edge intermittently
