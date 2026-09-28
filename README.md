@@ -6,6 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.58.0 — the sports catalogue, the key, and a 01:00 warm)
+
+The Sports tab's catalogue is now fetched by the server, cached on disk and shared by every account —
+once a day, not per login — and the api-football key is a system-wide setting too (encrypted at rest,
+admin-only). Both the guides and the sports catalogue are refreshed by a nightly job at **01:00**. The
+Sports tab's channels column resize bar also works in both directions now (it was inverted). 616
+tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.57.0 — guide sources are system-wide, and refreshed once a day)
 
 The extra EPG sources are now a **system-wide setting** — one set for the household, stored in the

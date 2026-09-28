@@ -1,5 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { loadSavedDimension, nextDimension, saveDimension } from './useResizableDimension.js'
+import { loadSavedDimension, nextDimension, orientedDelta, saveDimension } from './useResizableDimension.js'
+
+describe('orientedDelta', () => {
+  // The sidebar grows on a rightward drag; a right-hand pane (the Sports tab's channels column)
+  // must grow on a LEFTWARD one, or the grip runs away from the pointer as you reach for it.
+  it('leaves the delta alone for a panel before the handle', () => {
+    expect(orientedDelta(30, false)).toBe(30)
+    expect(orientedDelta(-30, false)).toBe(-30)
+  })
+
+  it('mirrors it for a panel after the handle', () => {
+    expect(orientedDelta(-30, true)).toBe(30)
+    expect(orientedDelta(30, true)).toBe(-30)
+  })
+})
 
 describe('nextDimension', () => {
   it('applies the delta unchanged inside the range', () => {

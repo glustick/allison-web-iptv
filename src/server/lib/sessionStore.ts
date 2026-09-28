@@ -17,9 +17,9 @@ export interface SessionCredentials {
   // can write to that channel.
   alertWebhook?: string
   // An api-football.com key for the Sports tab's fixtures and live scores (see
-  // lib/sportsFixtures.ts). A secret like the rest of this bundle, and for the same reason it is
-  // stored here rather than in browser storage: the browser must never hold it, and every request
-  // that spends it is made by the server.
+  // lib/sportsFixtures.ts). **Legacy as of v0.58.0**: the key is a system-wide setting now
+  // (systemSettings.ts + index.ts), and this field is read only by the one-time migration that
+  // adopts an account's key into it. Kept so an upgrading account is not asked to retype one.
   apiFootballKey?: string
 }
 

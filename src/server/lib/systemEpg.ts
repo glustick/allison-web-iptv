@@ -1,9 +1,8 @@
-import type { Database } from 'better-sqlite3'
-import { openDatabase } from './db.js'
+import { createSystemSettingsStore, type SystemSettingsStore } from './systemSettings.js'
 
 // The EPG source list is a **system** setting, not an account one: one household, one set of
-// guides. It lives in the same SQLite database as everything else (db.ts) under a single `meta`
-// row, so it survives restarts and image updates and is never rebuilt per login.
+// guides. It is stored in the app's own database (see systemSettings.ts), so it survives restarts
+// and image updates and is never rebuilt per login.
 //
 // Only an admin may write it (enforced at the endpoint, requireAdmin); every signed-in user reads
 // it. The provider's *own* guide is not part of this — it is derived from whichever account is
@@ -24,51 +23,30 @@ export interface SystemEpgStore {
   hasStoredConfig(): boolean
 }
 
-export function createSystemEpgStore(opts: { dataDir: string }): SystemEpgStore {
-  let handle: ReturnType<typeof openDatabase> | null = null
-  const db = (): Database => {
-    if (!handle) handle = openDatabase(opts.dataDir)
-    return handle.db
-  }
+export function createSystemEpgStore(opts: { dataDir: string; settings?: SystemSettingsStore }): SystemEpgStore {
+  const settings = opts.settings ?? createSystemSettingsStore({ dataDir: opts.dataDir })
 
   function read(): SystemEpgConfig {
-    let row: { value: string } | undefined
-    try {
-      row = db().prepare('SELECT value FROM meta WHERE key = ?').get(META_KEY) as { value: string } | undefined
-    } catch (err) {
-      console.error('[epg] could not read the system guide sources:', err instanceof Error ? err.message : err)
-      return { urls: [], updatedAt: null, updatedBy: null }
-    }
-    if (!row) return { urls: [], updatedAt: null, updatedBy: null }
-    try {
-      const parsed = JSON.parse(row.value) as { urls?: unknown; updatedAt?: unknown; updatedBy?: unknown }
-      const urls = Array.isArray(parsed.urls)
-        ? parsed.urls.filter((url): url is string => typeof url === 'string' && url.length > 0)
-        : []
-      return {
-        urls,
-        updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
-        updatedBy: typeof parsed.updatedBy === 'string' ? parsed.updatedBy : null
-      }
-    } catch {
-      // A corrupt row must not take the guide down: an empty list is recoverable (the admin
-      // re-adds a source), while throwing here would fail every EPG request.
-      return { urls: [], updatedAt: null, updatedBy: null }
+    const stored = settings.read<{ urls?: unknown; updatedAt?: unknown; updatedBy?: unknown }>(META_KEY)
+    if (!stored) return { urls: [], updatedAt: null, updatedBy: null }
+    const urls = Array.isArray(stored.urls)
+      ? stored.urls.filter((url): url is string => typeof url === 'string' && url.length > 0)
+      : []
+    return {
+      urls,
+      updatedAt: typeof stored.updatedAt === 'string' ? stored.updatedAt : null,
+      updatedBy: typeof stored.updatedBy === 'string' ? stored.updatedBy : null
     }
   }
 
   function write(urls: string[], updatedBy: string): SystemEpgConfig {
     const config: SystemEpgConfig = { urls, updatedAt: new Date().toISOString(), updatedBy }
-    db().prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(META_KEY, JSON.stringify(config))
+    settings.write(META_KEY, config)
     return config
   }
 
   function hasStoredConfig(): boolean {
-    try {
-      return Boolean(db().prepare('SELECT 1 FROM meta WHERE key = ?').get(META_KEY))
-    } catch {
-      return false
-    }
+    return settings.has(META_KEY)
   }
 
   return { read, write, hasStoredConfig }

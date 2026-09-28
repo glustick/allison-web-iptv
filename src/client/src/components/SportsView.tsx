@@ -22,6 +22,7 @@ import {
   matchFixturesToGames,
   type ApiFootballFixture
 } from '../lib/sportsFixtures'
+import { fetchSportsCatalogue } from '../lib/sportsCatalogue'
 import type { Category, LiveStream } from '../lib/types'
 
 // The Sports tab: the desktop sibling's (iptv-app 0.7.109 → 0.8.0), ported and re-arranged to the
@@ -47,8 +48,8 @@ const PLAYER_MIN_HEIGHT = 120
 const PLAYER_DEFAULT_MAX_HEIGHT = (): number => Math.round(window.innerHeight * 0.45)
 const PLAYER_MAX_HEIGHT_CEILING = (): number => Math.round(window.innerHeight * 0.8)
 // Per-view layout prefs (localStorage, the same mechanism the sidebar and EPG column use).
-const PLAYER_MAX_HEIGHT_KEY = 'alliso…ight'
-const CHANNELS_WIDTH_KEY = 'alliso…idth'
+const PLAYER_MAX_HEIGHT_KEY = 'allison-web-iptv:sports-player-max-height'
+const CHANNELS_WIDTH_KEY = 'allison-web-iptv:sports-channels-width'
 
 type Selection = { kind: 'game'; key: string } | { kind: 'fixture'; id: number }
 
@@ -193,13 +194,15 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
   const { dimension: channelsWidth, startDrag: startChannelsDrag } = useResizableDimension(
     loadSavedDimension(CHANNELS_WIDTH_KEY, 320, 220, 640),
     'x',
-    { min: 220, max: 640, onCommit: (w) => saveDimension(CHANNELS_WIDTH_KEY, w) }
+    // invert: this pane sits to the RIGHT of its handle, so dragging left must widen it.
+    { min: 220, max: 640, invert: true, onCommit: (w) => saveDimension(CHANNELS_WIDTH_KEY, w) }
   )
 
+  // The provider's categories, from the server's shared, once-a-day catalogue cache — opening this
+  // tab must not re-fetch the provider's list, and a restart must not either.
   useEffect(() => {
-    session.client
-      .getLiveCategories()
-      .then(setCategories)
+    void fetchSportsCatalogue()
+      .then((result) => setCategories(result.categories))
       .catch((err) => {
         setLoadError(err instanceof Error ? err.message : 'Failed to load categories')
         setLoading(false)
@@ -218,12 +221,10 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
     if (sportsCategoryIds.length === 0) return
     let cancelled = false
     setLoading(true)
-    void Promise.all(
-      sportsCategoryIds.map((id) => session.client.getLiveStreams(id).catch(() => [] as LiveStream[]))
-    )
-      .then((lists) => {
+    void fetchSportsCatalogue(sportsCategoryIds)
+      .then((result) => {
         if (cancelled) return
-        setStreams(lists.flat())
+        setStreams(result.streams)
         setLoading(false)
       })
       .catch((err) => {
@@ -234,7 +235,7 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [sportsCategoryIds, session.client])
+  }, [sportsCategoryIds])
 
   useEffect(() => {
     reportNowPlaying(nowPlaying?.name ?? null, 'live')

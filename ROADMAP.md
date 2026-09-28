@@ -8,12 +8,33 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.57.0**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.58.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.58.0 — the sports catalogue gets the guide treatment, the key goes system-wide, and both load
+at 01:00.** **(1) The Sports tab's catalogue is now fetched by the server, cached on disk and shared
+by every account** (`lib/sportsCatalogue.ts`): the provider's live categories and the streams of the
+categories that classify as sports are cached per category for a day, so opening the tab no longer
+re-fetches them and a restart does not either. Classification deliberately stays on the client
+(lib/sports.ts owns the only copy of the league rules), which is why the client asks for the ids it
+wants — and the ids it last asked for are remembered, which is what lets the nightly job warm
+exactly the right ones. **(2) The api-football key is a system setting**, like the guide sources: one
+key for the household, stored **encrypted at rest** with the app's own cipher, written only by an
+admin, never returned to anyone, and adopted from an account once on the first boot after this
+change. A new `systemSettings.ts` holds the generic per-key storage both features ride on. **(3) A
+nightly warm at 01:00** refreshes the guides and the sports catalogue (`scheduleNightlyWarm`),
+rescheduled after every run so it stays on 01:00 across DST and restarts — the other half of “not
+refreshed on each login”. **(4) The Sports tab's channels resize bar works in both directions.** It
+was inverted: `useResizableDimension` assumes the panel sits *before* the handle (so dragging right
+grows it) and the channels column sits *after* it, so the grip ran away from the pointer; the hook
+gained an `invert` option, pinned by a test. Found alongside it: the pane's localStorage keys had
+been written as the read tool's own truncated rendering of another file's key (`alliso…ight`) —
+harmless, but wrong, and now proper names. 616 tests (9 new), typecheck, lint and the client build
+clean.
 
 **v0.57.0 — guide sources become a system setting, fetched once a day, refreshed one at a time.**
 Three changes the operator asked for, all in the same area. **(1) The extra guide sources are now

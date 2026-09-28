@@ -13,6 +13,17 @@ export function nextDimension(startDimension: number, deltaPx: number, min: numb
 }
 
 /**
+ * The pointer delta with the panel's side applied.
+ *
+ * A panel before the handle (the sidebar) grows on a rightward drag; a panel after it (a right-hand
+ * pane) mirrors that, so its delta is negated. Pure, and pinned by a test, because getting it
+ * backwards is exactly the bug the operator reported as "the right panel resize bar is not working".
+ */
+export function orientedDelta(deltaPx: number, invert: boolean): number {
+  return invert ? -deltaPx : deltaPx
+}
+
+/**
  * Reads a saved panel dimension from localStorage, re-clamped to [min, max] so a stale value
  * from a different screen or an older layout can't produce an unusable panel. Returns the
  * fallback for anything missing, non-numeric, or out of range.
@@ -43,6 +54,15 @@ export interface ResizableDimensionOptions {
   min: number
   max: number
   onCommit?: (dimension: number) => void
+  /**
+   * For a panel that sits *after* the handle — to its right, or below it.
+   *
+   * The default assumes the panel is before the handle (the sidebar), so dragging the handle
+   * rightwards grows it. A right-hand pane is the mirror image: dragging towards it means dragging
+   * LEFT, so without this the grip moves away from the pointer and the pane shrinks as you reach
+   * for it — reported as "the right panel resize bar is not working".
+   */
+  invert?: boolean
 }
 
 export function useResizableDimension(
@@ -52,7 +72,7 @@ export function useResizableDimension(
 ): { dimension: number; startDrag: (e: ReactPointerEvent) => void } {
   const [dimension, setDimension] = useState(initialDimension)
   const dimensionRef = useRef(initialDimension)
-  const { min, max, onCommit } = opts
+  const { min, max, onCommit, invert } = opts
   const onCommitRef = useRef(onCommit)
   onCommitRef.current = onCommit
 
@@ -61,13 +81,14 @@ export function useResizableDimension(
       e.preventDefault()
       const startPx = axis === 'x' ? e.clientX : e.clientY
       const startDimension = dimensionRef.current
+      const invertDrag = Boolean(invert)
       // Applied to <body> for the whole drag: keeps the resize cursor everywhere (the pointer
       // inevitably outruns the 8px handle) and suppresses text selection mid-drag.
       const dragClass = axis === 'x' ? 'resizing-col' : 'resizing-row'
 
       const onPointerMove = (ev: PointerEvent): void => {
         const currentPx = axis === 'x' ? ev.clientX : ev.clientY
-        const next = nextDimension(startDimension, currentPx - startPx, min, max)
+        const next = nextDimension(startDimension, orientedDelta(currentPx - startPx, invertDrag), min, max)
         dimensionRef.current = next
         setDimension(next)
       }
@@ -83,7 +104,7 @@ export function useResizableDimension(
       window.addEventListener('pointerup', onPointerUp)
       window.addEventListener('pointercancel', onPointerUp)
     },
-    [axis, min, max]
+    [axis, min, max, invert]
   )
 
   return { dimension, startDrag }

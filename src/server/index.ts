@@ -18,6 +18,7 @@ import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseC
 import {
   decryptSecret,
   decryptSessionCredentials,
+  encryptSecret,
   encryptSessionCredentials,
   type SessionCredentials
 } from './lib/sessionStore.js'
@@ -36,6 +37,8 @@ import { createUsersStore, UserStoreError, validatePassword, validateRole, valid
 import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
 import { createSportsFixturesService } from './lib/sportsFixtures.js'
 import { createSystemEpgStore } from './lib/systemEpg.js'
+import { createSystemSettingsStore } from './lib/systemSettings.js'
+import { createSportsCatalogueService } from './lib/sportsCatalogue.js'
 import { dropCachedGuide } from './lib/epgCache.js'
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
 import { createSearchService } from './lib/searchService.js'
@@ -309,12 +312,16 @@ const transcodeService = createTranscodeService({
 // replacement for the client's old download-98MB-of-XML-per-tab approach, and the home of the
 // wider channel→guide matching layer (epgMatching.ts) that recovers channels the exact-id join
 // missed.
-const systemEpgStore = createSystemEpgStore({ dataDir: DATA_DIR })
+const systemSettings = createSystemSettingsStore({ dataDir: DATA_DIR })
+const systemEpgStore = createSystemEpgStore({ dataDir: DATA_DIR, settings: systemSettings })
 const epgService = createEpgService({ dataDir: DATA_DIR })
-// One-time migration: guide sources used to live on each account. If the system-wide setting has
-// never been written, adopt whatever an account already had (an admin's list first) so nobody has
-// to re-enter sources they had already configured.
-seedSystemEpgFromAccounts()
+const sportsCatalogue = createSportsCatalogueService({ dataDir: DATA_DIR })
+// One-time migration: guide sources and the api-football key used to live on each account. If the
+// system-wide settings have never been written, adopt whatever an account already had (an admin's
+// first) so nobody has to re-enter what they had already configured.
+seedSystemSettingsFromAccounts()
+// The nightly warm: guides and the sports catalogue are loaded once a day, at 01:00.
+scheduleNightlyWarm()
 const sportsFixturesService = createSportsFixturesService()
 
 const MAX_EPG_URLS = 8
@@ -658,31 +665,127 @@ app.delete('/api/admin/users/:username', requireAuth, requireAdmin, (req, res) =
 // Resolves the per-account credentials /api/epg needs (the provider guide is fetched
 // server-side with them — the same encrypted store /api/session reads). A login that never
 // configured IPTV gets a plain 401 rather than an empty guide.
+/** Accounts with provider credentials, admins first — the household's primary is the first one. */
+function orderedAccountsWithCredentials(): Array<{ username: string; credentials: SessionCredentials }> {
+  const users = usersStore.listUsers()
+  const ordered = [...users.filter((user) => user.role === 'admin'), ...users.filter((user) => user.role !== 'admin')]
+  const out: Array<{ username: string; credentials: SessionCredentials }> = []
+  for (const user of ordered) {
+    const stored = usersStore.getIptvCredentials(user.username)
+    if (!stored) continue
+    const credentials = credentialsFromStored(stored)
+    if (credentials) out.push({ username: user.username, credentials })
+  }
+  return out
+}
+
+/** The account whose provider the shared, server-side work is done against (guides, catalogue). */
+function primaryAccountCredentials(): SessionCredentials | null {
+  return orderedAccountsWithCredentials()[0]?.credentials ?? null
+}
+
+// The api-football key is a SYSTEM setting like the guide sources: one key for the household, set by
+// an admin, never returned to anyone — and encrypted at rest, because it is a credential.
+const SPORTS_KEY_SETTING = 'sports_api_key'
+
+function readSportsKey(): string | null {
+  const stored = systemSettings.read<{ keyEnc?: unknown }>(SPORTS_KEY_SETTING)
+  if (typeof stored?.keyEnc !== 'string' || stored.keyEnc.length === 0) return null
+  try {
+    return decryptSecret(stored.keyEnc)
+  } catch (err) {
+    console.error('[sports] could not decrypt the stored key:', err instanceof Error ? err.message : err)
+    return null
+  }
+}
+
+function writeSportsKey(key: string | null, updatedBy: string): void {
+  systemSettings.write(SPORTS_KEY_SETTING, {
+    keyEnc: key && key.length > 0 ? encryptSecret(key) : null,
+    updatedAt: new Date().toISOString(),
+    updatedBy
+  })
+}
+
 /**
- * Adopts a legacy per-account guide list into the system-wide setting, once.
+ * Adopts legacy per-account settings into the system-wide ones, once.
  *
- * Before the sources became a system setting they lived on each account's credentials. The first
- * boot after the change copies whatever an account already had (an admin's list preferred) rather
- * than silently emptying the guide — and only when the setting has never been written, so it can
+ * Guide sources and the api-football key used to live on each account's credentials. The first boot
+ * after the change copies whatever an account already had (an admin's first) rather than silently
+ * emptying the household's configuration — and only when a setting has never been written, so it can
  * never overwrite a deliberate choice.
  */
-function seedSystemEpgFromAccounts(): void {
+function seedSystemSettingsFromAccounts(): void {
   try {
-    if (systemEpgStore.hasStoredConfig()) return
-    const users = usersStore.listUsers()
-    const ordered = [...users.filter((user) => user.role === 'admin'), ...users.filter((user) => user.role !== 'admin')]
-    for (const user of ordered) {
-      const stored = usersStore.getIptvCredentials(user.username)
-      if (!stored) continue
-      const urls = credentialsFromStored(stored)?.epgUrls ?? []
-      if (urls.length > 0) {
-        systemEpgStore.write(urls, `${user.username} (migrated)`)
-        console.log(`[epg] adopted ${urls.length} guide source(s) from ${user.username} into the system-wide setting`)
-        return
+    const accounts = orderedAccountsWithCredentials()
+    if (!systemEpgStore.hasStoredConfig()) {
+      for (const account of accounts) {
+        const urls = account.credentials.epgUrls ?? []
+        if (urls.length > 0) {
+          systemEpgStore.write(urls, `${account.username} (migrated)`)
+          console.log(`[epg] adopted ${urls.length} guide source(s) from ${account.username} into the system-wide setting`)
+          break
+        }
+      }
+    }
+    if (!systemSettings.has(SPORTS_KEY_SETTING)) {
+      for (const account of accounts) {
+        const key = account.credentials.apiFootballKey
+        if (typeof key === 'string' && key.length > 0) {
+          writeSportsKey(key, `${account.username} (migrated)`)
+          console.log(`[sports] adopted the api-football key from ${account.username} into the system-wide setting`)
+          break
+        }
       }
     }
   } catch (err) {
-    console.error('[epg] could not migrate account guide sources:', err instanceof Error ? err.message : err)
+    console.error('[settings] could not migrate account settings:', err instanceof Error ? err.message : err)
+  }
+}
+
+/**
+ * The nightly warm, at 01:00 local time.
+ *
+ * Both the guides and the sports catalogue are a once-a-day job (the operator's ask, 2026-09-28), so
+ * a login never pays for them. Rescheduled after every run rather than run on a fixed interval, so it
+ * stays on 01:00 across DST and across restarts.
+ */
+function scheduleNightlyWarm(): void {
+  const nextRun = (): number => {
+    const next = new Date()
+    next.setHours(1, 0, 0, 0)
+    if (next.getTime() <= Date.now()) next.setDate(next.getDate() + 1)
+    return next.getTime()
+  }
+  const arm = (): void => {
+    const timer = setTimeout(() => {
+      void runNightlyWarm().finally(arm)
+    }, Math.max(1_000, nextRun() - Date.now()))
+    // Does not hold the process open — the HTTP server already does.
+    if (typeof timer.unref === 'function') timer.unref()
+  }
+  arm()
+}
+
+async function runNightlyWarm(): Promise<void> {
+  const credentials = primaryAccountCredentials()
+  if (!credentials) {
+    console.log('[warm] no account has provider credentials yet — skipping the nightly warm')
+    return
+  }
+  const epgUrls = systemEpgStore.read().urls
+  try {
+    epgService.refresh({ credentials, epgUrls })
+    console.log(`[warm] nightly guide refresh started (${epgUrls.length + 1} source(s))`)
+  } catch (err) {
+    console.error('[warm] nightly guide refresh failed:', err instanceof Error ? err.message : err)
+  }
+  try {
+    const ids = sportsCatalogue.lastCategoryIds()
+    await sportsCatalogue.refresh(credentials, ids)
+    console.log(`[warm] nightly sports catalogue refreshed (${ids.length} categor${ids.length === 1 ? 'y' : 'ies'})`)
+  } catch (err) {
+    console.error('[warm] nightly sports catalogue refresh failed:', err instanceof Error ? err.message : err)
   }
 }
 
@@ -1625,15 +1728,57 @@ app.put('/api/iptv/playlists', requireAuth, (req, res) => {
 app.get('/api/sports/config', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
   try {
-    const credentials = resolveAccountCredentials(session.username)
-    res.json({ ok: true, keySet: Boolean(credentials?.apiFootballKey) })
+    res.json({ ok: true, keySet: readSportsKey() !== null, canEdit: session.role === 'admin' })
   } catch (err) {
     console.error('[sports] config failed:', err)
     res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
   }
 })
 
-app.post('/api/sports/key', requireAuth, (req, res) => {
+// The Sports tab's catalogue — the provider's live categories and the streams of the categories the
+// client classifies as sports. Fetched by the server, cached on disk, shared by every account and
+// refreshed once a day (see lib/sportsCatalogue.ts), so opening the tab never re-fetches it and a
+// restart does not either. Classification stays on the client, which is why it asks for the ids.
+app.get('/api/sports/catalogue', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
+    const session = req.authSession as AuthSession
+    let credentials: SessionCredentials | null
+    try {
+      credentials = resolveAccountCredentials(session.username)
+    } catch (err) {
+      console.error('[sports] catalogue failed reading credentials:', err)
+      res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+      return
+    }
+    if (!credentials) {
+      res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+      return
+    }
+    const raw = String(req.query.categories ?? '').trim()
+    const categoryIds =
+      raw.length > 0
+        ? [...new Set(raw.split(',').map((id) => id.trim()).filter((id) => /^[A-Za-z0-9_-]+$/.test(id)))].slice(0, 400)
+        : []
+    try {
+      const categories = await sportsCatalogue.getCategories(credentials)
+      const streams = categoryIds.length > 0 ? await sportsCatalogue.getStreams(credentials, categoryIds) : null
+      res.json({
+        ok: true,
+        categories: categories.rows,
+        categoriesFetchedAt: categories.fetchedAt,
+        streams: streams?.rows ?? [],
+        streamsFetchedAt: streams?.fetchedAt ?? null,
+        errors: [categories.error, ...(streams?.errors ?? [])].filter((message): message is string => Boolean(message)),
+        missing: streams?.missing ?? []
+      })
+    } catch (err) {
+      console.error('[sports] catalogue failed:', err)
+      res.status(502).json({ error: `Could not load the sports catalogue: ${err instanceof Error ? err.message : String(err)}` })
+    }
+  })()
+})
+
+app.post('/api/sports/key', requireAuth, requireAdmin, (req, res) => {
   const session = req.authSession as AuthSession
   const raw = req.body?.key
   // null (or an absent field) clears it; anything else must be a string.
@@ -1647,9 +1792,9 @@ app.post('/api/sports/key', requireAuth, (req, res) => {
     return
   }
   try {
-    // Written through the same credential envelope as everything else, so guide URLs, the alert
-    // webhook and the playlist list are untouched by a key change.
-    saveAccountCredentials(session.username, { apiFootballKey: key.length > 0 ? key : undefined })
+    // A system-wide setting like the guide sources: one key for the household, encrypted at rest
+    // with the app's own cipher (it is a credential), and never returned to anyone.
+    writeSportsKey(key.length > 0 ? key : null, session.username)
     res.json({ ok: true, keySet: key.length > 0 })
   } catch (err) {
     console.error('[sports] saving the key failed:', err)
@@ -1673,7 +1818,7 @@ app.get('/api/sports/fixtures', requireAuth, (req, res) => {
       res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
       return
     }
-    const key = credentials?.apiFootballKey
+    const key = readSportsKey()
     // No key is a normal state, not an error: the Sports tab simply keeps its provider schedule.
     if (!key) {
       res.json({ ok: true, configured: false, fixtures: [], error: null })

@@ -55,14 +55,14 @@ export function SportsPanel(): JSX.Element {
         <a href="https://www.api-football.com/" target="_blank" rel="noopener noreferrer">
           api-football.com
         </a>{' '}
-        key gives the Sports tab its fixtures and live scores. It is stored encrypted on the server
-        with this account&rsquo;s other credentials and never reaches the browser — the server makes
-        every request.{' '}
+        key gives the Sports tab its fixtures and live scores. Like the guide sources, it is a{' '}
+        <strong>system-wide setting</strong>: one key for everyone, stored encrypted on the server
+        and never sent to the browser — the server makes every request.{' '}
         {keySet === null
           ? 'Checking…'
           : keySet
             ? 'A key is set.'
-            : 'No key is set, so the tab shows the provider&rsquo;s own schedule without scores.'}
+            : 'No key is set, so the tab shows the provider’s own schedule without scores.'}
       </p>
       <div className="epg-preset-row">
         <label htmlFor="sports-key">{keySet ? 'Replace key' : 'API key'}</label>
