@@ -84,8 +84,13 @@ export function describeVerdict(verdict: DecodeVerdict | null, now: number = Dat
   const when = age < MAX_AGE_TEXT.minute ? 'just now' : formatAge(age)
   const size = verdict.presentedWidth > 0 ? `${verdict.presentedWidth}x${verdict.presentedHeight}` : 'no picture'
   const frames = Number.isFinite(verdict.framesPerSecond) ? `${verdict.framesPerSecond.toFixed(0)} fps` : 'unmeasured speed'
-  const tierText =
-    tier === 'comfortable'
+  // A verdict with no picture in it is not a device verdict. The check could only ever save one of
+  // these by failing (a whole stream fed as a single chunk, before v0.61.6), so saying "not enough for
+  // these channels" about it would report a broken measurement as a property of the machine.
+  const noPicture = verdict.presentedWidth <= 0 || verdict.presentedHeight <= 0
+  const tierText = noPicture
+    ? 'the run produced no picture, so this is a failed measurement rather than a verdict — re-run it'
+    : tier === 'comfortable'
       ? 'comfortable'
       : tier === 'marginal'
         ? 'marginal — may drop frames'

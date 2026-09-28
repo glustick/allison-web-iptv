@@ -90,7 +90,11 @@ describe('describeVerdict', () => {
   })
 
   it('does not claim a picture when none was presented', () => {
-    expect(describeVerdict(verdict({ presentedWidth: 0, presentedHeight: 0 }), NOW)).toMatch(/no picture/)
+    // The shape the broken check saved: no picture, zero frames. It has to read as a failed run, not
+    // as "this machine cannot decode these channels" — those are different statements.
+    const message = describeVerdict(verdict({ presentedWidth: 0, presentedHeight: 0, framesPerSecond: 0 }), NOW)
+    expect(message).toMatch(/no picture/)
+    expect(message).toMatch(/failed measurement rather than a verdict/)
   })
 })
 
