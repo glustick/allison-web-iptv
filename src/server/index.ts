@@ -39,6 +39,7 @@ import { createSportsFixturesService } from './lib/sportsFixtures.js'
 import { createSystemEpgStore } from './lib/systemEpg.js'
 import { createSystemSettingsStore } from './lib/systemSettings.js'
 import { createSportsCatalogueService } from './lib/sportsCatalogue.js'
+import { readSuppliedSportsKey } from './lib/sportsKeySource.js'
 import { dropCachedGuide } from './lib/epgCache.js'
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
 import { createSearchService } from './lib/searchService.js'
@@ -736,6 +737,17 @@ function seedSystemSettingsFromAccounts(): void {
           console.log(`[sports] adopted the api-football key from ${account.username} into the system-wide setting`)
           break
         }
+      }
+    }
+    // Last, and only when nothing else has set one: a key supplied *out of band* — the
+    // SPORTS_API_KEY variable, or a file at <DATA_DIR>/api-football.txt. That is how a deployment
+    // is configured without the admin screen (and without the key passing through a repository); a
+    // key set through the screen is never overwritten by it.
+    if (!systemSettings.has(SPORTS_KEY_SETTING)) {
+      const supplied = readSuppliedSportsKey({ dataDir: DATA_DIR })
+      if (supplied) {
+        writeSportsKey(supplied.key, `from ${supplied.source}`)
+        console.log(`[sports] adopted the api-football key from ${supplied.source}`)
       }
     }
   } catch (err) {

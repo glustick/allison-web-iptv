@@ -6,6 +6,13 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.59.1 — the api-football key can be supplied from the environment or a file)
+
+The Sports tab's key no longer has to be typed in: the app adopts one from `SPORTS_API_KEY`, or from a
+file at `<DATA_DIR>/api-football.txt` (`SPORTS_API_KEY_FILE` overrides the path) — i.e. drop it into
+the persisted volume the container already has. It is only adopted when no key is set, so the admin
+screen still wins. 626 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.59.0 — the Sports tab's fixtures come from api-football)
 
 With a key configured, the Sports tab's middle pane shows **api-football's own fixture list** for the

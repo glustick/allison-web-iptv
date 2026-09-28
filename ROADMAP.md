@@ -8,12 +8,20 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.59.0**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.59.1**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.59.1 — the api-football key can be supplied out of band.** Until now the only way to set it was
+the admin screen. The app now also adopts a key from the `SPORTS_API_KEY` environment variable, or
+from a file at `<DATA_DIR>/api-football.txt` (`SPORTS_API_KEY_FILE` overrides the path) — which is
+how a deployment gets one without the key passing through a chat or a repository: it is dropped into
+the persisted volume the container already has. Adoption happens **only when nothing else has set a
+key**, so a key entered in Admin → Sports data is never overwritten by a stale file, and the log line
+names the source and never the key. 626 tests (5 new), typecheck, lint and the client build clean.
 
 **v0.59.0 — the Sports tab's fixtures are api-football's, grouped by its competitions.** The
 operator's correction (2026-09-28): the middle pane was grouping by the *provider's* channel-name
