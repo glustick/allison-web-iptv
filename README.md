@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.57.0 — guide sources are system-wide, and refreshed once a day)
+
+The extra EPG sources are now a **system-wide setting** — one set for the household, stored in the
+app's own database, editable only by an admin, with an account's existing list adopted once on
+upgrade. Guides refresh **once a day** (up from 6h), and each fetched guide is also cached on disk,
+so a restart reuses the last download instead of re-fetching it (the provider's is 168 MB). Every
+source row has its own **Refresh** button, and adding or removing a source fetches only what changed.
+607 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.56.0 — the day's fixtures, and a channel for each)
 
 The Sports tab's middle pane now shows the **whole day's fixtures for the selected sport**, not just

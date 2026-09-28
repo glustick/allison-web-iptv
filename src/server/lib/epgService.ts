@@ -10,6 +10,7 @@ import {
   type StreamForMatching
 } from './epgMatching.js'
 import { parseXmltv, type XmltvGuide, type XmltvProgramme } from './xmltv.js'
+import { dropCachedGuide, loadCachedGuide, saveCachedGuide } from './epgCache.js'
 
 // Server-side EPG aggregation. The EPG used to be assembled entirely in the browser: one bulk
 // ~98MB xmltv.php download per session (repeated per tab remount), joined to channels by exact
@@ -25,7 +26,11 @@ import { parseXmltv, type XmltvGuide, type XmltvProgramme } from './xmltv.js'
 // window filter, and window filtering binary-searches the parser's already-sorted programme
 // lists instead of scanning every programme of every matched channel.
 
-const GUIDE_TTL_MS = 6 * 3_600_000
+// A guide is fetched **once a day**. The operator asked for exactly that (2026-09-28): the guide
+// changes slowly, the provider's own is a 168 MB download, and re-fetching it per login or on every
+// restart is work nobody asked for. The on-disk cache (epgCache.ts) is what makes that day survive
+// a restart rather than restarting the clock.
+const GUIDE_TTL_MS = 24 * 3_600_000
 const CHANNEL_LIST_TTL_MS = 3_600_000
 // A source that failed is retried after this long rather than sitting in the error state until
 // its 6h TTL expires — but with exponential backoff, because a guide fetch is not cheap: the
@@ -142,6 +147,8 @@ interface MappingCacheEntry {
 export interface EpgServiceDeps {
   createUpstreamRequest?: typeof createNodeUpstreamRequest
   guideTtlMs?: number
+  /** Where fetched guides are cached across restarts (epgCache.ts). Omitted = memory only. */
+  dataDir?: string
   channelListTtlMs?: number
   /** Overridable for tests; production uses GUIDE_STALL_TIMEOUT_MS. */
   guideStallTimeoutMs?: number
@@ -177,9 +184,14 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
   const channelListTtlMs = deps.channelListTtlMs ?? CHANNEL_LIST_TTL_MS
   const guideStallTimeoutMs = deps.guideStallTimeoutMs ?? GUIDE_STALL_TIMEOUT_MS
   const guideStallCheckIntervalMs = deps.guideStallCheckIntervalMs
+  const dataDir = deps.dataDir
   const now = deps.now ?? Date.now
 
   const guideCache = new Map<string, GuideCacheEntry>()
+  // URLs whose disk copy must be ignored until the next fetch settles — a forced refresh has to
+  // mean "discard what you have", and without this the disk cache would answer it immediately with
+  // the very guide the operator just asked to replace.
+  const hydrationBlocked = new Set<string>()
   const channelListCache = new Map<string, ChannelListCacheEntry>()
   const mappingCache = new Map<string, MappingCacheEntry>()
   /** Last computed match summary per account — lets the EPG screen show coverage stats that
@@ -204,10 +216,50 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
   function fetchGuideOnce(
     url: string,
     onProgress?: (receivedBytes: number, totalBytes: number | null) => void
-  ): Promise<XmltvGuide | null> {
-    return fetchTextViaUpstream(createUpstreamRequest, url, guideStallTimeoutMs, guideStallCheckIntervalMs, undefined, onProgress).then((xml) =>
-      parseXmltv(xml, { now: now() })
-    )
+  ): Promise<{ guide: XmltvGuide; text: string }> {
+    return fetchTextViaUpstream(createUpstreamRequest, url, guideStallTimeoutMs, guideStallCheckIntervalMs, undefined, onProgress).then((xml) => ({
+      guide: parseXmltv(xml, { now: now() }),
+      // The bytes are kept so the guide can be cached on disk as well as in memory — see
+      // epgCache.ts for why a restart must not re-download a 168 MB guide.
+      text: xml
+    }))
+  }
+
+  /**
+   * The guide from the disk cache, when it is still inside the daily window — what makes a restart
+   * (a deploy, a reboot) not re-download what the day already paid for. Parsed on first need rather
+   * than at boot, so a server that never opens the EPG never pays for it either.
+   */
+  async function hydrateGuideFromDisk(url: string): Promise<GuideCacheEntry | null> {
+    if (!dataDir || hydrationBlocked.has(url)) return null
+    const cached = await loadCachedGuide(dataDir, url, guideTtlMs)
+    if (!cached) return null
+    try {
+      const entry: GuideCacheEntry = {
+        guide: parseXmltv(cached.text, { now: now() }),
+        status: 'ok',
+        fetchedAt: cached.fetchedAt,
+        fetchPromise: null,
+        failures: 0
+      }
+      guideCache.set(url, entry)
+      return entry
+    } catch (err) {
+      // A cached guide that no longer parses is worth nothing; drop it and fetch instead.
+      console.error(`[epg] cached guide could not be parsed, refetching:`, err instanceof Error ? err.message : err)
+      void dropCachedGuide(dataDir, url)
+      return null
+    }
+  }
+
+  /** One hydration per URL at a time, so a burst of requests after a restart parses once. */
+  const hydrations = new Map<string, Promise<GuideCacheEntry | null>>()
+  function hydrateOnce(url: string): Promise<GuideCacheEntry | null> {
+    const inFlight = hydrations.get(url)
+    if (inFlight) return inFlight
+    const promise = hydrateGuideFromDisk(url).finally(() => hydrations.delete(url))
+    hydrations.set(url, promise)
+    return promise
   }
 
   /**
@@ -230,15 +282,22 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     const promise = fetchGuideOnce(url, (receivedBytes, totalBytes) => {
       current.progress = { receivedBytes, totalBytes }
     })
-      .then((guide) => {
+      .then(async ({ guide, text }) => {
+        // Cached for the next restart. Awaited only so the entry can carry the file's own
+        // fetched-at; a failure to write never fails the fetch.
+        const fetchedAt = dataDir ? await saveCachedGuide(dataDir, url, text) : now()
+        hydrationBlocked.delete(url)
         const success: GuideCacheEntry = {
-          guide, status: 'ok', fetchedAt: now(), fetchPromise: null, failures: 0,
+          guide, status: 'ok', fetchedAt, fetchPromise: null, failures: 0,
           progress: current.progress
         }
         guideCache.set(url, success)
         return success
       })
       .catch((err) => {
+        // The attempt is over, so a later look may hydrate the previous disk copy again — the
+        // failed refresh should not leave the source permanently unable to fall back.
+        hydrationBlocked.delete(url)
         const failures = (guideCache.get(url)?.failures ?? 0) + 1
         const failed: GuideCacheEntry = {
           guide: null,
@@ -273,8 +332,13 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
    */
   async function getGuide(url: string): Promise<GuideCacheEntry> {
     const existing = guideCache.get(url)
-    // Nothing cached: load it now — the caller is asking for data.
-    if (!existing) return runFetch(url)
+    // Nothing cached: a fresh process, or the first look at this source. Reuse the day's cached
+    // download from disk before paying for it again over the network.
+    if (!existing) {
+      const hydrated = await hydrateOnce(url)
+      if (hydrated) return hydrated
+      return runFetch(url)
+    }
 
     if (existing.status === 'ok' && now() - existing.fetchedAt < guideTtlMs) return existing
 
@@ -525,11 +589,22 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     peekMatchSummary(params: { credentials: EpgServiceCredentials }): EpgMatchSummary | null {
       return lastSummary.get(`${params.credentials.server}|${params.credentials.username}`) ?? null
     },
-    /** Drops cached guides (and the mappings derived from them) so the next request refetches,
-     *  then starts those fetches in the background. Used by the EPG screen's "Refresh" action. */
-    refresh(params: { credentials: EpgServiceCredentials; epgUrls: string[] }): void {
-      const sources = [providerGuideUrl(params.credentials), ...params.epgUrls]
-      for (const url of sources) guideCache.delete(url)
+    /**
+     * Drops cached guides so the next request refetches them, then starts those fetches in the
+     * background. Pass `url` to refresh a single source — the point of the per-source button: a
+     * 168 MB provider guide should not have to come down again to retry one small XMLTV feed.
+     */
+    refresh(params: { credentials: EpgServiceCredentials; epgUrls: string[]; url?: string }): void {
+      const all = [providerGuideUrl(params.credentials), ...params.epgUrls]
+      const sources = params.url ? all.filter((url) => url === params.url) : all
+      for (const url of sources) {
+        guideCache.delete(url)
+        // The disk copy has to go too, or the refetch would hydrate the very guide being replaced.
+        hydrationBlocked.add(url)
+        if (dataDir) void dropCachedGuide(dataDir, url)
+      }
+      // The mapping was built against every source, so it is rebuilt even for a one-source
+      // refresh — it is cheap next to the fetch it is waiting on.
       mappingCache.clear()
       lastSummary.delete(`${params.credentials.server}|${params.credentials.username}`)
       for (const url of sources) void getGuideOrError(url)
@@ -538,6 +613,22 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     clearGuideCache(): void {
       guideCache.clear()
       mappingCache.clear()
+    },
+    /**
+     * Forgets one source without fetching anything — used when a source is removed, so a restart
+     * cannot reload its cached guide and the mapping is rebuilt without it.
+     */
+    forget(url: string): void {
+      guideCache.delete(url)
+      hydrationBlocked.add(url)
+      mappingCache.clear()
+      lastSummary.clear()
+    },
+    /** The same, for every source at once (the list became empty). */
+    forgetAll(): void {
+      guideCache.clear()
+      mappingCache.clear()
+      lastSummary.clear()
     }
   }
 }

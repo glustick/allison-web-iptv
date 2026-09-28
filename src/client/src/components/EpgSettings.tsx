@@ -47,6 +47,10 @@ interface EpgConfigResponse {
   epgUrls: string[]
   sources: EpgSourceStatus[]
   summary: MatchSummary | null
+  /** Whether this user may change the sources — they are a system setting, so admins only. */
+  canEdit?: boolean
+  updatedAt?: string | null
+  updatedBy?: string | null
 }
 
 const MAX_EPG_URLS = 8
@@ -125,7 +129,10 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
       setConfig({
         epgUrls: data.epgUrls ?? [],
         sources: data.sources ?? [],
-        summary: data.summary ?? null
+        summary: data.summary ?? null,
+        canEdit: data.canEdit === true,
+        updatedAt: data.updatedAt ?? null,
+        updatedBy: data.updatedBy ?? null
       })
       setError(null)
       return (data.sources ?? []).some((source) => source.status === 'loading')
@@ -199,11 +206,17 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
     await saveSources(existing.filter((entry) => entry !== url))
   }
 
-  async function handleRefreshGuides(): Promise<void> {
+  // One source when a URL is given, every source otherwise. A per-source refresh is the whole
+  // point: retrying one small feed must not drag the provider's 168 MB guide down with it.
+  async function handleRefreshGuides(url?: string): Promise<void> {
     setBusy(true)
-    setNote('Refreshing guides…')
+    setNote(url ? `Refreshing ${shortUrl(url)}…` : 'Refreshing guides…')
     try {
-      const res = await fetch('/api/epg/refresh', { method: 'POST' })
+      const res = await fetch('/api/epg/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url ?? null })
+      })
       const data = (await res.json().catch(() => ({}))) as { error?: string }
       if (!res.ok) throw new Error(data.error ?? 'Could not refresh the guides')
       await refresh()
@@ -215,6 +228,7 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
   }
 
   const sources = config?.sources ?? []
+  const canEdit = config?.canEdit === true
   const provider = sources.find((source) => source.kind === 'provider')
   const externals = sources.filter((source) => source.kind === 'external')
   const summary = config?.summary ?? null
@@ -269,11 +283,22 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
             <button type="button" className="admin-small-btn" onClick={() => sourceCols.reset()}>
               Reset columns
             </button>
-            <button type="button" className="admin-small-btn" onClick={() => void handleRefreshGuides()} disabled={busy}>
-              Refresh guides
-            </button>
+            {canEdit && (
+              <button type="button" className="admin-small-btn" onClick={() => void handleRefreshGuides()} disabled={busy}>
+                Refresh all guides
+              </button>
+            )}
           </div>
         </div>
+        <p className="setup-hint">
+          Guide sources are a <strong>system-wide setting</strong> — one set for everyone, kept in the
+          database and refreshed <strong>once a day</strong>. A restart reuses the last download instead
+          of fetching again.{' '}
+          {canEdit ? 'Add, remove or refresh them here.' : 'Only an admin can change them.'}
+          {config?.updatedBy
+            ? ` Last changed by ${config.updatedBy}${config.updatedAt ? ` on ${new Date(config.updatedAt).toLocaleDateString()}` : ''}.`
+            : ''}
+        </p>
         <div className="admin-table-wrap">
           <table
             className="admin-table admin-table--fixed"
@@ -328,7 +353,21 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
                   <td>{formatMatched(matchedBySource.get(provider.url))}</td>
                   <td>{formatShare(matchedBySource.get(provider.url), summary)}</td>
                   <td>{provider.fetchedAt ? new Date(provider.fetchedAt).toLocaleTimeString() : '—'}</td>
-                  <td><span className="admin-muted">built in</span></td>
+                  <td>
+                    {canEdit ? (
+                      <button
+                        type="button"
+                        className="admin-small-btn"
+                        onClick={() => void handleRefreshGuides(provider.url)}
+                        disabled={busy}
+                        title="Re-download just this guide"
+                      >
+                        Refresh
+                      </button>
+                    ) : (
+                      <span className="admin-muted">built in</span>
+                    )}
+                  </td>
                 </tr>
               )}
               {externals.map((source) => (
@@ -354,9 +393,24 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
                   <td>{formatShare(matchedBySource.get(source.url), summary)}</td>
                   <td>{source.fetchedAt ? new Date(source.fetchedAt).toLocaleTimeString() : '—'}</td>
                   <td>
-                    <button type="button" className="admin-small-btn danger" onClick={() => void handleRemove(source.url)} disabled={busy}>
-                      Remove
-                    </button>
+                    {canEdit ? (
+                      <>
+                        <button
+                          type="button"
+                          className="admin-small-btn"
+                          onClick={() => void handleRefreshGuides(source.url)}
+                          disabled={busy}
+                          title="Re-download just this guide"
+                        >
+                          Refresh
+                        </button>{' '}
+                        <button type="button" className="admin-small-btn danger" onClick={() => void handleRemove(source.url)} disabled={busy}>
+                          Remove
+                        </button>
+                      </>
+                    ) : (
+                      <span className="admin-muted">admin only</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -372,6 +426,7 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
           </p>
         )}
 
+        {canEdit && (
         <form className="add-user-form" onSubmit={(e) => void handleAdd(e)}>
           <h3>Add an external EPG source</h3>
           <div className="add-user-row">
@@ -393,6 +448,7 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
             these, in order. Existing channels always keep the provider's own data.
           </p>
         </form>
+        )}
       </section>
     </div>
   )

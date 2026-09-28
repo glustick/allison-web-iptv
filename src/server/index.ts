@@ -35,6 +35,8 @@ import {
 import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UserRole } from './lib/usersStore.js'
 import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
 import { createSportsFixturesService } from './lib/sportsFixtures.js'
+import { createSystemEpgStore } from './lib/systemEpg.js'
+import { dropCachedGuide } from './lib/epgCache.js'
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
 import { createSearchService } from './lib/searchService.js'
 import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagnostics.js'
@@ -307,7 +309,12 @@ const transcodeService = createTranscodeService({
 // replacement for the client's old download-98MB-of-XML-per-tab approach, and the home of the
 // wider channel→guide matching layer (epgMatching.ts) that recovers channels the exact-id join
 // missed.
-const epgService = createEpgService()
+const systemEpgStore = createSystemEpgStore({ dataDir: DATA_DIR })
+const epgService = createEpgService({ dataDir: DATA_DIR })
+// One-time migration: guide sources used to live on each account. If the system-wide setting has
+// never been written, adopt whatever an account already had (an admin's list first) so nobody has
+// to re-enter sources they had already configured.
+seedSystemEpgFromAccounts()
 const sportsFixturesService = createSportsFixturesService()
 
 const MAX_EPG_URLS = 8
@@ -651,6 +658,34 @@ app.delete('/api/admin/users/:username', requireAuth, requireAdmin, (req, res) =
 // Resolves the per-account credentials /api/epg needs (the provider guide is fetched
 // server-side with them — the same encrypted store /api/session reads). A login that never
 // configured IPTV gets a plain 401 rather than an empty guide.
+/**
+ * Adopts a legacy per-account guide list into the system-wide setting, once.
+ *
+ * Before the sources became a system setting they lived on each account's credentials. The first
+ * boot after the change copies whatever an account already had (an admin's list preferred) rather
+ * than silently emptying the guide — and only when the setting has never been written, so it can
+ * never overwrite a deliberate choice.
+ */
+function seedSystemEpgFromAccounts(): void {
+  try {
+    if (systemEpgStore.hasStoredConfig()) return
+    const users = usersStore.listUsers()
+    const ordered = [...users.filter((user) => user.role === 'admin'), ...users.filter((user) => user.role !== 'admin')]
+    for (const user of ordered) {
+      const stored = usersStore.getIptvCredentials(user.username)
+      if (!stored) continue
+      const urls = credentialsFromStored(stored)?.epgUrls ?? []
+      if (urls.length > 0) {
+        systemEpgStore.write(urls, `${user.username} (migrated)`)
+        console.log(`[epg] adopted ${urls.length} guide source(s) from ${user.username} into the system-wide setting`)
+        return
+      }
+    }
+  } catch (err) {
+    console.error('[epg] could not migrate account guide sources:', err instanceof Error ? err.message : err)
+  }
+}
+
 function resolveEpgCredentials(req: IncomingMessage): (EpgServiceCredentials & { epgUrls: string[] }) | null {
   const cookieHeader = typeof req.headers?.cookie === 'string' ? req.headers.cookie : undefined
   const token = parseCookieValue(cookieHeader, AUTH_COOKIE_NAME)
@@ -662,7 +697,10 @@ function resolveEpgCredentials(req: IncomingMessage): (EpgServiceCredentials & {
   try {
     const credentials = credentialsFromStored(stored)
     if (!credentials) return null
-    return { server: credentials.server, username: credentials.username, password: credentials.password, epgUrls: credentials.epgUrls ?? [] }
+    // The extra guide sources are the SYSTEM setting, not this account's — one household, one set
+    // of guides, administered once and shared (see lib/systemEpg.ts). Only the provider's own guide
+    // is account-derived, because it is addressed with this account's credentials.
+    return { server: credentials.server, username: credentials.username, password: credentials.password, epgUrls: systemEpgStore.read().urls }
   } catch {
     return null
   }
@@ -695,7 +733,7 @@ app.get('/api/session', requireAuth, (req, res) => {
     // say "a password is stored" without being able to display it.
         // The webhook never travels to the browser — only whether one is saved, exactly like the
         // provider password. The settings screen shows a blank field that means "keep the stored one".
-        res.json({ ok: true, configured: true, server: credentials.server, username: credentials.username, passwordSet: true, epgUrls: credentials.epgUrls ?? [], alertWebhookSet: Boolean(credentials.alertWebhook) })
+        res.json({ ok: true, configured: true, server: credentials.server, username: credentials.username, passwordSet: true, epgUrls: systemEpgStore.read().urls, alertWebhookSet: Boolean(credentials.alertWebhook) })
   } catch (err) {
     // A stored config that no longer decrypts (SESSION_SECRET changed) or an unreadable
     // store is treated as "not configured" so the user can re-enter it — but the reason is
@@ -910,7 +948,6 @@ app.post('/api/session/save', requireAuth, (req, res) => {
       server: server.trim(),
       username: username.trim(),
       password: effectivePassword,
-            epgUrls: sanitizeEpgUrls(epgUrls),
             // A string sets it, null clears it, a blank field keeps the stored one — the same shapes the
             // password field uses, so the settings screen can stay dumb about secrets.
             alertWebhook:
@@ -921,6 +958,16 @@ app.post('/api/session/save', requireAuth, (req, res) => {
                   : existing?.alertWebhook
     }
     saveAccountCredentials(session.username, credentials as unknown as Record<string, unknown>)
+
+    // Guide sources are a SYSTEM setting now (lib/systemEpg.ts), so the setup screen's field is
+    // honoured only as the *initial* seed. Once an admin has set them in the EPG tab, this path can
+    // no longer change the household's guides — which is exactly what "only admins can change it"
+    // has to mean.
+    const setupUrls = sanitizeEpgUrls(epgUrls) ?? []
+    if (setupUrls.length > 0 && !systemEpgStore.hasStoredConfig()) {
+      systemEpgStore.write(setupUrls, `${session.username} (initial setup)`)
+      void epgService.refresh({ credentials, epgUrls: setupUrls })
+    }
 
     // Point the proxy at the provider right away so the client's first Xtream request works
     // without a separate /api/connect round trip.
@@ -1650,21 +1697,34 @@ app.get('/api/epg/config', requireAuth, (req, res) => {
       res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
       return
     }
-    const epgUrls = credentials.epgUrls ?? []
+    // The extra sources are the system-wide setting (lib/systemEpg.ts); only an admin may change
+    // them, so the screen is told whether it may offer the controls at all.
+    const config = systemEpgStore.read()
+    const epgUrls = config.urls
     const sources = epgService.peekStatus({ credentials, epgUrls })
     const summary = epgService.peekMatchSummary({ credentials })
     if (!summary) {
       // Warm the stats in the background — the client polls and picks them up.
       void epgService.getMatchSummary({ credentials, epgUrls }).catch(() => {})
     }
-    res.json({ ok: true, epgUrls, sources, summary })
+    res.json({
+      ok: true,
+      epgUrls,
+      sources,
+      summary,
+      canEdit: session.role === 'admin',
+      updatedAt: config.updatedAt,
+      updatedBy: config.updatedBy
+    })
   } catch (err) {
     console.error('[epg] config failed:', err)
     res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
   }
 })
 
-app.post('/api/epg/sources', requireAuth, (req, res) => {
+// The guide sources are a SYSTEM setting: one household, one set of guides, set once by an admin
+// and shared by every user. This is the only place they are written.
+app.post('/api/epg/sources', requireAuth, requireAdmin, (req, res) => {
   const session = req.authSession as AuthSession
   const raw = req.body?.epgUrls
   if (!Array.isArray(raw)) {
@@ -1689,10 +1749,22 @@ app.post('/api/epg/sources', requireAuth, (req, res) => {
       return
     }
     const epgUrls = sanitizeEpgUrls(raw) ?? []
-    const next: SessionCredentials = { ...credentials, epgUrls: epgUrls.length > 0 ? epgUrls : undefined }
-    saveAccountCredentials(session.username, { epgUrls: epgUrls.length > 0 ? epgUrls : undefined })
-    // Kick off any newly-added sources so the screen shows them loading immediately.
-    epgService.refresh({ credentials: next, epgUrls })
+    const previous = systemEpgStore.read().urls
+    systemEpgStore.write(epgUrls, session.username)
+    const next: SessionCredentials = { ...credentials, epgUrls }
+
+    // A removed source is forgotten outright (its cached guide and its disk copy), so a restart
+    // cannot bring back a guide the admin deliberately dropped.
+    for (const url of previous.filter((entry) => !epgUrls.includes(entry))) {
+      epgService.forget(url)
+      void dropCachedGuide(DATA_DIR, url)
+    }
+    // Only the *newly added* sources are fetched now — adding a small XMLTV feed must not drag the
+    // provider's 168 MB guide down with it.
+    for (const url of epgUrls.filter((entry) => !previous.includes(entry))) {
+      epgService.refresh({ credentials: next, epgUrls, url })
+    }
+    if (epgUrls.length === 0) epgService.forgetAll()
     res.json({ ok: true, epgUrls })
   } catch (err) {
     console.error('[epg] save sources failed:', err)
@@ -1700,16 +1772,29 @@ app.post('/api/epg/sources', requireAuth, (req, res) => {
   }
 })
 
-app.post('/api/epg/refresh', requireAuth, (req, res) => {
+// Refreshes one source when the body names it, or every source when it does not. Admin-only: a
+// refresh is a system-wide action on shared data (and the provider's guide is a big download).
+app.post('/api/epg/refresh', requireAuth, requireAdmin, (req, res) => {
   const session = req.authSession as AuthSession
+  const requested = typeof req.body?.url === 'string' ? req.body.url.trim() : ''
   try {
     const credentials = resolveAccountCredentials(session.username)
     if (!credentials) {
       res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
       return
     }
-    epgService.refresh({ credentials, epgUrls: credentials.epgUrls ?? [] })
-    res.json({ ok: true, started: true })
+    const epgUrls = systemEpgStore.read().urls
+    if (requested) {
+      // Validated against the sources that actually exist (including the provider's own guide,
+      // whose URL the status response carries) rather than refreshing an arbitrary URL on request.
+      const known = epgService.peekStatus({ credentials, epgUrls }).map((source) => source.url)
+      if (!known.includes(requested)) {
+        res.status(400).json({ error: 'That URL is not one of the configured guide sources' })
+        return
+      }
+    }
+    epgService.refresh({ credentials, epgUrls, url: requested || undefined })
+    res.json({ ok: true, started: true, url: requested || null })
   } catch (err) {
     console.error('[epg] refresh failed:', err)
     res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })

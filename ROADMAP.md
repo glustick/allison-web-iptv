@@ -8,12 +8,30 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.56.0**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.57.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.57.0 — guide sources become a system setting, fetched once a day, refreshed one at a time.**
+Three changes the operator asked for, all in the same area. **(1) The extra guide sources are now
+system-wide.** They used to live on each account's credentials, which meant every user carried their
+own copy and any user could change the household's guides. They now live in the app's own database
+(`lib/systemEpg.ts`, one `meta` row), are read by every signed-in user and written only by an admin —
+and an account's existing list is adopted once on the first boot after this change, so nothing had to
+be re-entered. The setup screen's guide field is honoured only as that initial seed. **(2) Once a
+day.** The guide TTL goes 6h → 24h, and — the part that actually makes a day a day — each fetched
+guide is now **cached on disk** (`lib/epgCache.ts`, one file per source, written under a temp name and
+renamed), so a restart reuses the last download instead of re-fetching 168 MB the moment somebody
+logs in. The disk copy is parsed lazily on first need, so a server that never opens the EPG never
+pays for it. A forced refresh blocks hydration, or the very guide being replaced would answer the
+request. **(3) Refresh one source.** `POST /api/epg/refresh` takes an optional `url`, and the sources
+table gained a **Refresh** button per row (alongside “Refresh all guides”). Adding or removing a
+source fetches only what changed — adding a small XMLTV feed no longer drags the provider's guide
+with it — and a removed source is forgotten outright rather than lingering in a cache. 607 tests (15
+new), typecheck, lint and the client build clean.
 
 **v0.56.0 — the Sports tab, phase 3: the day's fixtures, and a way to a channel for each.** The
 middle pane now carries the **whole day's fixtures for the selected sport**, not only the ones the
