@@ -1241,10 +1241,13 @@ a native player there can hardware-decode HEVC on the same 3090 and needs nothin
 
 ### 1. Live TV & playback
 
-- **Log what ffmpeg actually said.** *Open, small, high value.* The transcoder keeps a character-limited
-  *tail* of ffmpeg's stderr, and on 2026-09-23 that tail ended mid-`Skip(…)` line — so the error that
-  explained fourteen-second session deaths was cut off, and finding it cost an hour of inference. Keep
-  the error line (the first line matching a failure pattern), not just the end of the output.
+- **Log what ffmpeg actually said.** *Shipped — and it had been shipped for a while; the entry below was
+  stale.* v0.53.9 made a failed start lead with the first stderr line that names a failure (`error` /
+  `failed` / `invalid` / `403 Forbidden` / `Option … not found` …), then the recent tail for context,
+  without repeating that line when it is already there — with nothing failure-shaped it falls back to
+  the plain tail exactly as before. The 2026-09-23 case it exists for: a fourteen-second session death
+  whose buffered tail ended mid-`Skip(…)` warning while the cause had already been trimmed past the
+  window. Corrected so it is not proposed again, the same class of correction as the two above.
 - **A dead producer is not a stall.** *Open.* The client recovery ladder handles a *starving* player; a
   session whose ffmpeg has exited is a different thing, and the operator saw the result — the buffer
   draining to zero and staying flat with no message. The session's own state should be a first-class
@@ -1438,10 +1441,12 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
   Active-transcodes table reports each session's average rate plus a total, and the measured UHD tier
   (2026-09-22) makes the number concrete at 14-22 Mbps per viewer. Documented in the README, so it is a
   known trade rather than a surprise.
-- **Skip the multi-arch build for docs-only commits.** *Open.* Every push to `main` builds a full
-multi-arch image (~13–20 min, arm64 `better-sqlite3` under emulation). `[skip ci]` in the commit
-message is used by hand for documentation commits; a `paths-ignore: ['**.md']` on the workflow would
-make that automatic and stop it depending on remembering.
+- **Skip the multi-arch build for docs-only commits.** *Shipped 2026-09-28.* `paths-ignore: ['**.md']` is
+  on the workflow's push trigger, so a documentation-only push no longer pays for a full multi-arch image
+  (~13–20 min, arm64 `better-sqlite3` under emulation) and no longer depends on remembering `[skip ci]`.
+  It has one sharp edge worth knowing, learned the same day: **a tag whose commit is docs-only would also
+  be skipped**, so cut release tags on the commit that carries the version bump rather than on a later
+  docs commit — `workflow_dispatch` remains the manual override if a build is ever needed anyway.
 
 ### 4. Deployment
 
