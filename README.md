@@ -6,6 +6,13 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.61.3 — every competition the feed returns shows, and the plan's limit is stated)
+
+An api-football competition the rule table does not recognise now files under **Football** with its own
+league name as the group header, rather than being dropped — measured on 2026-09-28, that was most of a
+day's card. And the free tier's date limit (today ±1) is now stated plainly in the Sports tab's header
+instead of appearing as a fault. 670 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.61.2 — the remembered plan is visible, and a fresh load stops re-probing)
 
 The player's media stats panel now shows the channel's remembered plan ("video copy, audio re-encode —

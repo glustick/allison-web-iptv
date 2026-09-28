@@ -9,7 +9,7 @@ import {
   classifyCategory,
   dayKeyOf,
   gamesForDay,
-  sportOfLeague,
+  sportOfApiFixture,
   type SportsGame,
   type SportsGroup,
   type SportsSport
@@ -19,6 +19,7 @@ import {
   channelsMentioningTeams,
   fetchFixtures,
   fetchSportsConfig,
+  isPlanDateLimit,
   matchFixturesToGames,
   type ApiFootballFixture
 } from '../lib/sportsFixtures'
@@ -111,10 +112,17 @@ function fixtureStatus(fixture: ApiFootballFixture, hour12: boolean): { text: st
   return { text: dualClock(dual.venue, dual.local, dual.sameWall), live: false }
 }
 
-/** Which sport an api-football fixture's competition belongs to, or null when it is not a sport. */
-function fixtureSportId(fixture: ApiFootballFixture): string | null {
-  const cls = classifyCategory(fixture.league)
-  return cls?.kind === 'league' ? sportOfLeague(cls.rule.id) : null
+/**
+ * Which sport an api-football fixture belongs to.
+ *
+ * The feed is **football-only**, so anything it returns is football. An unrecognised competition
+ * used to return null and its fixtures were dropped — measurably most of a day's card (Prva Liga,
+ * Azadegan League, QSL Cup, the Africa Cup qualifiers …). The rule table still names the
+ * competitions the provider carries, so those keep grouping under the league the operator knows;
+ * everything else files under Football with its own league name as the group header.
+ */
+function fixtureSportId(fixture: ApiFootballFixture): string {
+  return sportOfApiFixture(fixture.league)
 }
 
 /**
@@ -560,11 +568,19 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                     Add a key for live scores
                   </span>
                 ) : null}
-                {fixturesError && (
-                  <span className="sports-head-hint sports-head-hint--warn" title={fixturesError}>
-                    Scores unavailable
-                  </span>
-                )}
+                {fixturesError &&
+                  (isPlanDateLimit(fixturesError) ? (
+                    <span
+                      className="sports-head-hint"
+                      title={`${fixturesError} — showing the provider's own schedule for this day`}
+                    >
+                      Plan covers today ±1
+                    </span>
+                  ) : (
+                    <span className="sports-head-hint sports-head-hint--warn" title={fixturesError}>
+                      Scores unavailable
+                    </span>
+                  ))}
                 <span className="sports-day-nav" role="group" aria-label="Pick a day">
                   <button
                     type="button"

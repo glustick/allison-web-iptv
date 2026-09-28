@@ -8,12 +8,27 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.2**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.3**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.61.3 — an unrecognised competition is still football, and the plan's limit is stated.** Two
+findings from checking the live feed through the app's own service on 2026-09-28 (the operator's
+*“do number 1 via the API”*). **(1) api-football is a football-only feed, and the app was dropping
+most of it.** Fixtures are filed into a sport by a rule table, and a competition it did not recognise
+returned *no sport* — so its fixtures never appeared. Measured that day: **38 competitions had
+fixtures and a fraction were recognised** (Prva Liga, Azadegan League, QSL Cup, the Africa Cup
+qualifiers all vanished). Now anything unrecognised files under **Football**, with its own league name
+as the group header, while recognised competitions keep their own sport. **(2) The key is a free-tier
+plan, which covers today ±1 only.** A query for the following Saturday came back *“Free plans do not
+have access to this date”* — so the ±7 day picker can only show three days of fixtures, and outside
+them the pane falls back to the provider's own schedule. That is a fact about the subscription rather
+than a fault, and the header now says so (**“Plan covers today ±1”**, with the feed's own wording in
+the tooltip) instead of the generic “Scores unavailable” that sent you looking for a bug. 670 tests,
+typecheck, lint and the client build clean.
 
 **v0.61.2 — the plan is visible, and a fresh load stops re-probing.** Three follow-ups from the same
 day. **(1) The media stats panel shows the channel plan** — *“video copy, audio re-encode — proved 2 h

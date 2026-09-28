@@ -37,6 +37,20 @@ export async function fetchSportsConfig(): Promise<{ keySet: boolean }> {
 }
 
 /**
+ * Whether the feed's error is its **plan's date limit** rather than a fault.
+ *
+ * The free tier answers `Free plans do not have access to this date` for anything outside today ±1 —
+ * measured on this deployment 2026-09-28, when a query for the following Saturday came back exactly
+ * so. That is a fact about the subscription, not a failure, and saying "scores unavailable" about it
+ * would send someone hunting for a bug that is not there. Anyone on a paid plan never sees this.
+ */
+export function isPlanDateLimit(error: string | null, maxDaysAhead = 1): boolean {
+  if (typeof error !== 'string') return false
+  if (maxDaysAhead > 1) return false
+  return /free plans do not have access to this date/i.test(error)
+}
+
+/**
  * The key itself, for the admin screen's field (which shows it and lets it be changed). Admin-only
  * server-side; a non-admin gets a 403, which the caller shows as-is rather than retrying.
  */

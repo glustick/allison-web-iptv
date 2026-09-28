@@ -5,7 +5,8 @@ import {
   cleanCategoryLabel,
   dayKeyOf,
   gamesForDay,
-  parseEventName
+  parseEventName,
+  sportOfApiFixture
 } from './sports'
 import type { Category, LiveStream } from './types'
 
@@ -255,9 +256,27 @@ describe('buildSportsSchedule', () => {
   })
 })
 
+describe('sportOfApiFixture', () => {
+  it('files an unrecognised competition under Football rather than dropping it', () => {
+    // Measured 2026-09-28: 38 competitions had fixtures that day and the rule table recognised only a
+    // fraction — Prva Liga, Azadegan League, QSL Cup, the Africa Cup qualifiers. Returning nothing
+    // for those silently removed most of the day's card, so the feed's football-only nature is the
+    // default.
+    expect(sportOfApiFixture('Prva Liga')).toBe('football')
+    expect(sportOfApiFixture('Azadegan League')).toBe('football')
+    expect(sportOfApiFixture('QSL Cup')).toBe('football')
+    expect(sportOfApiFixture('Africa Cup of Nations - Qualification')).toBe('football')
+  })
+
+  it('still uses the rule table where it recognises the competition', () => {
+    expect(sportOfApiFixture('Premier League')).toBe('football')
+    // Hypothetical for a football-only feed, but it proves the rule path is still taken: a name the
+    // table knows keeps its own sport, so the provider's grouping still applies.
+    expect(sportOfApiFixture('NBA')).toBe('basketball')
+  })
+})
+
 describe('sport grouping', () => {
-  // The first pane groups by SPORT, with the competitions as group headers inside the fixtures
-  // pane — so the schedule carries a sport level above the leagues, biggest sport first.
   it('files each competition under its sport, biggest first', () => {
     const categories = [
       category('100', 'Live | English Premier League - EPL ⚽'),

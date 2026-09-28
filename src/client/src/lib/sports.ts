@@ -200,6 +200,21 @@ export function sportOfLeague(leagueId: string): SportId {
   return SPORT_OF_LEAGUE[leagueId] ?? 'other'
 }
 
+/**
+ * The sport an **api-football** fixture belongs to.
+ *
+ * That feed is football-only, so an unrecognised competition is still football. Before 2026-09-28 an
+ * unknown league returned nothing and its fixtures were dropped from the tab silently — measurably
+ * most of a day's card (Prva Liga, Azadegan League, QSL Cup, the Africa Cup qualifiers …). The rule
+ * table above still names the competitions the provider carries, so those keep grouping under the
+ * league the operator knows; everything else files under Football, with its own league name as the
+ * group header.
+ */
+export function sportOfApiFixture(leagueName: string): SportId {
+  const cls = classifyCategory(leagueName)
+  return cls?.kind === 'league' ? sportOfLeague(cls.rule.id) : 'football'
+}
+
 // Categories that exist to carry broadcast channels rather than one competition's events.
 // They no longer become browse groups — their channels go to the left pane's flat Channels
 // list instead (the request: fewer categories, channels listed directly).

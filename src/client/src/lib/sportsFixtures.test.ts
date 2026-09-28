@@ -3,6 +3,7 @@ import {
   channelsMentioningTeams,
   fixtureMatchKey,
   indexFixturesByMatch,
+  isPlanDateLimit,
   loosePairMatches,
   matchFixturesToGames,
   sideLooselyMatches,
@@ -104,6 +105,19 @@ describe('sideLooselyMatches', () => {
 describe('loosePairMatches', () => {
   it('ignores home/away order', () => {
     expect(loosePairMatches('newcastle vs sunderland', 'sunderland vs newcastle united')).toBe(true)
+  })
+})
+
+describe('isPlanDateLimit', () => {
+  it('recognises the free tier refusing a date, which is a fact about the subscription', () => {
+    // The exact wording measured on this deployment, 2026-09-28.
+    expect(isPlanDateLimit('Free plans do not have access to this date, try from 2026-09-27 to 2026-09-29.')).toBe(true)
+  })
+
+  it('does not mistake an ordinary failure for it', () => {
+    expect(isPlanDateLimit(null)).toBe(false)
+    expect(isPlanDateLimit('api-football returned a response that is not JSON')).toBe(false)
+    expect(isPlanDateLimit('Request failed with status 500')).toBe(false)
   })
 })
 
