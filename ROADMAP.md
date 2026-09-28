@@ -8,12 +8,24 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.3**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.4**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.61.4 — the app manages its own api-football quota.** Checked the account through the API on
+2026-09-28 and it is a **free plan: `limit_day: 100`** — while the Sports tab polls every five minutes
+for live scores, which over a long evening is more requests than the whole day allows. Two rules now
+keep it inside that allowance, and they had to come before adding more sports, because each sport
+multiplies the request count. **A day with nothing in play is cached for an hour**; only a day with a
+fixture actually being played refreshes on the five-minute cadence, so scores stay honest without the
+quota paying for a static list. **And the service keeps its own ceiling of 80** — below the plan's
+hundred, so the app degrades to what it already has and *says why* ("Daily api-football request budget
+reached — fixtures resume tomorrow") instead of returning the API's errors for the rest of the day.
+Until this release the account had spent **2 of its 100**. 688 tests, typecheck, lint and the client
+build clean.
 
 **v0.61.3 — an unrecognised competition is still football, and the plan's limit is stated.** Two
 findings from checking the live feed through the app's own service on 2026-09-28 (the operator's

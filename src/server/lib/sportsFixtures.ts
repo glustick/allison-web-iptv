@@ -54,7 +54,26 @@ const FINISHED_SHORT_STATUSES = new Set(['FT', 'AET', 'PEN'])
 // A live score must be fresh; a day's fixture list must not be refetched per open tab. Five
 // minutes matches the desktop app's own refetch cadence, and the cache is shared across accounts
 // (fixtures are public data), which is also what keeps a free-tier key's daily quota intact.
-const CACHE_TTL_MS = 5 * 60_000
+const LIVE_CACHE_TTL_MS = 5 * 60_000
+
+/**
+ * How long a day's fixtures are kept when **nothing in them is in play**.
+ *
+ * The distinction matters now that the plan is known to be a free one: `status` reports
+ * `limit_day: 100`, and the Sports tab polls while it is open — twelve hours at a five-minute cadence
+ * is 144 requests, more than the whole day's allowance. A fixture list with no live match in it does
+ * not change from one minute to the next, so it is kept for an hour; only a day with something
+ * actually being played is refreshed on the short cadence. Scores stay honest, and the quota survives.
+ */
+const IDLE_CACHE_TTL_MS = 60 * 60_000
+
+/**
+ * Our own ceiling, below the plan's own. The API counts requests and refuses past 100; stopping short
+ * means the app degrades to cached data and *says so*, instead of returning errors for the rest of the
+ * day. Adding sports (basketball, baseball, hockey, rugby — all on this key) multiplies the request
+ * count, which is why this guard went in before they did.
+ */
+const DAILY_REQUEST_BUDGET = 80
 // A failed answer is cached only briefly: a mistyped key must be correctable without waiting out
 // the full window, while a short hold still stops a tight poll from spending quota on a feed that
 // is refusing every request. And it is scoped to the key that produced it (see keyFingerprint), so
@@ -148,17 +167,45 @@ export interface SportsFixturesDeps {
 export function createSportsFixturesService(deps: SportsFixturesDeps = {}) {
   const createUpstreamRequest = deps.createUpstreamRequest ?? createNodeUpstreamRequest
   const now = deps.now ?? Date.now
-  const cacheTtlMs = deps.cacheTtlMs ?? CACHE_TTL_MS
   const origin = deps.origin ?? API_ORIGIN
+  // Overridable so a test can shorten the live window rather than waiting five minutes for it.
+  const liveTtlMs = deps.cacheTtlMs ?? LIVE_CACHE_TTL_MS
   const cache = new Map<string, { at: number; result: FixturesResult; keyHash: string }>()
+
+  // Requests spent today, reset on the UTC date the API itself uses for its own counter.
+  let requestsToday = 0
+  let budgetDay = new Date(now()).toISOString().slice(0, 10)
+
+  function budgetRemaining(at: number): number {
+    const day = new Date(at).toISOString().slice(0, 10)
+    if (day !== budgetDay) {
+      budgetDay = day
+      requestsToday = 0
+    }
+    return Math.max(0, DAILY_REQUEST_BUDGET - requestsToday)
+  }
 
   async function getFixtures(dateIso: string, key: string): Promise<FixturesResult> {
     const keyHash = keyFingerprint(key)
     const cached = cache.get(dateIso)
     // A cached *error* belongs to the key that produced it: a different key (a corrected one) must
     // not inherit it, so its window collapses to zero.
-    const ttl = cached?.result.error ? (cached.keyHash === keyHash ? ERROR_CACHE_TTL_MS : 0) : cacheTtlMs
+    const ttl = cached?.result.error
+      ? cached.keyHash === keyHash
+        ? ERROR_CACHE_TTL_MS
+        : 0
+      : cached && cached.result.fixtures.some((fixture) => fixture.live)
+        ? liveTtlMs
+        : IDLE_CACHE_TTL_MS
     if (cached && now() - cached.at < ttl) return cached.result
+
+    // Over our own daily budget: serve whatever is cached — even stale — and say why, rather than
+    // spending a request that will not be replaced until tomorrow.
+    if (budgetRemaining(now()) === 0) {
+      if (cached) return cached.result
+      return { fixtures: [], error: 'Daily api-football request budget reached — fixtures resume tomorrow' }
+    }
+    requestsToday += 1
 
     let result: FixturesResult
     try {
@@ -190,6 +237,11 @@ export function createSportsFixturesService(deps: SportsFixturesDeps = {}) {
 
   return {
     getFixtures,
+    /** How much of our own daily allowance is left — for the admin screen, and for tests. */
+    budget(): { remaining: number; used: number } {
+      const remaining = budgetRemaining(now())
+      return { remaining, used: requestsToday }
+    },
     /** Test/ops hook. */
     clearCache(): void {
       cache.clear()

@@ -114,6 +114,72 @@ describe('normalizeFixture', () => {
   })
 })
 
+describe('quota discipline', () => {
+  // The plan is a free one: `status` reports `limit_day: 100`, and the Sports tab polls while it is
+  // open. These pin the two rules that keep the app inside that allowance — and that adding more
+  // sports (which multiplies the request count) depends on.
+  async function liveOrigin(counters: { hits: number }, live: boolean): Promise<string> {
+    const server = createServer((_req, res) => {
+      counters.hits += 1
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          errors: [],
+          response: [rawFixture({ short: live ? '2H' : 'NS', home: 0, away: 0 })]
+        })
+      )
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const { port } = server.address() as AddressInfo
+    return `http://127.0.0.1:${port}`
+  }
+
+  it('keeps a day with nothing in play far longer than a live one', async () => {
+    // Idle: one fetch, still cached six minutes later, refreshed once the hour is up.
+    const idle = { hits: 0 }
+    const idleOrigin = await liveOrigin(idle, false)
+    let idleClock = Date.parse('2026-09-28T18:00:00Z')
+    const idleService = createSportsFixturesService({ origin: idleOrigin, now: () => idleClock })
+    await idleService.getFixtures('2026-09-28', 'k')
+    idleClock += 6 * 60_000
+    await idleService.getFixtures('2026-09-28', 'k')
+    expect(idle.hits).toBe(1)
+    idleClock += 55 * 60_000
+    await idleService.getFixtures('2026-09-28', 'k')
+    expect(idle.hits).toBe(2)
+
+    // Live: the same calls refetch on the short cadence, because a score that is six minutes old is
+    // not a score — that is what the five-minute window is for, and why the guard exists elsewhere.
+    const live = { hits: 0 }
+    const liveFeed = await liveOrigin(live, true)
+    let liveClock = Date.parse('2026-09-28T18:00:00Z')
+    const liveService = createSportsFixturesService({ origin: liveFeed, now: () => liveClock })
+    await liveService.getFixtures('2026-09-28', 'k')
+    liveClock += 6 * 60_000
+    await liveService.getFixtures('2026-09-28', 'k')
+    expect(live.hits).toBe(2)
+  })
+
+  it('stops spending requests once the daily allowance is gone, and says so', async () => {
+    const counters = { hits: 0 }
+    const origin = await liveOrigin(counters, false)
+    const service = createSportsFixturesService({ origin, now: () => Date.parse('2026-09-28T18:00:00Z') })
+    for (let i = 0; i < 80; i += 1) {
+      service.clearCache()
+      await service.getFixtures('2026-09-28', 'k')
+    }
+    expect(counters.hits).toBe(80)
+    expect(service.budget().remaining).toBe(0)
+
+    // Over budget: no request is spent, and the caller is told why rather than given a silence.
+    service.clearCache()
+    const over = await service.getFixtures('2026-09-28', 'k')
+    expect(counters.hits).toBe(80)
+    expect(over.error).toMatch(/budget/)
+  })
+})
+
 describe('getFixtures against a real origin', () => {
   async function startOrigin(handler: (headers: Record<string, string | string[] | undefined>) => { status: number; body: string }): Promise<string> {
     const server = createServer((req, res) => {

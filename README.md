@@ -6,6 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.61.4 — the app manages its own api-football quota)
+
+The api-football key is a free plan (100 requests/day), and the Sports tab's five-minute polling would
+spend that in an evening. A day with nothing in play is now cached for an hour, only a day with a live
+fixture refreshes on the short cadence, and the service keeps its own ceiling of 80 requests so it
+degrades to cached data with a stated reason rather than the API's errors. This is also the prerequisite
+for adding the other sports the same key serves. 688 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.61.3 — every competition the feed returns shows, and the plan's limit is stated)
 
 An api-football competition the rule table does not recognise now files under **Football** with its own
