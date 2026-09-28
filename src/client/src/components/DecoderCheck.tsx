@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { extractHevcAnnexB } from '../lib/tsHevc'
+import { saveVerdict } from '../lib/decodeGate'
 
 /**
  * The client-side decode check, in admin -> System.
@@ -112,13 +113,26 @@ export function DecoderCheck() {
       const seconds = (performance.now() - started) / 1000
       decoder.close()
 
+      // Recorded per device (lib/decodeGate.ts): this is the gate a client-side player consults, and
+      // the reason to run this once on the machine that would be doing the decoding rather than
+      // trusting `isConfigSupported`, which answers a different question.
+      const framesPerSecond = seconds > 0 ? frames / seconds : 0
+      saveVerdict({
+        measuredAt: Date.now(),
+        framesPerSecond,
+        presentedWidth: canvas?.width ?? 0,
+        presentedHeight: canvas?.height ?? 0,
+        codec: config.codec
+      })
+
       setResult([
         `video PID: ${extracted.pid}`,
         `elementary stream: ${(extracted.data.length / 1_000_000).toFixed(2)} MB`,
         `decoded frames: ${frames}`,
-        `decode speed: ${(frames / seconds).toFixed(1)} frames/second (wall clock, including the first-frame setup)`,
+        `decode speed: ${framesPerSecond.toFixed(1)} frames/second (wall clock, including the first-frame setup)`,
         `presented size: ${canvas?.width ?? 0}x${canvas?.height ?? 0}`,
-        `config the platform accepted: ${config.codec} (hardwareAcceleration: prefer-hardware)`
+        `config the platform accepted: ${config.codec} (hardwareAcceleration: prefer-hardware)`,
+        'saved as this device\'s client-decode verdict — it is what the player and the media stats panel read'
       ])
       setStatus(null)
     } catch (error) {

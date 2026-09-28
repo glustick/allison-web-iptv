@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.60.0 — a measured client-decode verdict, and honest failure messages)
+
+The decode check now saves a **per-device verdict** — frames per second, the size it actually
+presented, and when — which the media stats panel reads, so "could this machine carry a client-side
+player?" is answered by a measurement rather than by `isConfigSupported`. A verdict under 30 fps, with
+no picture, or older than two weeks reads as *not measured*. The player's two video failure paths also
+now say different things: which engine answered, whether the native pipeline had already failed, and
+what this device measured. 645 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.59.2 — the api-football key is visible and editable)
 
 Admin → Sports data now **shows** the stored api-football key and lets it be changed, rather than only

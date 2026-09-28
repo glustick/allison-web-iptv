@@ -3,6 +3,8 @@ import Hls from 'hls.js'
 import { stallRecoveryShape, useTranscodeFallback } from '../lib/transcodeFallback'
 import { noteStreamNeedsTranscode, streamNeedsTranscode, streamNeedsVideoTranscode } from '../lib/transcodeHints'
 import { prefersNativePlayback } from '../lib/nativePlayback'
+import { loadVerdict } from '../lib/decodeGate'
+import { describeUnplayableVideo } from '../lib/playbackDiagnosis'
 import { sniffStreamKind } from '../lib/streamKind'
 import { probeStreamTracks } from '../lib/audioTrackProbe'
 import { canDecodeVideoCodec, needsStreamCopyRemux } from '../lib/videoCapability'
@@ -643,10 +645,21 @@ let stallCount = 0
         // Native or nothing (v0.48.2). The app used to offer to re-encode here, which could not work on
         // this host for a 4K feed anyway (measured: ffmpeg pinned at ~400% CPU, one segment, then it
         // falls behind the live edge) — and a futile button is worse than a sentence.
-        console.warn(`[player] stream video is ${videoCodec}, which this browser cannot decode`)
+        //
+        // The sentence is built by lib/playbackDiagnosis.ts: it names the engine that answered and what
+        // this device measured, so a native hiccup reported through the fallback stops reading the same
+        // as a genuine codec gap (the 2026-09-22 finding — "same error as Chrome" told us nothing).
+        console.warn(
+          `[player] stream video is ${videoCodec}, which this browser cannot decode` +
+            (nativeFailedRef.current ? ' (after the native pipeline had already failed)' : '')
+        )
         setError(
-          `This channel can’t be played in this browser — its video is ${videoCodec}, which this browser ` +
-            'cannot decode. Choose another channel.'
+          describeUnplayableVideo({
+            videoCodec,
+            engine: engineRef.current,
+            nativeFailed: nativeFailedRef.current,
+            verdict: loadVerdict()
+          })
         )
         return
       }

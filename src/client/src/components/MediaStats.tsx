@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { describeVerdict, loadVerdict } from '../lib/decodeGate'
 
 interface MediaStatsProps {
   video: HTMLVideoElement | null
@@ -71,7 +72,10 @@ export function MediaStats({ video, engine, videoCodec, audioTrackCount, readBan
       { label: 'Native HLS pipeline', value: nativeHls },
       { label: 'MSE accepts HEVC (hvc1 in fMP4)', value: mseHevc },
       { label: 'WebCodecs available', value: typeof (globalThis as Record<string, unknown>).VideoDecoder === 'function' ? 'yes' : 'no' },
-      { label: 'WebCodecs HEVC decode (4K Main 10, prefer hardware)', value: 'checking…' }
+      { label: 'WebCodecs HEVC decode (4K Main 10, prefer hardware)', value: 'checking…' },
+      // What this device actually measured, not what it advertises — the two are different questions,
+      // and only the first one decides whether a client-side player is worth entering (lib/decodeGate.ts).
+      { label: 'Client decode verdict (measured on this device)', value: describeVerdict(loadVerdict()) }
     ])
 
     const webCodecs = (globalThis as unknown as {

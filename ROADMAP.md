@@ -8,12 +8,28 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.59.2**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.60.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.60.0 — a measured client-decode verdict, and failure messages that tell the two paths apart.**
+Two pieces of the client-side decoding work, both of them the parts that had to come first.
+**(1) The decode check now records a verdict per device** (`lib/decodeGate.ts`): frames per second,
+the size it actually presented, and when it was measured — cached for two weeks and shown in the
+player's media stats panel. The roadmap's own order puts a measurement before the player for a reason
+worth repeating: `isConfigSupported` answering yes is a *capability*, and a capability is not a
+throughput. This turns “run it there first” from an instruction into one click on the machine that
+would be doing the decoding. A verdict under 30 fps, with no picture, or older than two weeks reads
+as *not measured*, so a slideshow can never sit behind a green tick. **(2) The two video failure
+paths now say different things** (`lib/playbackDiagnosis.ts`): the message names the engine that
+answered and whether the native pipeline had already failed, so the fallback speaking is not recorded
+as a codec verdict — the 2026-09-22 finding, where Safari and Chrome producing the same sentence told
+us nothing — and it ends with what this device measured: either “a client-side player is viable
+here”, or the instruction to measure it. 645 tests (19 new), typecheck, lint and the client build
+clean.
 
 **v0.59.2 — the api-football key is visible and editable in the admin screen.** The Sports data
 section only ever reported *whether* a key was set; the field **shows** it now and lets it be changed
@@ -1329,8 +1345,11 @@ BBC One HD, Scripps, US local ABC/CW affiliates, NFHS, 24/7 channels):
 
 ### 2. EPG & guide quality
 
-- **Built-in public XMLTV presets.** *Open.* The login form takes raw URLs today; ship a picker
-  of common public guides so users do not have to hunt for sources.
+- **Built-in public XMLTV presets.** *Shipped — and it was already shipped; the entry below was stale.*
+  System → “Add a public guide” has offered four **verified** sources since 2026-09-19
+  (`lib/epgPresets.ts`: epgshare01 UK/IE/AU plus i.mjh.nz Sydney), each carrying the date it was fetched
+  and a plain-language note on size and id shape. Corrected so it is not proposed again — the same class
+  of correction as the transcode-idle entry above.
 - **Manual channel→guide mapping + optional fuzzy joins.** *Open (partial).* Matching is
   deliberately conservative (exact id → normalized id → normalized display-name, unambiguous
   only), so a channel whose name genuinely differs from every guide entry (e.g. "BBC One HD
