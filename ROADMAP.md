@@ -8,12 +8,26 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.58.1**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.59.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.59.0 — the Sports tab's fixtures are api-football's, grouped by its competitions.** The
+operator's correction (2026-09-28): the middle pane was grouping by the *provider's* channel-name
+buckets, which produced a pointless “Football › Football” and did not reflect the real competition.
+With a key configured the pane now shows **api-football's own fixture list** for the selected day —
+one collapsible group per competition, by its real name (“English Premier League”, “La Liga”,
+“Championship”) with the country beside it — live matches first and then by kickoff, each fixture
+paired to the provider row carrying it so selecting one still leads to its channels. A fixture the
+provider does not name is listed and still leads somewhere (the team-name search from v0.56.0). The
+header says **“via api-football.com”**, so which source is in play is visible rather than inferred.
+Without a key — or if the feed fails — the pane falls back to the provider's own schedule exactly as
+before, and the catch-all provider competition is now labelled **“Other Football”** rather than
+“Football”, the other half of the duplicate the operator saw. Client-only; 621 tests, typecheck,
+lint and the client build clean.
 
 **v0.58.1 — the Sports tab groups by competition, and each group collapses.** The fixtures pane
 already drew a competition header per league; it is now a real **button** that shows or hides that

@@ -399,38 +399,67 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
   // The day's fixtures for this sport, paired with the provider's own rows: exactly first, then
   // loosely (see lib/sportsFixtures.ts). Anything left unpaired is a fixture the provider does not
   // carry under a recognisable name — still listed, and clickable to search for a channel.
+  // **api-football's own list is what the pane shows** when the feed is available — the operator's
+  // ask (2026-09-28): the schedules are the API's, grouped by ITS competitions ("English Premier
+  // League"), not by the provider's channel-name buckets, which produced a pointless
+  // "Football › Football". Without a key, or if the feed fails, the pane falls back to the
+  // provider's own schedule so the tab is never empty.
+  const apiMode = keySet === true && fixturesError === null
   const sportFixturesForDay = useMemo(
     () => fixtures.filter((fixture) => fixtureSportId(fixture) === selectedSportId),
     [fixtures, selectedSportId]
   )
+
+  // Each fixture paired to the provider row that carries it — exactly, then loosely
+  // (lib/sportsFixtures.ts) — which is what makes selecting a fixture lead to its channels.
   const pairing = useMemo(
     () => matchFixturesToGames(sportFixturesForDay, dayGames.map((game) => ({ key: game.key, pairKey: game.pairKey }))),
     [sportFixturesForDay, dayGames]
   )
-  const unmatchedFixtures = useMemo(
-    () => sportFixturesForDay.filter((fixture) => !pairing.matchedIds.has(fixture.id)),
-    [sportFixturesForDay, pairing]
-  )
-  const unmatchedByLeague = useMemo(() => {
-    const byLeague = new Map<string, ApiFootballFixture[]>()
-    for (const fixture of unmatchedFixtures) {
-      const label = fixture.league || 'Other fixtures'
-      const list = byLeague.get(label) ?? []
-      list.push(fixture)
-      byLeague.set(label, list)
+  const gameByFixtureId = useMemo(() => {
+    const byKey = new Map(dayGames.map((game) => [game.key, game]))
+    const map = new Map<number, SportsGame>()
+    for (const [gameKey, fixture] of pairing.byGame) {
+      const game = byKey.get(gameKey)
+      if (game) map.set(fixture.id, game)
     }
-    return [...byLeague.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-  }, [unmatchedFixtures])
+    return map
+  }, [pairing, dayGames])
+
+  // The pane's grouping: one group per competition, live matches first and then by kickoff, with
+  // the competitions ordered by name so the list is stable between days.
+  const apiGroups = useMemo(() => {
+    const byLeague = new Map<string, { league: string; country: string; fixtures: ApiFootballFixture[] }>()
+    for (const fixture of sportFixturesForDay) {
+      const key = fixture.league || 'Other fixtures'
+      const group = byLeague.get(key) ?? { league: fixture.league || 'Other fixtures', country: fixture.country, fixtures: [] }
+      group.fixtures.push(fixture)
+      byLeague.set(key, group)
+    }
+    const groups = [...byLeague.values()]
+    for (const group of groups) {
+      group.fixtures.sort((a, b) => {
+        if (a.live !== b.live) return a.live ? -1 : 1
+        return (a.kickoffMs ?? Number.POSITIVE_INFINITY) - (b.kickoffMs ?? Number.POSITIVE_INFINITY)
+      })
+    }
+    return groups.sort((a, b) => a.league.localeCompare(b.league))
+  }, [sportFixturesForDay])
 
   const selectedGameKey = selection?.kind === 'game' ? selection.key : null
   const selectedFixtureId = selection?.kind === 'fixture' ? selection.id : null
   const selectedGame = dayGames.find((game) => game.key === selectedGameKey) ?? null
-  const selectedFixture = unmatchedFixtures.find((fixture) => fixture.id === selectedFixtureId) ?? null
+  const selectedFixture = sportFixturesForDay.find((fixture) => fixture.id === selectedFixtureId) ?? null
+  // When the fixture's channels are known, the third pane lists them rather than searching.
+  const selectedFixtureGame = selectedFixture ? (gameByFixtureId.get(selectedFixture.id) ?? null) : null
 
-  // Panel 3's fallback candidate list, only computed when a provider-less fixture is selected.
+  // Panel 3's fallback candidate list, only computed when a selected fixture has no matched channel.
   const fixtureCandidates = useMemo(
-    () => (selectedFixture ? channelsMentioningTeams(streams, selectedFixture.homeTeam, selectedFixture.awayTeam) : []),
-    [selectedFixture, streams]
+    () =>
+      selectedFixture && !selectedFixtureGame
+        ? channelsMentioningTeams(streams, selectedFixture.homeTeam, selectedFixture.awayTeam)
+        : [],
+    [selectedFixture, selectedFixtureGame, streams]
   )
 
   // Panel 3's default: every channel the provider carries in a sports category, so a channel is
@@ -468,7 +497,7 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
   }
 
   const noSports = !loading && schedule !== null && schedule.leagues.length === 0 && schedule.channels.length === 0
-  const dayCount = dayGames.length + unmatchedFixtures.length
+  const dayCount = apiMode ? sportFixturesForDay.length : dayGames.length
 
   return (
     <div className="app-body">
@@ -522,11 +551,15 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                 <span className="sports-head-sub">
                   {dayCount} fixture{dayCount === 1 ? '' : 's'}
                 </span>
-                {keySet === false && (
+                {apiMode ? (
+                  <span className="sports-head-hint" title="Fixtures and scores come from api-football.com">
+                    via api-football.com
+                  </span>
+                ) : keySet === false ? (
                   <span className="sports-head-hint" title="Set an api-football.com key in Admin → Sports data">
                     Add a key for live scores
                   </span>
-                )}
+                ) : null}
                 {fixturesError && (
                   <span className="sports-head-hint sports-head-hint--warn" title={fixturesError}>
                     Scores unavailable
@@ -556,13 +589,60 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
               </div>
 
               <div className="sports-list">
-                {dayGames.length === 0 && unspecifiedDayIsEmpty(sportUnscheduled, unmatchedFixtures) && (
-                  <div className="sports-empty">
-                    No {selectedSport?.label.toLowerCase() ?? 'sporting'} fixtures on {formatDayLabel(dayKey).toLowerCase()}.
-                  </div>
-                )}
+                {apiMode
+                  ? apiGroups.length === 0 && (
+                      <div className="sports-empty">
+                        No {selectedSport?.label.toLowerCase() ?? 'sporting'} fixtures on{' '}
+                        {formatDayLabel(dayKey).toLowerCase()}.
+                      </div>
+                    )
+                  : dayGames.length === 0 &&
+                    sportUnscheduled.length === 0 && (
+                      <div className="sports-empty">
+                        No {selectedSport?.label.toLowerCase() ?? 'sporting'} fixtures on{' '}
+                        {formatDayLabel(dayKey).toLowerCase()}.
+                      </div>
+                    )}
 
-                {sportGamesForDay.map(({ league, games }, index) => (
+                {/* The feed's own competitions — "English Premier League", not the provider's
+                    channel buckets. Each fixture pairs to the provider row carrying it, so
+                    selecting one leads to its channels. */}
+                {apiMode &&
+                  apiGroups.map((group, index) => (
+                    <LeagueGroup
+                      key={group.league}
+                      id={`api-league-${group.league}`}
+                      bodyId={`sports-league-${index}`}
+                      label={group.league}
+                      note={group.country || undefined}
+                      count={group.fixtures.length}
+                      collapsed={collapsedGroups.has(`api-league-${group.league}`)}
+                      onToggle={toggleGroup}
+                    >
+                      {group.fixtures.slice(0, MAX_ROWS).map((fixture) => {
+                        const game = gameByFixtureId.get(fixture.id) ?? null
+                        return (
+                          <FixtureRow
+                            key={`fixture-${fixture.id}`}
+                            selected={fixture.id === selectedFixtureId}
+                            onToggle={() => toggleFixture(fixture.id)}
+                            matchup={`${fixture.homeTeam} vs ${fixture.awayTeam}`}
+                            status={fixtureStatus(fixture, hour12)}
+                            trailing={game ? feedCount(game.channels.length) : 'no channel'}
+                            trailingWarn={!game}
+                            title={
+                              game
+                                ? `${fixture.league} — ${feedCount(game.channels.length)} carry this fixture`
+                                : `${fixture.league} (${fixture.country}) — no channel on your provider names this fixture; select it to search`
+                            }
+                          />
+                        )
+                      })}
+                    </LeagueGroup>
+                  ))}
+
+                {!apiMode &&
+                  sportGamesForDay.map(({ league, games }, index) => (
                   <LeagueGroup
                     key={league.id}
                     id={`provider-${league.id}`}
@@ -591,33 +671,8 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                   </LeagueGroup>
                 ))}
 
-                {unmatchedByLeague.map(([leagueLabel, list], index) => (
-                  <LeagueGroup
-                    key={`api-${leagueLabel}`}
-                    id={`api-${leagueLabel}`}
-                    bodyId={`sports-api-${index}`}
-                    label={leagueLabel}
-                    note="not on your provider"
-                    count={list.length}
-                    collapsed={collapsedGroups.has(`api-${leagueLabel}`)}
-                    onToggle={toggleGroup}
-                  >
-                    {list.slice(0, MAX_ROWS).map((fixture) => (
-                      <FixtureRow
-                        key={`fixture-${fixture.id}`}
-                        selected={fixture.id === selectedFixtureId}
-                        onToggle={() => toggleFixture(fixture.id)}
-                        matchup={`${fixture.homeTeam} vs ${fixture.awayTeam}`}
-                        status={fixtureStatus(fixture, hour12)}
-                        trailing="no channel"
-                        trailingWarn
-                        title={`${fixture.league} (${fixture.country}) — no channel on your provider names this fixture; select it to search`}
-                      />
-                    ))}
-                  </LeagueGroup>
-                ))}
-
-                {sportUnscheduled.map(({ league, games }, index) => (
+                {!apiMode &&
+                  sportUnscheduled.map(({ league, games }, index) => (
                   <LeagueGroup
                     key={`unscheduled-${league.id}`}
                     id={`unscheduled-${league.id}`}
@@ -670,6 +725,10 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                   selectedGame.channels.map((channel) => (
                     <ChannelRow key={channel.stream_id} channel={channel} onPlay={playChannel} />
                   ))
+                ) : selectedFixture && selectedFixtureGame ? (
+                  selectedFixtureGame.channels.map((channel) => (
+                    <ChannelRow key={channel.stream_id} channel={channel} onPlay={playChannel} />
+                  ))
                 ) : selectedFixture ? (
                   <>
                     <div className="sports-callout">
@@ -701,10 +760,3 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
   )
 }
 
-/** Whether the chosen day genuinely has nothing — no provider games and no provider-less fixtures. */
-function unspecifiedDayIsEmpty(
-  unscheduled: Array<{ games: SportsGame[] }>,
-  unmatched: ApiFootballFixture[]
-): boolean {
-  return unscheduled.length === 0 && unmatched.length === 0
-}

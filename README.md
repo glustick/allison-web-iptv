@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.59.0 — the Sports tab's fixtures come from api-football)
+
+With a key configured, the Sports tab's middle pane shows **api-football's own fixture list** for the
+chosen day, grouped into collapsible groups by its real competitions ("English Premier League", "La
+Liga"), live first — rather than the provider's channel-name buckets, which produced a "Football ›
+Football" duplicate. Each fixture is paired to the channel carrying it, and the header says "via
+api-football.com". Without a key (or if the feed fails) it falls back to the provider's own schedule
+as before. 621 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.58.1 — collapsible league groups in the Sports tab)
 
 The Sports tab's fixtures pane groups by competition exactly as before, and every competition header is

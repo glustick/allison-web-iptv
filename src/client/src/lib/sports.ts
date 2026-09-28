@@ -121,7 +121,10 @@ const LEAGUE_RULES: LeagueRule[] = [
   { id: 'mls', label: 'MLS', country: 'USA', isFootball: true, venueTz: 'America/New_York', keywords: ['mls'] },
   {
     id: 'football',
-    label: 'Football',
+    // Deliberately NOT "Football": the sport is already the first pane's group, so a competition
+    // labelled "Football" underneath it read as a duplicate (reported 2026-09-28 — "football >
+    // football"). This is the catch-all for football competitions with no rule of their own.
+    label: 'Other Football',
     country: 'World',
     isFootball: true,
     venueTz: 'Europe/London',
