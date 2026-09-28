@@ -181,3 +181,55 @@ export function extractHevcAnnexB(ts: Uint8Array, videoPid?: number): HevcStream
   }
   return { pid, data }
 }
+
+/**
+ * Splits an Annex-B elementary stream into **access units** — one per encoded frame.
+ *
+ * This exists because of a measured failure worth recording. The decode check used to hand the whole
+ * elementary stream to `decode()` as a *single* `EncodedVideoChunk`. A chunk is one frame by
+ * definition, and Chrome's HEVC decoder accepted the configuration and then produced **zero frames**:
+ * `decoded frames: 0`, `0.0 frames/second`, and a 300x150 canvas — the canvas default, so nothing had
+ * ever been drawn — and that was saved as if it were a verdict on the device. The check was broken,
+ * not the machine, which is exactly the kind of false negative this project keeps having to unlearn.
+ *
+ * A new access unit begins at the first slice of a picture (`first_slice_segment_in_pic_flag`, the top
+ * bit of the first byte of a VCL NAL's payload); parameter sets and SEI that precede it belong to it,
+ * so they are attached to the unit that follows. No full parse is needed — just the NAL walk this
+ * module already does.
+ */
+export function splitAccessUnits(annexB: Uint8Array): Uint8Array[] {
+  const units: Uint8Array[] = []
+  let unitStart = -1
+  let unitHasSlice = false
+  let i = 0
+  while (i + 5 < annexB.length) {
+    if (annexB[i] !== 0 || annexB[i + 1] !== 0) {
+      i += 1
+      continue
+    }
+    let prefix = 0
+    if (annexB[i + 2] === 1) prefix = 3
+    else if (annexB[i + 2] === 0 && annexB[i + 3] === 1) prefix = 4
+    if (prefix === 0) {
+      i += 1
+      continue
+    }
+    const nalType = (annexB[i + prefix] >> 1) & 0x3f
+    const isVcl = nalType <= 31
+    // first_slice_segment_in_pic_flag — meaningful only on a VCL NAL, and only when its first
+    // payload byte is actually present.
+    const firstSlice = isVcl && i + prefix + 2 < annexB.length && (annexB[i + prefix + 2] & 0x80) !== 0
+
+    if (unitStart < 0) {
+      unitStart = i
+    } else if (isVcl && firstSlice && unitHasSlice) {
+      units.push(annexB.subarray(unitStart, i))
+      unitStart = i
+      unitHasSlice = false
+    }
+    if (isVcl) unitHasSlice = true
+    i += prefix + 2
+  }
+  if (unitStart >= 0 && unitHasSlice) units.push(annexB.subarray(unitStart))
+  return units
+}

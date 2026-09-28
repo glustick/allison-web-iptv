@@ -8,12 +8,26 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.5**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.6**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.61.6 — the decode check was feeding the decoder something invalid.** The operator's run on
+2026-09-28 reported `decoded frames: 0`, `0.0 frames/second` and a 300x150 canvas — and, worse, the
+release before this one *saved* that as the device's verdict. The fault was in the check: it handed the
+whole elementary stream to `decode()` as a single `EncodedVideoChunk`, and a chunk is one frame by
+definition. The decoder accepted the configuration and produced nothing at all. It now splits the stream
+into **access units** first (`splitAccessUnits` — on the first slice of each picture, with parameter
+sets attached to the picture they precede) and feeds one chunk per frame. Two consequences worth
+keeping. **A failed measurement is no longer recorded as a verdict**: the verdict is saved only when
+the run actually produced picture, and the result says so plainly when it did not — writing off a
+machine that was never given a fair test is the false negative this project keeps having to unlearn.
+And the panel now reports the stream as *“3.51 MB in N access units”*, so the next run distinguishes
+“the demux found nothing” from “the decoder produced nothing”. 695 tests, typecheck, lint and the
+client build clean.
 
 **v0.61.5 — the other sports.** The operator's correction: *“its not only football, its other sports as
 well … even though its called api football, there are other sports retrievable on that website.”*

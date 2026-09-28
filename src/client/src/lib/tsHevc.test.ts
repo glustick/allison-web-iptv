@@ -4,7 +4,39 @@ import { createRequire } from 'module'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { annexBNalTypes, extractHevcAnnexB, findHevcPid, TS_PACKET_SIZE } from './tsHevc.js'
+import { annexBNalTypes, extractHevcAnnexB, findHevcPid, splitAccessUnits, TS_PACKET_SIZE } from './tsHevc.js'
+
+describe('splitAccessUnits', () => {
+  // The failure this exists for, measured 2026-09-28: the decode check fed a whole elementary stream
+  // as ONE chunk, the decoder accepted it, and produced zero frames — which then read as a verdict on
+  // the device. A chunk is one frame, so the stream has to be cut into frames first.
+  function nal(type: number, payload: number[] = []): number[] {
+    return [0, 0, 0, 1, type << 1, 1, ...payload]
+  }
+
+  it('splits on the first slice of each picture, keeping parameter sets with what follows', () => {
+    const stream = Uint8Array.from([
+      ...nal(32), // VPS
+      ...nal(33), // SPS
+      ...nal(34), // PPS
+      ...nal(1, [0x80, 0xaa]), // first slice of picture 1
+      ...nal(1, [0x00, 0xbb]), // a later slice of the same picture
+      ...nal(1, [0x80, 0xcc]) // first slice of picture 2
+    ])
+    const units = splitAccessUnits(stream)
+    expect(units).toHaveLength(2)
+    // The parameter sets belong to the picture they precede.
+    expect(units[0][4] >> 1).toBe(32)
+    // The second unit begins at its own first slice.
+    expect(units[1][4] >> 1).toBe(1)
+  })
+
+  it('returns nothing for a stream with no picture in it', () => {
+    expect(splitAccessUnits(Uint8Array.from([...nal(32), ...nal(33)])).length).toBe(0)
+    expect(splitAccessUnits(new Uint8Array(0)).length).toBe(0)
+  })
+})
+
 
 const require = createRequire(import.meta.url)
 

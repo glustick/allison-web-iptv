@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { extractHevcAnnexB } from '../lib/tsHevc'
+import { extractHevcAnnexB, splitAccessUnits } from '../lib/tsHevc'
 import { saveVerdict } from '../lib/decodeGate'
 
 /**
@@ -100,39 +100,54 @@ export function DecoderCheck() {
         error: (error) => setStatus(`decoder error: ${error.message}`)
       })
 
-      setStatus(`decoding ${extracted.data.length} bytes of ${extracted.data.length > 0 ? 'HEVC' : 'nothing'}…`)
+      const units = splitAccessUnits(extracted.data)
+      const unitCount = units.length
+      setStatus(`decoding ${unitCount} access units (${(extracted.data.length / 1_000_000).toFixed(2)} MB)…`)
       const started = performance.now()
       decoder.configure(config)
       const Chunk = (
         globalThis as unknown as {
-          EncodedVideoChunk: new (init: { type: 'key'; timestamp: number; data: Uint8Array }) => unknown
+          EncodedVideoChunk: new (init: {
+            type: 'key' | 'delta'
+            timestamp: number
+            data: Uint8Array
+          }) => unknown
         }
       ).EncodedVideoChunk
-      decoder.decode(new Chunk({ type: 'key', timestamp: 0, data: extracted.data }))
+      // One chunk per frame, which is what a chunk *is* — feeding the whole elementary stream as one
+      // produced zero frames on a machine that had been decoding these streams fine (2026-09-28).
+      units.forEach((unit, index) => {
+        decoder.decode(new Chunk({ type: index === 0 ? 'key' : 'delta', timestamp: index * 20_000, data: unit }))
+      })
       await decoder.flush()
       const seconds = (performance.now() - started) / 1000
       decoder.close()
 
-      // Recorded per device (lib/decodeGate.ts): this is the gate a client-side player consults, and
-      // the reason to run this once on the machine that would be doing the decoding rather than
-      // trusting `isConfigSupported`, which answers a different question.
+      // Recorded per device (lib/decodeGate.ts) — but only when the run actually produced picture.
+      // A failed measurement is not a verdict on the machine, and saving one as "insufficient" would
+      // write off a device that was never given a fair test.
       const framesPerSecond = seconds > 0 ? frames / seconds : 0
-      saveVerdict({
-        measuredAt: Date.now(),
-        framesPerSecond,
-        presentedWidth: canvas?.width ?? 0,
-        presentedHeight: canvas?.height ?? 0,
-        codec: config.codec
-      })
+      const producedPicture = frames > 0 && (canvas?.width ?? 0) > 0 && (canvas?.height ?? 0) > 0
+      if (producedPicture) {
+        saveVerdict({
+          measuredAt: Date.now(),
+          framesPerSecond,
+          presentedWidth: canvas?.width ?? 0,
+          presentedHeight: canvas?.height ?? 0,
+          codec: config.codec
+        })
+      }
 
       setResult([
         `video PID: ${extracted.pid}`,
-        `elementary stream: ${(extracted.data.length / 1_000_000).toFixed(2)} MB`,
+        `elementary stream: ${(extracted.data.length / 1_000_000).toFixed(2)} MB in ${unitCount} access units`,
         `decoded frames: ${frames}`,
         `decode speed: ${framesPerSecond.toFixed(1)} frames/second (wall clock, including the first-frame setup)`,
         `presented size: ${canvas?.width ?? 0}x${canvas?.height ?? 0}`,
         `config the platform accepted: ${config.codec} (hardwareAcceleration: prefer-hardware)`,
-        'saved as this device\'s client-decode verdict — it is what the player and the media stats panel read'
+        producedPicture
+          ? 'saved as this device\'s client-decode verdict — it is what the player and the media stats panel read'
+          : 'NOT saved: the decoder accepted the configuration but produced no frames, so this run says nothing about the device. Re-run it, and if it repeats, report it as a finding about this browser build.'
       ])
       setStatus(null)
     } catch (error) {
