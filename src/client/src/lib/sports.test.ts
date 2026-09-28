@@ -254,3 +254,30 @@ describe('buildSportsSchedule', () => {
     expect(games[0].channels).toHaveLength(1)
   })
 })
+
+describe('sport grouping', () => {
+  // The first pane groups by SPORT, with the competitions as group headers inside the fixtures
+  // pane — so the schedule carries a sport level above the leagues, biggest sport first.
+  it('files each competition under its sport, biggest first', () => {
+    const categories = [
+      category('100', 'Live | English Premier League - EPL ⚽'),
+      category('200', 'UK | Sky Sports'),
+      category('300', 'USA | NFL 🏈'),
+      category('400', 'USA | NBA 🏀')
+    ]
+    const streams = [
+      stream('EPL01: Brentford 20:00 Chelsea', '100', 1),
+      stream('EPL02: Arsenal 20:00 Spurs', '100', 2),
+      stream('NFL 01: Chiefs vs Bills @ 8:00 pm', '300', 3),
+      stream('NBA 01: Lakers vs Celtics @ 7:00 pm', '400', 4)
+    ]
+    const s = buildSportsSchedule(streams, categories, NOW)
+    // Football has two channels, the rest one each (tie broken by label) — football first.
+    expect(s.sports.map((sport) => sport.id)).toEqual(['football', 'american-football', 'basketball'])
+    expect(s.sports[0].label).toBe('Football')
+    expect(s.sports[0].channelCount).toBe(2)
+    expect(s.sports.find((sport) => sport.id === 'american-football')?.leagueIds).toEqual(['nfl'])
+    // Every league carries the sport it was filed under.
+    expect(s.leagues.find((l) => l.id === 'nba')?.sportId).toBe('basketball')
+  })
+})

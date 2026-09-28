@@ -30,6 +30,8 @@ export interface SportsGroup {
   channelCount: number
   /** Zone this league's feed quotes bare kickoff wall times in; null = already viewer-local. */
   venueTz: string | null
+  /** The sport this competition belongs to — the first pane groups on it (see SportId). */
+  sportId: SportId
 }
 
 /** The kickoff wall time exactly as written in the channel name, with its tz suffix if any. */
@@ -64,8 +66,18 @@ export interface SportsGame {
   channels: LiveStream[]
 }
 
+/** One sport, with the competitions that belong to it — the Sports tab's first pane. */
+export interface SportsSport {
+  id: string
+  label: string
+  leagueIds: string[]
+  channelCount: number
+}
+
 export interface SportsSchedule {
   leagues: SportsGroup[]
+  /** Sports present in the catalogue, biggest first — the drill-down's entry point. */
+  sports: SportsSport[]
   /** league id → every parsed game for that league (all days; the view filters by day). */
   gamesByLeague: Record<string, SportsGame[]>
   /** Plain carrier channels (Sky Sports Main Event etc.) across every carrier category — the
@@ -125,6 +137,62 @@ const LEAGUE_RULES: LeagueRule[] = [
   { id: 'golf', label: 'Golf', country: 'World', isFootball: false, venueTz: null, keywords: ['golf', 'pga', 'ryder'] },
   { id: 'darts-snooker', label: 'Darts & Cue Sports', country: 'World', isFootball: false, venueTz: null, keywords: ['darts', 'snooker', 'matchroom', 'ultimate pool'] }
 ]
+
+// Which SPORT each competition belongs to — the Sports tab's first pane groups by sport
+// (Football, American Football, Basketball…), and the leagues become the group headers inside the
+// fixtures pane. Kept as a lookup rather than a field on every rule so the ported rule table
+// above stays byte-identical to the desktop's; a rule added without an entry here simply files
+// under "Other sports" rather than breaking.
+export type SportId =
+  | 'football' | 'american-football' | 'basketball' | 'ice-hockey' | 'baseball' | 'fighting'
+  | 'tennis' | 'cricket' | 'rugby' | 'motorsport' | 'aussie-rules' | 'golf' | 'cue-sports' | 'other'
+
+const SPORT_LABELS: Record<SportId, string> = {
+  football: 'Football',
+  'american-football': 'American Football',
+  basketball: 'Basketball',
+  'ice-hockey': 'Ice Hockey',
+  baseball: 'Baseball',
+  fighting: 'Fighting',
+  tennis: 'Tennis',
+  cricket: 'Cricket',
+  rugby: 'Rugby',
+  motorsport: 'Motorsport',
+  'aussie-rules': 'Aussie Rules',
+  golf: 'Golf',
+  'cue-sports': 'Darts & Cue Sports',
+  other: 'Other sports'
+}
+
+const SPORT_OF_LEAGUE: Record<string, SportId> = {
+  'premier-league': 'football', 'champions-league': 'football', 'europa-league': 'football',
+  'conference-league': 'football', 'la-liga': 'football', 'serie-a': 'football',
+  bundesliga: 'football', 'ligue-1': 'football', championship: 'football',
+  'efl-leagues': 'football', spfl: 'football', 'fa-cup': 'football', friendlies: 'football',
+  mls: 'football', football: 'football',
+  nfl: 'american-football',
+  nba: 'basketball',
+  nhl: 'ice-hockey',
+  mlb: 'baseball',
+  fighting: 'fighting',
+  tennis: 'tennis',
+  cricket: 'cricket',
+  rugby: 'rugby',
+  motorsport: 'motorsport',
+  'aussie-rules': 'aussie-rules',
+  golf: 'golf',
+  'darts-snooker': 'cue-sports'
+}
+
+/** The display name of a sport id. */
+export function sportLabel(sportId: string): string {
+  return SPORT_LABELS[sportId as SportId] ?? SPORT_LABELS.other
+}
+
+/** Which sport a competition belongs to. */
+export function sportOfLeague(leagueId: string): SportId {
+  return SPORT_OF_LEAGUE[leagueId] ?? 'other'
+}
 
 // Categories that exist to carry broadcast channels rather than one competition's events.
 // They no longer become browse groups — their channels go to the left pane's flat Channels
@@ -464,7 +532,8 @@ export function buildSportsSchedule(streams: LiveStream[], categories: Category[
         isFootball: rule.isFootball,
         categoryIds: [],
         channelCount: 0,
-        venueTz: rule.venueTz
+        venueTz: rule.venueTz,
+        sportId: sportOfLeague(rule.id)
       }
       groupsById.set(rule.id, group)
     }
@@ -517,7 +586,25 @@ export function buildSportsSchedule(streams: LiveStream[], categories: Category[
   })
   carrierChannels.sort((a, b) => a.num - b.num)
 
-  return { leagues, gamesByLeague, channels: carrierChannels }
+  // The sport level above the leagues — only sports that actually have channels, biggest first.
+  const sportsById = new Map<string, SportsSport>()
+  for (const group of groupsById.values()) {
+    const sport = sportsById.get(group.sportId) ?? {
+      id: group.sportId,
+      label: sportLabel(group.sportId),
+      leagueIds: [],
+      channelCount: 0
+    }
+    sport.leagueIds.push(group.id)
+    sport.channelCount += group.channelCount
+    sportsById.set(group.sportId, sport)
+  }
+  const sports = [...sportsById.values()].sort((a, b) => {
+    if (b.channelCount !== a.channelCount) return b.channelCount - a.channelCount
+    return a.label.localeCompare(b.label)
+  })
+
+  return { leagues, sports, gamesByLeague, channels: carrierChannels }
 }
 
 /** Games for one local day (dayKey from dayKeyOf), kickoff-ordered. */
