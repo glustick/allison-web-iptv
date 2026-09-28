@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.56.0 — the day's fixtures, and a channel for each)
+
+The Sports tab's middle pane now shows the **whole day's fixtures for the selected sport**, not just
+the ones the provider names: api-football's fixtures are paired with the provider's own rows, and a
+fixture the provider does not carry is still listed — marked “no channel” — and selecting it
+searches your channels for one that mentions either team. Pairing is exact first, then a
+conservative loose pass that refuses ambiguous matches, so a score is never put beside the wrong
+fixture. 592 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.55.0 — the Sports tab's scores, and the layout the operator asked for)
 
 The Sports tab is now **[ sports ] → [ fixtures for the day, grouped by league ] → [ channels ]**:

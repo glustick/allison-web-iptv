@@ -1638,6 +1638,31 @@ body.resizing-col .resize-handle--feeds::after {
   font-size: 13px;
 }
 
+/* A fixture the provider does not carry: muted, amber, clearly not a "go watch this" row. */
+.sports-row-count--warn {
+  color: #d9a441;
+}
+
+.sports-section-note {
+  margin-left: 8px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #d9a441;
+}
+
+/* The explanation above the fallback channel list for a provider-less fixture. */
+.sports-callout {
+  margin: 8px 10px;
+  padding: 11px 13px;
+  border: 1px solid #3a3320;
+  border-left: 3px solid #d9a441;
+  background: #191712;
+  color: #d9c9a8;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
 /* Narrow screens: stack the two panes instead of squeezing them side by side. */
 @media (max-width: 900px) {
   .sports-split {

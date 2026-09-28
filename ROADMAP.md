@@ -8,12 +8,27 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.55.0**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.56.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.56.0 — the Sports tab, phase 3: the day's fixtures, and a way to a channel for each.** The
+middle pane now carries the **whole day's fixtures for the selected sport**, not only the ones the
+provider happens to name. api-football's fixtures are paired with the provider's own rows, and
+anything left unpaired is listed under its competition marked **“no channel”**, in amber; selecting
+one shows the third pane's fallback — *“No channel on your provider names this fixture”* — followed
+by every channel whose name mentions either team, ranked and playable. Pairing runs in two tiers
+(`matchFixturesToGames`): the exact normalized team pair first, then a deliberately conservative
+loose pass that accepts a club whose feed name is a prefix of the provider's (“Newcastle United” /
+“Newcastle”, “Brighton” / “Brighton & Hove Albion”) and **refuses an ambiguous match outright** —
+one candidate or none — because a wrong score beside a fixture is worse than a missing one. Generic
+words (“united”, “city”) can never carry a match by themselves, and the same stoplist keeps the
+fallback name search from matching half the catalogue. An unpaired fixture still shows both clocks,
+from the feed's own instant and the league-country map. With no key the pane is the provider's
+schedule exactly as before. 592 tests (10 new), typecheck, lint and the client build clean.
 
 **v0.55.0 — the Sports tab's live scores, and the layout the operator asked for.** Two changes in
 one release. **(1) The layout is now [ sports ] → [ fixtures for the day, grouped by league ] →
@@ -884,8 +899,12 @@ arithmetic with `Intl` rather than a fixed offset.
    alongside them, so every row still leads to channels; see the v0.55.0 release note.
 3. **The fixtures strip.** Above the schedule, live-first, with the api-football-style league grouping
    and the "N feeds" badge; failures stay one line.
-4. **Later, and labelled as such:** click-through from a fixture to its channel — the desktop's own
-   known alpha limit — and scores on the provider's game rows (its names carry none).
+4. **Fixture → channel click-through, and scores on the provider's rows.** *Landed — scores
+   2026-09-28 (v0.55.0), click-through the same day (v0.56.0).* The provider's own rows carry the
+   feed's scores (its names carry none of their own), and a fixture the provider does not name is
+   still listed and still leads somewhere: selecting it searches the catalogue for a channel
+   mentioning either team. See the two release notes at the top of this file. Nothing from the
+   desktop's own alpha limits remains open here.
 
 ### Decisions to confirm before phase 2
 
