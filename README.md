@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.54.0 — a Sports tab)
+
+The desktop sibling's Sports tab, phase 1. The provider's own channel names are parsed into
+competitions (Premier League, La Liga, NFL…) and the day's games, each game listing every channel
+carrying it, with kickoffs shown in both the venue's timezone and your own. Built on the desktop's
+own pure `lib/sports.ts` and `lib/gameTimes.ts`, ported code-identical with their tests. api-football
+fixtures are **not** in yet — that is phase 2, and the tab is fully usable without them. 564 tests,
+typecheck, lint and the client build clean.
+
 ## Current state (v0.53.9 — an ffmpeg failure leads with its cause)
 
 The transcoder keeps a rolling tail of ffmpeg's stderr, and on a failed start reported only its

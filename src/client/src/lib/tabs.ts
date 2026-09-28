@@ -4,7 +4,7 @@
 // part of watching something. Switching to them in the same tab unmounts the player, so a stream
 // stops playing — reported as "should open new tabs, as to not disrupt the media being played".
 // Opening them separately leaves the player exactly where it was.
-export const TAB_KEYS = ['live', 'movies', 'series', 'epg', 'admin', 'system'] as const
+export const TAB_KEYS = ['live', 'movies', 'series', 'sports', 'epg', 'admin', 'system'] as const
 export type TabKey = (typeof TAB_KEYS)[number]
 
 /** Tabs that open in their own browser tab rather than replacing what is playing. */

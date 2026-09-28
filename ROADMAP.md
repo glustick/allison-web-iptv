@@ -8,12 +8,28 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.53.9**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.54.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.54.0 — the Sports tab, phase 1: the desktop app's schedule, ported.** The competition → day →
+game → channels drill-down now exists here, built on the desktop sibling's own pure modules:
+`lib/sports.ts` (fixture parsing out of channel names, cross-category game collapse,
+api-football-style competition grouping, Today ± 7 day picker) and `lib/gameTimes.ts` (dual
+venue/local kickoff times, DST-correct via `Intl`). Both were ported **code-identical** — the
+desktop wrote them with no DOM/Electron imports precisely so they could be shared — with both test
+suites (31 tests) carried across. A new top-level **Sports** tab sits beside Series: the sidebar
+lists the competitions and the flat carrier-channel list, the middle column the selected
+competition's games for the selected day, the right column the channels carrying the selected game;
+clicking a channel plays it in the existing live player and both panes drag-resize with the app's
+existing handle machinery. **No api-football here yet** — that is phase 2, and the tab is fully
+usable without it. The one adaptation from the desktop: it reads the whole-catalogue cache it
+already holds, whereas this app fetches only the categories that classify as sports, rather than
+pulling all ~27k channels to discard most of them. 564 tests, typecheck, lint and the client build
+all clean.
 
 **v0.53.9 — an ffmpeg failure now leads with the line that names it.** The transcoder keeps a
 40-line rolling tail of ffmpeg's stderr, and on a failed start reported only its last ten lines —
@@ -832,6 +848,8 @@ arithmetic with `Intl` rather than a fixed offset.
    tests, add the Sports tab (top-level, like the desktop's, beside Live TV), and render
    groups → day → games → feeds from the catalogue already in hand. This is the whole 0.7.109 feature
    and needs nothing stored and no decision from anyone. **If only one phase ever ships, ship this one.**
+   *Landed 2026-09-28 (v0.54.0)* — the modules are ported code-identical and the tab is live; see the
+   release note at the top of this file. The remaining phases below are unchanged.
 2. **The api-football proxy.** `GET/PUT /api/sports/settings` (set/clear the key; return `keySet` only)
    and `GET /api/sports/fixtures?date=`, with the key in the account envelope, the host pinned, a shared
    cache and a rate limit, plus a Settings → "Sports data" section written the way the Playlists screen

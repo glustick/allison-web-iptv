@@ -12,6 +12,7 @@ import type { SearchHit } from './lib/system'
 import { LiveTv } from './components/LiveTv'
 import { Movies } from './components/Movies'
 import { Series } from './components/Series'
+import { SportsView } from './components/SportsView'
 import { formatElapsedTime } from './lib/connectionTiming'
 import {
   connectIptv,
@@ -24,7 +25,7 @@ import {
   type Session
 } from './lib/appAuth'
 
-type Tab = 'live' | 'movies' | 'series' | 'epg' | 'admin' | 'system'
+type Tab = 'live' | 'movies' | 'series' | 'sports' | 'epg' | 'admin' | 'system'
 
 // The post-login IPTV check has three outcomes: no config yet (ask for it), config present
 // (auto-connect), or config present but broken (ask for it again, pre-filled, with the
@@ -233,6 +234,9 @@ export default function App(): JSX.Element {
           <button className={tab === 'series' ? 'tab active' : 'tab'} onClick={() => setTab('series')} disabled={!session}>
             Series
           </button>
+          <button className={tab === 'sports' ? 'tab active' : 'tab'} onClick={() => setTab('sports')} disabled={!session}>
+            Sports
+          </button>
           {/* Opens in its own tab: this is configuration, and swapping tabs here would tear down
               whatever is playing. A real link, so middle-click and cmd-click work too. */}
           <a
@@ -311,6 +315,7 @@ export default function App(): JSX.Element {
       {session && tab === 'series' && (
         <Series session={session} playRequest={playRequest} onPlayHandled={() => setPlayRequest(null)} />
       )}
+      {session && tab === 'sports' && <SportsView session={session} />}
       {session && tab === 'epg' && <EpgSettings session={session} />}
       {tab === 'admin' && appUser.role === 'admin' && <AdminConsole appUser={appUser} />}
       {tab === 'system' && appUser.role === 'admin' && <SystemPanel />}
