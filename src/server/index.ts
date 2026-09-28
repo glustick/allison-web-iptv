@@ -34,6 +34,7 @@ import {
 } from './lib/playlists.js'
 import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UserRole } from './lib/usersStore.js'
 import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
+import { createSportsFixturesService } from './lib/sportsFixtures.js'
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
 import { createSearchService } from './lib/searchService.js'
 import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagnostics.js'
@@ -307,6 +308,7 @@ const transcodeService = createTranscodeService({
 // wider channel→guide matching layer (epgMatching.ts) that recovers channels the exact-id join
 // missed.
 const epgService = createEpgService()
+const sportsFixturesService = createSportsFixturesService()
 
 const MAX_EPG_URLS = 8
 
@@ -1566,6 +1568,78 @@ app.put('/api/iptv/playlists', requireAuth, (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Could not save the playlists' })
   }
+})
+
+// --- Sports fixtures (api-football.com) ------------------------------------------------------
+// The Sports tab's live scores. The key is the account's own, stored encrypted with the rest of
+// its credentials and never returned — the settings screen only learns *whether* one is set. The
+// host is pinned inside the service and every request spends the key server-side, so the browser
+// never holds or sends it (the same rule as the provider credentials, v0.11.0).
+app.get('/api/sports/config', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    const credentials = resolveAccountCredentials(session.username)
+    res.json({ ok: true, keySet: Boolean(credentials?.apiFootballKey) })
+  } catch (err) {
+    console.error('[sports] config failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
+app.post('/api/sports/key', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const raw = req.body?.key
+  // null (or an absent field) clears it; anything else must be a string.
+  const key = raw === null || raw === undefined ? '' : typeof raw === 'string' ? raw.trim() : null
+  if (key === null) {
+    res.status(400).json({ error: 'key must be a string, or null to clear it' })
+    return
+  }
+  if (key.length > 200) {
+    res.status(400).json({ error: 'That is longer than any api-football key — check what was pasted' })
+    return
+  }
+  try {
+    // Written through the same credential envelope as everything else, so guide URLs, the alert
+    // webhook and the playlist list are untouched by a key change.
+    saveAccountCredentials(session.username, { apiFootballKey: key.length > 0 ? key : undefined })
+    res.json({ ok: true, keySet: key.length > 0 })
+  } catch (err) {
+    console.error('[sports] saving the key failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
+app.get('/api/sports/fixtures', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
+    const session = req.authSession as AuthSession
+    const date = String(req.query.date ?? '')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.status(400).json({ error: 'date must be YYYY-MM-DD' })
+      return
+    }
+    let credentials: SessionCredentials | null
+    try {
+      credentials = resolveAccountCredentials(session.username)
+    } catch (err) {
+      console.error('[sports] fixtures failed reading credentials:', err)
+      res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+      return
+    }
+    const key = credentials?.apiFootballKey
+    // No key is a normal state, not an error: the Sports tab simply keeps its provider schedule.
+    if (!key) {
+      res.json({ ok: true, configured: false, fixtures: [], error: null })
+      return
+    }
+    try {
+      const result = await sportsFixturesService.getFixtures(date, key)
+      res.json({ ok: true, configured: true, fixtures: result.fixtures, error: result.error })
+    } catch (err) {
+      console.error('[sports] fixtures failed:', err)
+      res.status(500).json({ error: `Could not fetch fixtures: ${err instanceof Error ? err.message : String(err)}` })
+    }
+  })()
 })
 
 app.get('/api/epg/config', requireAuth, (req, res) => {

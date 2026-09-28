@@ -6,6 +6,17 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.55.0 — the Sports tab's scores, and the layout the operator asked for)
+
+The Sports tab is now **[ sports ] → [ fixtures for the day, grouped by league ] → [ channels ]**:
+the first pane lists the sports (Football, American Football, Basketball…), the middle the selected
+sport's fixtures for the chosen day with the competitions as group headers, and the channel
+integration is the last pane, reached by picking a fixture. Kickoffs read as the venue's clock with
+your own in brackets (*3:00 pm (10:00 pm)*), and a match in play shows its score instead — *Live
+0-0*. Live scores come from api-football.com, whose key lives encrypted on the server (Admin →
+Sports data) and never reaches the browser; with no key the tab keeps working and says so. 582
+tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.54.0 — a Sports tab)
 
 The desktop sibling's Sports tab, phase 1. The provider's own channel names are parsed into

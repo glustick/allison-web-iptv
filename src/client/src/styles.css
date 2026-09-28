@@ -1606,6 +1606,38 @@ body.resizing-col .resize-handle--feeds::after {
   width: 3px;
 }
 
+/* A live score reads differently from a kickoff time — it is news, not a schedule. */
+.sports-row-time--live {
+  color: #6ea8ff;
+  font-weight: 600;
+}
+
+/* The small state pills in a pane header: "add a key for live scores", "scores unavailable". */
+.sports-head-hint {
+  font-size: 11px;
+  color: #8a93a3;
+  border: 1px solid #2a2f3d;
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.sports-head-hint--warn {
+  color: #d9a441;
+  border-color: #4a3c22;
+}
+
+/* The api-football key field in Admin → Sports data. */
+.sports-key-input {
+  min-width: 18rem;
+  padding: 6px 10px;
+  background: #0b0d12;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #e7e9ee;
+  font-size: 13px;
+}
+
 /* Narrow screens: stack the two panes instead of squeezing them side by side. */
 @media (max-width: 900px) {
   .sports-split {

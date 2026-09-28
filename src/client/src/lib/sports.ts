@@ -57,6 +57,9 @@ export interface ParsedEvent {
 export interface SportsGame {
   key: string
   leagueId: string
+  /** The normalized team pair, sorted — the same key an api-football fixture produces, which is
+   *  how a live score is matched onto this game (see lib/sportsFixtures.ts). */
+  pairKey: string
   homeDisplay: string
   awayDisplay: string
   /** Local calendar day (YYYY-MM-DD) the kickoff lands on, or null when unscheduled. */
@@ -382,6 +385,15 @@ function extractKickoff(text: string, now: Date, venueHintTz?: string | null): D
 }
 
 /**
+ * The match key for a bare team name — the same normalization `cleanTeam` applies to a provider
+ * channel name, so an api-football fixture's teams can be matched to the provider's own fixture
+ * rows (see the Sports tab's score enrichment).
+ */
+export function teamMatchKey(name: string): string {
+  return cleanTeam(name).key
+}
+
+/**
  * Parses one channel name into a matchup, or null when the channel is a carrier ("Sky Sports
  * Main Event UHD", "NRL : NEWCASTLE KNIGHTS") rather than a specific event. `venueHintTz` is
  * the quoting zone of the category this channel lives in (see classifyCategory) — it governs
@@ -550,6 +562,7 @@ export function buildSportsSchedule(streams: LiveStream[], categories: Category[
       game = {
         key,
         leagueId: rule.id,
+        pairKey: pair,
         homeDisplay: event.homeDisplay,
         awayDisplay: event.awayDisplay,
         dayKey,

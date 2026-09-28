@@ -43,7 +43,11 @@ export function fetchTextViaUpstream(
   // Bytes received so far and the response's content-length, if it declares one. Progress is
   // counted on the wire bytes (the encoded size), which is what content-length describes. A
   // premature-close retry restarts the count from zero — which is honest about what a retry is.
-  onProgress?: (receivedBytes: number, totalBytes: number | null) => void
+  onProgress?: (receivedBytes: number, totalBytes: number | null) => void,
+  // Extra request headers. Needed by the api-football fixtures fetch, whose auth is an
+  // `x-apisports-key` header rather than a query parameter; left unset everywhere else, which
+  // keeps every existing call byte-identical on the wire.
+  headers?: Record<string, string>
 ): Promise<string> {
   // The provider's edge intermittently drops long transfers midway — measured live on the
   // operator's deployment: a 1.7GB guide died at 26.5 MB ("connection closed before the download
@@ -61,6 +65,7 @@ export function fetchTextViaUpstream(
         stallCheckIntervalMs,
         responseTimeoutMs
       })
+      for (const [name, value] of Object.entries(headers ?? {})) req.setHeader(name, value)
       let redirects = 0
       req.on('redirect', () => {
         if (redirects >= MAX_REDIRECTS) {

@@ -8,12 +8,37 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.54.0**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.55.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.55.0 — the Sports tab's live scores, and the layout the operator asked for.** Two changes in
+one release. **(1) The layout is now [ sports ] → [ fixtures for the day, grouped by league ] →
+[ channels ].** The first pane lists the *sports* (Football, American Football, Basketball…), the
+middle pane the selected sport's fixtures for the chosen day with the competitions as group
+headers, and the channel integration is deliberately the last pane, reached by picking a fixture.
+Kickoffs now read exactly as asked — the venue's wall clock with the browser's own in brackets,
+*3:00 pm (10:00 pm)* — and a match in play shows its score instead: *Sunderland vs Newcastle / Live
+0-0*. The sport level above the leagues is new (a `SPORT_OF_LEAGUE` map in lib/sports.ts, so the
+ported rule table stays byte-identical to the desktop's). **(2) The score source.** The provider's
+channel names carry no scores, so live scores come from **api-football.com**: a new server-side
+service (`lib/sportsFixtures.ts`) with the host pinned to `v3.football.api-sports.io`, the
+account's key stored **encrypted with its other credentials** and never returned to the browser, a
+header path added to the shared upstream fetch, a five-minute shared cache (one minute for a
+failure, scoped to the key that produced it so a corrected key takes effect on the next request),
+and Admin → **Sports data** to set or clear it. With no key the tab is exactly as before, and its
+header says so.
+
+**What this deliberately does not do:** it does not list api-football's own fixtures as a separate
+source. The middle pane stays the *provider's* schedule — every row already has channels behind it,
+which is what the third pane is for — and the feed's scores are matched onto those rows by the
+parser's own normalized team pair (`fixtureMatchKey`). An api-football fixture the provider does not
+carry therefore does not appear, and a fixture whose team names differ beyond the parser's
+normalization will not match. Both are honest limits rather than silent gaps. 582 tests (18 new),
+typecheck, lint and the client build clean.
 
 **v0.54.0 — the Sports tab, phase 1: the desktop app's schedule, ported.** The competition → day →
 game → channels drill-down now exists here, built on the desktop sibling's own pure modules:
@@ -853,7 +878,10 @@ arithmetic with `Intl` rather than a fixed offset.
 2. **The api-football proxy.** `GET/PUT /api/sports/settings` (set/clear the key; return `keySet` only)
    and `GET /api/sports/fixtures?date=`, with the key in the account envelope, the host pinned, a shared
    cache and a rate limit, plus a Settings → "Sports data" section written the way the Playlists screen
-   already is.
+   already is. *Landed 2026-09-28 (v0.55.0)* — endpoints came out as `GET /api/sports/config`,
+   `POST /api/sports/key` and `GET /api/sports/fixtures`, and the section is in the admin console. As
+   built, the feed's scores are merged onto the provider's own fixture rows rather than listed
+   alongside them, so every row still leads to channels; see the v0.55.0 release note.
 3. **The fixtures strip.** Above the schedule, live-first, with the api-football-style league grouping
    and the "N feeds" badge; failures stay one line.
 4. **Later, and labelled as such:** click-through from a fixture to its channel — the desktop's own

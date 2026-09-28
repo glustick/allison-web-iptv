@@ -13,6 +13,12 @@ import {
   type SportsSport
 } from '../lib/sports'
 import { formatDualFromWall } from '../lib/gameTimes'
+import {
+  fetchFixtures,
+  fetchSportsConfig,
+  indexFixturesByMatch,
+  type ApiFootballFixture
+} from '../lib/sportsFixtures'
 import type { Category, LiveStream } from '../lib/types'
 
 // The Sports tab: the desktop sibling's (iptv-app 0.7.109 → 0.8.0), ported and re-arranged to the
@@ -77,6 +83,46 @@ function feedCount(count: number): string {
   return `${count} feed${count === 1 ? '' : 's'}`
 }
 
+/** The score line for a fixture whose feed has one — in play first, then full time. */
+function scoreLine(fixture: ApiFootballFixture | undefined): { text: string; live: boolean } | null {
+  if (!fixture) return null
+  const hasScore = fixture.homeGoals !== null && fixture.awayGoals !== null
+  if (fixture.live) return { text: hasScore ? `Live ${fixture.homeGoals}-${fixture.awayGoals}` : 'Live', live: true }
+  if (fixture.finished && hasScore) return { text: `FT ${fixture.homeGoals}-${fixture.awayGoals}`, live: false }
+  return null
+}
+
+/** One fixture row: the matchup, its kickoff in both clocks — or its score once it is under way. */
+function GameRow({
+  game,
+  score,
+  hour12,
+  selected,
+  onToggle
+}: {
+  game: SportsGame
+  score: { text: string; live: boolean } | null
+  hour12: boolean
+  selected: boolean
+  onToggle: () => void
+}): JSX.Element {
+  const status = score ? score.text : formatKickoff(game, hour12)
+  return (
+    <button
+      className={selected ? 'sports-row active' : 'sports-row'}
+      aria-pressed={selected}
+      onClick={onToggle}
+      title={`${status} · ${feedCount(game.channels.length)} carry this fixture`}
+    >
+      <span className="sports-row-label">
+        {game.homeDisplay} vs {game.awayDisplay}
+        <span className={score?.live ? 'sports-row-time sports-row-time--live' : 'sports-row-time'}>{status}</span>
+      </span>
+      <span className="sports-row-count">{feedCount(game.channels.length)}</span>
+    </button>
+  )
+}
+
 export function SportsView({ session }: { session: Session }): JSX.Element {
   const [categories, setCategories] = useState<Category[]>([])
   const [streams, setStreams] = useState<LiveStream[]>([])
@@ -89,6 +135,11 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
   // The schedule buckets games by day, so it is built once against a fixed "now"; the day *picker*
   // below uses the live clock, which is what "Today" means to a viewer.
   const [builtAt] = useState(() => new Date())
+  // Live scores (api-football.com). `keySet === null` means "not asked yet"; false is a normal
+  // state — the schedule works without it, only the scores are absent.
+  const [fixtures, setFixtures] = useState<ApiFootballFixture[]>([])
+  const [keySet, setKeySet] = useState<boolean | null>(null)
+  const [fixturesError, setFixturesError] = useState<string | null>(null)
 
   const hour12 = useMemo(localeUses12Hour, [])
 
@@ -172,6 +223,41 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
   )
 
   const dayKey = dayKeyOf(new Date(Date.now() + dayOffset * 86_400_000))
+
+  // The key's presence, not the key itself: it lives on the server and is never sent here.
+  useEffect(() => {
+    void fetchSportsConfig()
+      .then(({ keySet: present }) => setKeySet(present))
+      .catch(() => setKeySet(false))
+  }, [])
+
+  // A day's fixtures, for the scores. Five minutes matches the feed's own refetch cadence, which is
+  // what keeps a live score honest without spending a free-tier quota on every render.
+  useEffect(() => {
+    if (!keySet) return
+    let cancelled = false
+    const load = (): void => {
+      void fetchFixtures(dayKey)
+        .then((result) => {
+          if (cancelled) return
+          setFixtures(result.fixtures)
+          setFixturesError(result.error)
+        })
+        .catch((err) => {
+          if (cancelled) return
+          setFixtures([])
+          setFixturesError(err instanceof Error ? err.message : 'Could not load fixtures')
+        })
+    }
+    load()
+    const timer = window.setInterval(load, 300_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [keySet, dayKey])
+
+  const fixtureIndex = useMemo(() => indexFixturesByMatch(fixtures), [fixtures])
   // The selected sport's games for the chosen day, grouped by the league they belong to (the
   // league order the schedule already sorted: football first, then by size).
   const gamesByLeagueForDay = useMemo(() => {
@@ -274,6 +360,16 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                 <span className="sports-head-sub">
                   {dayCount} fixture{dayCount === 1 ? '' : 's'}
                 </span>
+                {keySet === false && (
+                  <span className="sports-head-hint" title="Set an api-football.com key in Admin → Sports data">
+                    Add a key for live scores
+                  </span>
+                )}
+                {fixturesError && (
+                  <span className="sports-head-hint sports-head-hint--warn" title={fixturesError}>
+                    Scores unavailable
+                  </span>
+                )}
                 <span className="sports-day-nav" role="group" aria-label="Pick a day">
                   <button
                     type="button"
@@ -307,19 +403,14 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                   <div key={league.id}>
                     <div className="sports-section">{league.label}</div>
                     {games.slice(0, MAX_ROWS).map((game) => (
-                      <button
+                      <GameRow
                         key={game.key}
-                        className={game.key === selectedGameKey ? 'sports-row active' : 'sports-row'}
-                        aria-pressed={game.key === selectedGameKey}
-                        onClick={() => setSelectedGameKey(game.key === selectedGameKey ? null : game.key)}
-                        title={`${formatKickoff(game, hour12)} · ${feedCount(game.channels.length)} carry this fixture`}
-                      >
-                        <span className="sports-row-label">
-                          {game.homeDisplay} vs {game.awayDisplay}
-                          <span className="sports-row-time">{formatKickoff(game, hour12)}</span>
-                        </span>
-                        <span className="sports-row-count">{feedCount(game.channels.length)}</span>
-                      </button>
+                        game={game}
+                        score={scoreLine(fixtureIndex.get(game.pairKey))}
+                        hour12={hour12}
+                        selected={game.key === selectedGameKey}
+                        onToggle={() => setSelectedGameKey(game.key === selectedGameKey ? null : game.key)}
+                      />
                     ))}
                     {games.length > MAX_ROWS && (
                       <div className="sports-empty">…and {games.length - MAX_ROWS} more fixtures</div>
@@ -330,18 +421,14 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                   <div key={`unscheduled-${league.id}`}>
                     <div className="sports-section">{league.label} · unscheduled</div>
                     {games.slice(0, MAX_ROWS).map((game) => (
-                      <button
+                      <GameRow
                         key={game.key}
-                        className={game.key === selectedGameKey ? 'sports-row active' : 'sports-row'}
-                        aria-pressed={game.key === selectedGameKey}
-                        onClick={() => setSelectedGameKey(game.key === selectedGameKey ? null : game.key)}
-                      >
-                        <span className="sports-row-label">
-                          {game.homeDisplay} vs {game.awayDisplay}
-                          <span className="sports-row-time">Time TBD</span>
-                        </span>
-                        <span className="sports-row-count">{feedCount(game.channels.length)}</span>
-                      </button>
+                        game={game}
+                        score={scoreLine(fixtureIndex.get(game.pairKey))}
+                        hour12={hour12}
+                        selected={game.key === selectedGameKey}
+                        onToggle={() => setSelectedGameKey(game.key === selectedGameKey ? null : game.key)}
+                      />
                     ))}
                   </div>
                 ))}

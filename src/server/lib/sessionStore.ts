@@ -16,6 +16,11 @@ export interface SessionCredentials {
   // the credentials rather than in preferences because it is a posting credential: anyone holding it
   // can write to that channel.
   alertWebhook?: string
+  // An api-football.com key for the Sports tab's fixtures and live scores (see
+  // lib/sportsFixtures.ts). A secret like the rest of this bundle, and for the same reason it is
+  // stored here rather than in browser storage: the browser must never hold it, and every request
+  // that spends it is made by the server.
+  apiFootballKey?: string
 }
 
 export interface EncryptedSessionPayload {
