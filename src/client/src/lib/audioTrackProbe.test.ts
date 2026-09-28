@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { forgetProbedTracks, probeAudioTracks } from './audioTrackProbe'
+import { forgetRememberedTracks } from './transcodeHints'
 
-afterEach(() => { forgetProbedTracks() })
+// Both caches are module-level and now persist across tests: the session probe cache, and the probe
+// answers remembered for the server (lib/transcodeHints.ts → channel_plans). A test that left either
+// populated would make the next one skip its own injected fetch — which is exactly what happened the
+// first time this was written.
+afterEach(() => {
+  forgetProbedTracks()
+  forgetRememberedTracks()
+})
 
 function jsonResponse(body: unknown, ok = true) {
   return { ok, status: ok ? 200 : 500, json: async () => body } as unknown as Response

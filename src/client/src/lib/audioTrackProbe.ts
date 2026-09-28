@@ -31,12 +31,27 @@ export function forgetProbedTracks(): void {
   probed.clear()
 }
 
+import { rememberStreamFacts, rememberedTracks } from './transcodeHints'
+
 export async function probeStreamTracks(
   url: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<ProbedStream> {
   const cached = probed.get(url)
   if (cached) return cached
+  // Remembered from a previous session — the server keeps what each channel's stream carries
+  // (lib/channelPlans.ts, mirrored by lib/transcodeHints.ts), so a fresh page load does not have to
+  // probe a live source again. That ffprobe is the "waiting for timeouts" the operator asked to stop
+  // paying on every click (2026-09-28).
+  const remembered = rememberedTracks(url)
+  if (remembered) {
+    const payload: ProbedStream = {
+      audioTracks: remembered.audioCodecs.map((codec, index) => ({ index, codec })),
+      videoCodec: remembered.videoCodec
+    }
+    probed.set(url, payload)
+    return payload
+  }
   try {
     const res = await fetchImpl('/api/transcode/probeTracks', {
       method: 'POST',
@@ -55,6 +70,11 @@ export async function probeStreamTracks(
       videoCodec: typeof data.videoCodec === 'string' && data.videoCodec ? data.videoCodec : null
     }
     probed.set(url, payload)
+    // Recorded so the next session — or another device in the house — does not ask the provider again.
+    rememberStreamFacts(url, {
+      videoCodec: payload.videoCodec,
+      audioCodecs: payload.audioTracks.map((track) => track.codec)
+    })
     return payload
   } catch {
     // A failed probe is not evidence of anything: play the stream as we would have anyway.

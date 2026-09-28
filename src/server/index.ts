@@ -1779,6 +1779,29 @@ app.post('/api/channels/plans', requireAuth, (req, res) => {
   }
 })
 
+app.post('/api/channels/plans/facts', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : ''
+  if (!key || key.length > 300) {
+    res.status(400).json({ error: 'key must be the stream url the player is using' })
+    return
+  }
+  const clean = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim().length > 0 ? value.trim().slice(0, 60) : null
+  try {
+    channelPlans.rememberFacts(session.username, key, {
+      videoCodec: clean(req.body?.videoCodec),
+      audioCodecs: Array.isArray(req.body?.audioCodecs)
+        ? (req.body.audioCodecs as unknown[]).map(clean).filter((codec): codec is string => codec !== null).slice(0, 20)
+        : []
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[plans] rememberFacts failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
 app.post('/api/channels/plans/failed', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
   const key = typeof req.body?.key === 'string' ? req.body.key.trim() : ''

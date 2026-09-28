@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { stallRecoveryShape, useTranscodeFallback } from '../lib/transcodeFallback'
-import { noteStreamNeedsTranscode, reportChannelPlanFailed, streamNeedsTranscode, streamNeedsVideoTranscode } from '../lib/transcodeHints'
+import {
+  describeChannelPlan,
+  noteStreamNeedsTranscode,
+  reportChannelPlanFailed,
+  streamNeedsTranscode,
+  streamNeedsVideoTranscode
+} from '../lib/transcodeHints'
 import { prefersNativePlayback } from '../lib/nativePlayback'
 import { loadVerdict } from '../lib/decodeGate'
 import { describeUnplayableVideo } from '../lib/playbackDiagnosis'
@@ -728,6 +734,7 @@ let stallCount = 0
             engine={engineRef.current}
             videoCodec={probeInfo?.videoCodec ?? null}
             audioTrackCount={probeInfo?.audioTrackCount ?? null}
+            plan={describeChannelPlan(url)}
             readBandwidth={() => {
               const instance = hlsRef.current as { bandwidthEstimate?: number } | null
               return typeof instance?.bandwidthEstimate === 'number' ? instance.bandwidthEstimate : null

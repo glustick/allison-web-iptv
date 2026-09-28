@@ -8,6 +8,12 @@ interface MediaStatsProps {
   audioTrackCount: number | null
   /** The player's bandwidth estimate, where its engine provides one (hls.js does). */
   readBandwidth: () => number | null
+  /**
+   * What this channel was last proved to need (lib/transcodeHints.ts). Shown because the record's
+   * whole purpose is to stop the rediscovery — and a caching layer nobody can see is one nobody can
+   * diagnose when it goes wrong.
+   */
+  plan: string
 }
 
 interface CapabilityRow {
@@ -39,7 +45,14 @@ function mbps(bitsPerSecond: number | null | undefined): string {
  * 2. **The panel is only live while it is open** — a one-second interval, cleared on close — so it
  *    never competes with the thing it is measuring.
  */
-export function MediaStats({ video, engine, videoCodec, audioTrackCount, readBandwidth }: MediaStatsProps) {
+export function MediaStats({
+  video,
+  engine,
+  videoCodec,
+  audioTrackCount,
+  readBandwidth,
+  plan
+}: MediaStatsProps) {
   const [capabilities, setCapabilities] = useState<CapabilityRow[]>([])
   const [live, setLive] = useState<LiveRow[]>([])
 
@@ -74,8 +87,11 @@ export function MediaStats({ video, engine, videoCodec, audioTrackCount, readBan
       { label: 'WebCodecs available', value: typeof (globalThis as Record<string, unknown>).VideoDecoder === 'function' ? 'yes' : 'no' },
       { label: 'WebCodecs HEVC decode (4K Main 10, prefer hardware)', value: 'checking…' },
       // What this device actually measured, not what it advertises — the two are different questions,
-      // and only the first one decides whether a client-side player is worth entering (lib/decodeGate.ts).
-      { label: 'Client decode verdict (measured on this device)', value: describeVerdict(loadVerdict()) }
+      // and only the first one decides whether a client-side player is worth entering
+      // (lib/decodeGate.ts). Reported as a tier, since hardware decode is a fast path, not a
+      // prerequisite.
+      { label: 'Client decode verdict (measured on this device)', value: describeVerdict(loadVerdict()) },
+      { label: 'Channel plan (remembered)', value: plan }
     ])
 
     const webCodecs = (globalThis as unknown as {

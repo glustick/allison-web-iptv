@@ -8,12 +8,25 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.1**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.2**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.61.2 — the plan is visible, and a fresh load stops re-probing.** Three follow-ups from the same
+day. **(1) The media stats panel shows the channel plan** — *“video copy, audio re-encode — proved 2 h
+ago”* — so a caching layer nobody can see becomes one nobody has to take on trust. **(2) The probe's
+answer is remembered too.** The audio-track probe is an ffprobe against a live source and it ran once
+per channel per page load; `channel_plans` now carries the **facts** as well as the plan (the codecs,
+with their own shorter 7-day window), written even for channels nobody has played yet, so a fresh load —
+or another device — skips it. Facts and plans are deliberately different things: a probe is not a proof
+(`proved`), and a failure clears the plan while **keeping the facts**, since a failure says nothing about
+what the stream carries. Existing installs get the wider table through an additive migration, verified by
+a test that builds the v0.61.0 shape first. **(3) The redundant staged copy of the api-football key** was
+removed from the repository's own appdata, now that the live volume holds the authoritative file and the
+database the encrypted row. 666 tests, typecheck, lint and the client build clean.
 
 **v0.61.1 — the decode gate is a tier per device, not a verdict on one machine.** The operator's
 correction (2026-09-28): *“i dont want this player to need the rtx 3080 TI, its just one of the system

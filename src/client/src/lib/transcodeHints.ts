@@ -99,6 +99,26 @@ function readCache(now: number = Date.now()): TranscodeHint[] {
   return cache
 }
 
+/**
+ * Fire-and-forget reporting. Guarded because this module is imported by code that also runs outside a
+ * browser (tests, SSR-ish tooling), where `fetch` does not exist — and a missing transport must never
+ * turn a playback optimisation into a thrown exception.
+ */
+function postJson(path: string, body: unknown): void {
+  try {
+    if (typeof fetch !== 'function') return
+    void fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).catch(() => {
+      // Offline, or the session lapsed: the local mirror still carries the answer.
+    })
+  } catch {
+    // See above.
+  }
+}
+
 function writeCache(hints: TranscodeHint[]): void {
   cache = hints
   const store = storage()
@@ -128,19 +148,64 @@ export function streamNeedsVideoTranscode(url: string, now = Date.now()): boolea
   return readCache(now).find((hint) => hint.url === url)?.video === true
 }
 
+/**
+ * One line for the diagnostics panel: what this channel was last proved to need, and when.
+ *
+ * The record exists to stop the app re-discovering a channel on every click (the operator's ask,
+ * 2026-09-28) — so it should also be *visible*, or the only evidence it works is that a channel
+ * started faster than it used to.
+ */
+export function describeChannelPlan(url: string, now = Date.now()): string {
+  const hint = readCache(now).find((entry) => entry.url === url)
+  if (!hint) return 'unknown — this channel has not been proved yet'
+  const parts = [hint.video === true ? 'video re-encode' : 'video copy', 'audio re-encode']
+  const ageMs = Math.max(0, now - hint.at)
+  const age = ageMs < 3_600_000 ? `${Math.round(ageMs / 60_000)} min` : `${Math.round(ageMs / 3_600_000)} h`
+  return `${parts.join(', ')} — proved ${age} ago`
+}
+
+// --- probed codecs ----------------------------------------------------------------------------
+// What a channel's stream *carries*, as opposed to what it needed. Kept apart from the plan above
+// because it is a fact rather than a bet — and because a fresh page load consults it before spending
+// an ffprobe against a live source, which is the round trip the operator asked to stop paying.
+
+/** Matches the server's own window (lib/channelPlans.ts): providers swap feeds. */
+export const TRACKS_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+export interface RememberedStreamFacts {
+  videoCodec: string | null
+  audioCodecs: string[]
+}
+
+const tracks = new Map<string, RememberedStreamFacts & { at: number }>()
+
+/** The codecs this channel was last probed for, or null when unknown or stale. */
+export function rememberedTracks(url: string, now = Date.now()): RememberedStreamFacts | null {
+  const entry = tracks.get(url)
+  if (!entry) return null
+  if (now - entry.at > TRACKS_TTL_MS) return null
+  if (!entry.videoCodec && entry.audioCodecs.length === 0) return null
+  return { videoCodec: entry.videoCodec, audioCodecs: entry.audioCodecs }
+}
+
+/** Records a probe's answer locally and on the server, so the next session does not ask again. */
+export function rememberStreamFacts(url: string, facts: RememberedStreamFacts): void {
+  tracks.set(url, { videoCodec: facts.videoCodec, audioCodecs: [...facts.audioCodecs], at: Date.now() })
+  postJson('/api/channels/plans/facts', { key: url, videoCodec: facts.videoCodec, audioCodecs: facts.audioCodecs })
+}
+
+/** Drops every remembered probe answer. The app never needs this; tests and a sign-out do. */
+export function forgetRememberedTracks(): void {
+  tracks.clear()
+}
+
 export function noteStreamNeedsTranscode(url: string, now = Date.now(), video?: boolean): void {
   const hints = rememberHint(readCache(now), url, now, video)
   writeCache(hints)
   const hint = hints.find((entry) => entry.url === url)
   if (!hint) return
   // Written from a playback that worked — never from an attempt (see the server store's own note).
-  void fetch('/api/channels/plans', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: url, video: hint.video === true, audio: true, note: 'proved by playback' })
-  }).catch(() => {
-    // Offline, or the session lapsed: the local mirror still carries the hint.
-  })
+  postJson('/api/channels/plans', { key: url, video: hint.video === true, audio: true, note: 'proved by playback' })
 }
 
 // --- the server record -------------------------------------------------------------------------
@@ -154,15 +219,37 @@ export async function syncChannelPlans(): Promise<void> {
     const res = await fetch('/api/channels/plans')
     if (!res.ok) return
     const data = (await res.json()) as {
-      plans?: Array<{ key?: unknown; video?: unknown; verifiedAt?: unknown; failures?: unknown }>
+      plans?: Array<{
+        key?: unknown
+        video?: unknown
+        verifiedAt?: unknown
+        failures?: unknown
+        proved?: unknown
+        videoCodec?: unknown
+        audioCodecs?: unknown
+        factsAt?: unknown
+      }>
     }
     const now = Date.now()
     const fromServer: TranscodeHint[] = []
     for (const plan of Array.isArray(data.plans) ? data.plans : []) {
       if (typeof plan?.key !== 'string' || plan.key.length === 0) continue
+      // Codecs ride on the same rows, proved or not — a channel nobody has played yet can still have
+      // been probed, and that is exactly the round trip worth saving.
+      const codecs = Array.isArray(plan.audioCodecs)
+        ? plan.audioCodecs.filter((codec): codec is string => typeof codec === 'string')
+        : []
+      if (typeof plan.videoCodec === 'string' || codecs.length > 0) {
+        tracks.set(plan.key, {
+          videoCodec: typeof plan.videoCodec === 'string' ? plan.videoCodec : null,
+          audioCodecs: codecs,
+          at: typeof plan.factsAt === 'number' ? plan.factsAt : now
+        })
+      }
       // A plan that has failed is not carried over: the server drops it too, and a mirror must not
       // resurrect an answer that has just been proved wrong.
       if (plan.failures !== 0) continue
+      if (plan.proved !== true) continue
       const at = typeof plan.verifiedAt === 'number' ? plan.verifiedAt : now
       fromServer.push(plan.video === true ? { url: plan.key, at, video: true } : { url: plan.key, at })
     }
@@ -182,9 +269,5 @@ export async function syncChannelPlans(): Promise<void> {
  */
 export function reportChannelPlanFailed(url: string, reason: string): void {
   writeCache(readCache().filter((hint) => hint.url !== url))
-  void fetch('/api/channels/plans/failed', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: url, reason })
-  }).catch(() => {})
+  postJson('/api/channels/plans/failed', { key: url, reason })
 }

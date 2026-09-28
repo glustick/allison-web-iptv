@@ -6,6 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.61.2 — the remembered plan is visible, and a fresh load stops re-probing)
+
+The player's media stats panel now shows the channel's remembered plan ("video copy, audio re-encode —
+proved 2 h ago"), and the audio-track probe's answer is remembered per channel too: the codecs are stored
+alongside the plan with their own shorter window, so a fresh page load — or another device — skips the
+ffprobe. A probe is not a proof, and a failure clears the plan while keeping the facts. 666 tests,
+typecheck, lint and the client build clean.
+
 ## Current state (v0.61.1 — the decode gate is a tier per device, not a verdict on one machine)
 
 The verdict from the decode check is now a **tier** — *comfortable*, *marginal* or *insufficient* — read
