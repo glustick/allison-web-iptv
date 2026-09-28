@@ -6,6 +6,13 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.61.1 — the decode gate is a tier per device, not a verdict on one machine)
+
+The verdict from the decode check is now a **tier** — *comfortable*, *marginal* or *insufficient* — read
+per device, so a laptop, a phone or a browser with no hardware decode is told what it can carry rather
+than written off. Hardware decode is a fast path, never a prerequisite. 660 tests, typecheck, lint and
+the client build clean.
+
 ## Current state (v0.61.0 — each channel's transcoding need is remembered once)
 
 What a channel needs — the video re-encode tier, the audio remux — is now recorded in the app's
