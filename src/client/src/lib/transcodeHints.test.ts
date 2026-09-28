@@ -1,11 +1,35 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
+  describeChannelPlan,
+  forgetDirectPlays,
+  forgetRememberedTracks,
   hasHint,
+  noteStreamPlaysDirectly,
   pruneHints,
   rememberHint,
   TRANSCODE_HINT_LIMIT,
   TRANSCODE_HINT_TTL_MS
 } from './transcodeHints'
+
+describe('the channel plan tells the truth about a working channel', () => {
+  // The operator's original ask: *"a database should be reference for the last known working config"*.
+  // Until 2026-09-28 only conversions were recorded, so a channel that simply worked — h264, no
+  // transcode — read as "unknown", which is true and useless.
+  afterEach(() => {
+    forgetDirectPlays()
+    forgetRememberedTracks()
+  })
+
+  it('says a channel played directly instead of "unknown"', () => {
+    noteStreamPlaysDirectly('/api/stream/live/40.m3u8', Date.parse('2026-09-28T20:00:00Z'))
+    const line = describeChannelPlan('/api/stream/live/40.m3u8', Date.parse('2026-09-28T22:00:00Z'))
+    expect(line).toBe('direct play, no conversion needed — proved 2 h ago')
+  })
+
+  it('still says "unknown" for a channel nothing has happened to', () => {
+    expect(describeChannelPlan('/api/stream/live/99.m3u8')).toMatch(/has not been proved yet/)
+  })
+})
 
 const now = 1_789_560_000_000
 

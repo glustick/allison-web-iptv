@@ -4,6 +4,7 @@ import { stallRecoveryShape, useTranscodeFallback } from '../lib/transcodeFallba
 import {
   describeChannelPlan,
   noteStreamNeedsTranscode,
+  noteStreamPlaysDirectly,
   reportChannelPlanFailed,
   streamNeedsTranscode,
   streamNeedsVideoTranscode
@@ -363,7 +364,14 @@ let stallCount = 0
       hlsRef.current = instance
       instance.loadSource(sourceUrl)
       instance.attachMedia(video)
-      instance.on(Hls.Events.FRAG_BUFFERED, noteFragmentActivity)
+      instance.on(Hls.Events.FRAG_BUFFERED, () => {
+        noteFragmentActivity()
+        // Fragments are arriving and the session is still on the direct source, so this is the last
+        // known *working* config for the channel — the other half of what the plan records
+        // (lib/transcodeHints.ts, 2026-09-28). A later fallback reports its own outcome, which replaces
+        // this, so an over-eager note here is corrected rather than left standing.
+        if (getSourceUrl(url) === url) noteStreamPlaysDirectly(url)
+      })
       instance.on(Hls.Events.MANIFEST_PARSED, () => {
         // Proactive rather than waiting for an error that may never come: if the stream's audio
         // is a codec this browser cannot decode, switch to the transcode path immediately

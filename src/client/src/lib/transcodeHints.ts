@@ -156,12 +156,20 @@ export function streamNeedsVideoTranscode(url: string, now = Date.now()): boolea
  * started faster than it used to.
  */
 export function describeChannelPlan(url: string, now = Date.now()): string {
+  const age = (at: number): string => {
+    const ms = Math.max(0, now - at)
+    return ms < 3_600_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 3_600_000)} h`
+  }
+  // A channel that needed converting is the more useful statement, so it wins over a direct play: the
+  // two can both be true if the audio was undecodable and the fallback fixed it.
   const hint = readCache(now).find((entry) => entry.url === url)
-  if (!hint) return 'unknown — this channel has not been proved yet'
-  const parts = [hint.video === true ? 'video re-encode' : 'video copy', 'audio re-encode']
-  const ageMs = Math.max(0, now - hint.at)
-  const age = ageMs < 3_600_000 ? `${Math.round(ageMs / 60_000)} min` : `${Math.round(ageMs / 3_600_000)} h`
-  return `${parts.join(', ')} — proved ${age} ago`
+  if (hint) {
+    const parts = [hint.video === true ? 'video re-encode' : 'video copy', 'audio re-encode']
+    return `${parts.join(', ')} — proved ${age(hint.at)} ago`
+  }
+  const direct = directPlays.get(url)
+  if (direct !== undefined) return `direct play, no conversion needed — proved ${age(direct)} ago`
+  return 'unknown — this channel has not been proved yet'
 }
 
 // --- probed codecs ----------------------------------------------------------------------------
@@ -178,6 +186,23 @@ export interface RememberedStreamFacts {
 }
 
 const tracks = new Map<string, RememberedStreamFacts & { at: number }>()
+
+/**
+ * Channels that have played **directly** — no conversion — and when.
+ *
+ * Kept apart from the hint list above on purpose: an entry there means "needs converting", so writing
+ * a success into it would force the very transcode the channel does not need. This is the other half
+ * of the operator's original ask (2026-09-28) — *"a database should be reference for the last known
+ * working config"* — and until now only failures were recorded, so a channel that simply worked read
+ * as "unknown".
+ */
+const directPlays = new Map<string, number>()
+
+/** Records that this channel played directly, on both sides. */
+export function noteStreamPlaysDirectly(url: string, now = Date.now()): void {
+  directPlays.set(url, now)
+  postJson('/api/channels/plans', { key: url, video: false, audio: false, note: 'played directly' })
+}
 
 /** The codecs this channel was last probed for, or null when unknown or stale. */
 export function rememberedTracks(url: string, now = Date.now()): RememberedStreamFacts | null {
@@ -197,6 +222,11 @@ export function rememberStreamFacts(url: string, facts: RememberedStreamFacts): 
 /** Drops every remembered probe answer. The app never needs this; tests and a sign-out do. */
 export function forgetRememberedTracks(): void {
   tracks.clear()
+}
+
+/** The same for the direct-play records — module state, so tests have to be able to reset it. */
+export function forgetDirectPlays(): void {
+  directPlays.clear()
 }
 
 export function noteStreamNeedsTranscode(url: string, now = Date.now(), video?: boolean): void {
@@ -222,6 +252,7 @@ export async function syncChannelPlans(): Promise<void> {
       plans?: Array<{
         key?: unknown
         video?: unknown
+        audio?: unknown
         verifiedAt?: unknown
         failures?: unknown
         proved?: unknown
@@ -251,6 +282,12 @@ export async function syncChannelPlans(): Promise<void> {
       if (plan.failures !== 0) continue
       if (plan.proved !== true) continue
       const at = typeof plan.verifiedAt === 'number' ? plan.verifiedAt : now
+      // A proved plan with no flags is a **direct play** — nothing needed converting — and it is worth
+      // as much as a conversion is, just in the other direction.
+      if (plan.video !== true && plan.audio !== true) {
+        directPlays.set(plan.key, at)
+        continue
+      }
       fromServer.push(plan.video === true ? { url: plan.key, at, video: true } : { url: plan.key, at })
     }
     // The server wins for every channel it knows; local entries it has not seen yet (a plan being
@@ -269,5 +306,7 @@ export async function syncChannelPlans(): Promise<void> {
  */
 export function reportChannelPlanFailed(url: string, reason: string): void {
   writeCache(readCache().filter((hint) => hint.url !== url))
+  // Including a recorded direct play: this channel did *not* in fact work, whatever an earlier run saw.
+  directPlays.delete(url)
   postJson('/api/channels/plans/failed', { key: url, reason })
 }
