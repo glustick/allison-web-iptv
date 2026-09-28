@@ -15,6 +15,23 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.61.8 — the plan records the working channels too.** The operator's original ask was *“a database
+should be reference for the last known working config”*, and until now only the failures were recorded:
+a plan was written when a channel needed converting, so a channel that simply worked read as
+*“unknown — this channel has not been proved yet”* — true, and useless. (Seen in the wild on 2026-09-28
+on a channel playing h264 at 720p with zero dropped frames.) Now a channel that buffers fragments **on
+the direct source** records *“direct play, no conversion needed — proved N ago”*, kept deliberately out
+of the “needs converting” list so it can never force the transcode it has just disproved, and cleared
+when the channel later fails. A conversion still outranks it when both are true — the audio-undecodable
+case, where the direct source half-worked. 697 tests, typecheck, lint and the client build clean.
+
+**v0.61.7 — a failed decode measurement is not a device verdict.** The media stats panel reported
+“0 fps at 300x150 — not enough for these channels”, which was the verdict the broken check had saved
+(v0.61.6) presented as a property of the machine. A verdict with no picture in it now reads as what it
+is — *“the run produced no picture, so this is a failed measurement rather than a verdict — re-run it”* —
+and the tier is still not trusted, because a device must not be credited on the strength of a failed
+run either.
+
 **v0.61.6 — the decode check was feeding the decoder something invalid.** The operator's run on
 2026-09-28 reported `decoded frames: 0`, `0.0 frames/second` and a 300x150 canvas — and, worse, the
 release before this one *saved* that as the device's verdict. The fault was in the check: it handed the
