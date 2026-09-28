@@ -8,12 +8,27 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.4**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.5**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.61.5 — the other sports.** The operator's correction: *“its not only football, its other sports as
+well … even though its called api football, there are other sports retrievable on that website.”*
+Checked, and right: api-sports runs a **host per sport**, all answering this account's key —
+`v1.basketball`, `v1.baseball`, `v1.hockey`, `v1.rugby` (football is the odd one at `v3.football`),
+which is why the tab only ever showed football. The app now fetches **five sports**, each from its own
+host, and every fixture carries **the sport of the API it came from** — the only authority on the
+question, rather than a guess from the league name (which remains as a fallback for a feed that does
+not say). The non-football hosts speak a different dialect and both were taken from live responses
+rather than assumed: `/games` instead of `/fixtures`, basketball nesting the score under
+`scores.home.total` while hockey puts a plain number there — so the normaliser accepts both, and a
+missing score stays null instead of becoming a 0-0. Sports are additive: an unlisted one costs nothing,
+a dead one does not empty the pane (errors are collected, with the plan-limit message preferred when
+several agree), and the shared request budget from v0.61.4 is what makes five feeds affordable on a
+free plan. 692 tests, typecheck, lint and the client build clean.
 
 **v0.61.4 — the app manages its own api-football quota.** Checked the account through the API on
 2026-09-28 and it is a **free plan: `limit_day: 100`** — while the Sports tab polls every five minutes

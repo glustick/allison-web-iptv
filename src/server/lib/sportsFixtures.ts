@@ -18,6 +18,8 @@ export interface ApiFootballFixture {
   id: number
   /** Kickoff as an epoch instant (the feed's UTC date parsed), or null when it is unusable. */
   kickoffMs: number | null
+  /** Which sport's API this came from — the authoritative answer, not a guess from the league name. */
+  sport: string
   league: string
   country: string
   round: string
@@ -43,6 +45,38 @@ interface RawFixture {
 }
 
 const API_ORIGIN = 'https://v3.football.api-sports.io'
+
+/**
+ * The sports this key can reach, and where each one lives.
+ *
+ * api-sports runs a **separate host per sport** — football is `v3.football`, the others are
+ * `v1.<sport>` — which is why the app showed only football for so long. All five were confirmed to
+ * answer with this account's own key on 2026-09-28. Football's endpoint is `/fixtures`; the rest are
+ * `/games`, and their shapes differ (see `normaliseGame`). Only sports listed here are fetched, so an
+ * unlisted one costs nothing rather than costing a failure.
+ */
+export interface SportApi {
+  /** Matches the client's SportId (lib/sports.ts), so a fixture can be filed without translation. */
+  sport: string
+  label: string
+  host: string
+  path: '/fixtures' | '/games'
+}
+
+export const SPORT_APIS: SportApi[] = [
+  { sport: 'football', label: 'Football', host: 'v3.football.api-sports.io', path: '/fixtures' },
+  { sport: 'basketball', label: 'Basketball', host: 'v1.basketball.api-sports.io', path: '/games' },
+  { sport: 'baseball', label: 'Baseball', host: 'v1.baseball.api-sports.io', path: '/games' },
+  { sport: 'ice-hockey', label: 'Ice Hockey', host: 'v1.hockey.api-sports.io', path: '/games' },
+  { sport: 'rugby', label: 'Rugby', host: 'v1.rugby.api-sports.io', path: '/games' }
+]
+
+export function sportApiFor(sport: string): SportApi | null {
+  return SPORT_APIS.find((api) => api.sport === sport) ?? null
+}
+
+/** Every sport the key is expected to reach, football first. */
+export const SPORT_API_IDS = SPORT_APIS.map((api) => api.sport)
 
 // api-football's status.short codes: in-play variants vs. terminal ones. "NS" (not started) and the
 // pre/post variants (TBD, PST, CANC, ABD, SUSP, AWD, WO) are deliberately in neither set — a
@@ -96,6 +130,12 @@ export function fixturesUrl(dateIso: string, origin: string = API_ORIGIN): strin
   return `${origin}/fixtures?date=${encodeURIComponent(dateIso)}`
 }
 
+/** The same, for one sport's own host — the origin is overridable for tests only. */
+export function sportUrl(api: SportApi, dateIso: string, originOverride?: string): string {
+  const base = originOverride ? originOverride.replace(/\/+$/, '') : `https://${api.host}`
+  return `${base}${api.path}?date=${encodeURIComponent(dateIso)}`
+}
+
 function numberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
@@ -107,6 +147,7 @@ export function normalizeFixture(raw: RawFixture): ApiFootballFixture {
   return {
     id: Number(fixture.id ?? 0),
     kickoffMs: Number.isFinite(parsed) ? parsed : null,
+    sport: 'football',
     league: String(raw.league?.name ?? ''),
     country: String(raw.league?.country ?? ''),
     round: String(raw.league?.round ?? ''),
@@ -140,6 +181,70 @@ export function describeInBandError(errors: unknown): string | null {
   }
   const text = String(errors).trim()
   return text.length > 0 ? text : null
+}
+
+/** The `/games` shape the non-football hosts use — basketball, baseball, hockey and rugby alike. */
+export interface RawGame {
+  id?: number
+  date?: string
+  status?: { short?: string; long?: string }
+  league?: { name?: string; country?: string | null }
+  country?: { name?: string } | null
+  teams?: { home?: { name?: string }; away?: { name?: string } }
+  /** Basketball nests a per-period object; hockey puts the number straight in. */
+  scores?: {
+    home?: number | { total?: number | null } | null
+    away?: number | { total?: number | null } | null
+  } | null
+}
+
+function scoreOf(side: number | { total?: number | null } | null | undefined): number | null {
+  if (typeof side === 'number' && Number.isFinite(side)) return side
+  if (side && typeof side === 'object') return numberOrNull(side.total)
+  return null
+}
+
+/**
+ * Normalises one `/games` entry from any sibling host into the shape the Sports tab already speaks.
+ *
+ * Deliberately **tolerant about the score** rather than per-sport: the hosts genuinely differ —
+ * basketball sends `scores.home.total` (with per-quarter detail), hockey sends `scores.home` as a
+ * plain number — and a reader that accepts both costs nothing and cannot be wrong about which sport is
+ * which. Same for `league.country`, which the feed leaves null when it has none.
+ */
+export function normaliseGame(raw: RawGame, sport: string): ApiFootballFixture {
+  const parsed = typeof raw.date === 'string' ? Date.parse(raw.date) : Number.NaN
+  const short = String(raw.status?.short ?? '')
+  return {
+    id: Number(raw.id ?? 0),
+    kickoffMs: Number.isFinite(parsed) ? parsed : null,
+    sport,
+    league: String(raw.league?.name ?? ''),
+    country: String(raw.league?.country ?? raw.country?.name ?? ''),
+    round: '',
+    homeTeam: String(raw.teams?.home?.name ?? ''),
+    awayTeam: String(raw.teams?.away?.name ?? ''),
+    homeGoals: scoreOf(raw.scores?.home),
+    awayGoals: scoreOf(raw.scores?.away),
+    live: LIVE_SHORT_STATUSES.has(short),
+    finished: FINISHED_SHORT_STATUSES.has(short),
+    statusLong: String(raw.status?.long ?? '')
+  }
+}
+
+/** The `/games` equivalent of `parseFixturesResponse`, with the same in-band error handling. */
+export function parseGamesResponse(body: string, sport: string): FixturesResult {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return { fixtures: [], error: 'api-sports returned a response that is not JSON' }
+  }
+  const root = parsed as { response?: unknown; errors?: unknown } | null
+  const error = describeInBandError(root?.errors)
+  if (error) return { fixtures: [], error }
+  const raw = Array.isArray(root?.response) ? (root?.response as RawGame[]) : []
+  return { fixtures: raw.map((game) => normaliseGame(game, sport)).filter((fixture) => fixture.id > 0), error: null }
 }
 
 export function parseFixturesResponse(body: string): FixturesResult {
@@ -235,8 +340,85 @@ export function createSportsFixturesService(deps: SportsFixturesDeps = {}) {
     return result
   }
 
+  /**
+   * One sport's day, through the same cache and the same budget as everything else.
+   *
+   * Cache key includes the sport, since each host is a separate feed with its own freshness — and the
+   * budget is shared, which is the point: five sports on a free plan only stay affordable because the
+   * allowance is counted in one place.
+   */
+  async function getSportFixtures(api: SportApi, dateIso: string, key: string): Promise<FixturesResult> {
+    const cacheKey = `${api.sport}|${dateIso}`
+    const keyHash = keyFingerprint(key)
+    const cached = cache.get(cacheKey)
+    const ttl = cached?.result.error
+      ? cached.keyHash === keyHash
+        ? ERROR_CACHE_TTL_MS
+        : 0
+      : cached && cached.result.fixtures.some((fixture) => fixture.live)
+        ? liveTtlMs
+        : IDLE_CACHE_TTL_MS
+    if (cached && now() - cached.at < ttl) return cached.result
+    if (budgetRemaining(now()) === 0) {
+      if (cached) return cached.result
+      return { fixtures: [], error: 'Daily api-sports request budget reached — fixtures resume tomorrow' }
+    }
+    requestsToday += 1
+
+    let result: FixturesResult
+    try {
+      const body = await fetchTextViaUpstream(
+        createUpstreamRequest,
+        sportUrl(api, dateIso, origin),
+        FIXTURES_STALL_TIMEOUT_MS,
+        undefined,
+        FIXTURES_RESPONSE_TIMEOUT_MS,
+        undefined,
+        { 'x-apisports-key': key }
+      )
+      result = api.path === '/fixtures' ? parseFixturesResponse(body) : parseGamesResponse(body, api.sport)
+    } catch (err) {
+      return { fixtures: [], error: err instanceof Error ? err.message : String(err) }
+    }
+
+    cache.set(cacheKey, { at: now(), result, keyHash })
+    if (cache.size > 16) {
+      const oldest = [...cache.entries()].sort((a, b) => a[1].at - b[1].at)[0]
+      if (oldest) cache.delete(oldest[0])
+    }
+    return result
+  }
+
+  /**
+   * The day's fixtures across sports: football plus whatever else the key reaches.
+   *
+   * Each sport is fetched from its own host ({@link SPORT_APIS}) and carries the sport it came from —
+   * which is the only authority on the question, and the reason the tab used to show football alone.
+   * Errors are collected rather than thrown: one dead sport must not empty the pane.
+   */
+  async function getFixturesForSports(
+    dateIso: string,
+    key: string,
+    sports: string[] = SPORT_API_IDS
+  ): Promise<FixturesResult> {
+    const apis = sports.map(sportApiFor).filter((api): api is SportApi => api !== null)
+    const wanted = apis.length > 0 ? apis : SPORT_APIS.filter((api) => api.sport === 'football')
+    const results = await Promise.all(wanted.map((api) => getSportFixtures(api, dateIso, key)))
+    const errors = results.map((result) => result.error).filter((error): error is string => error !== null)
+    return {
+      fixtures: results.flatMap((result) => result.fixtures),
+      // One error wins if it is the plan's date limit — the rest are almost always the same message.
+      error: errors.length === 0 ? null : (errors.find((error) => /free plans|budget/i.test(error)) ?? errors[0])
+    }
+  }
+
   return {
     getFixtures,
+    getFixturesForSports,
+    /** Which sports are configured, for the client and for the admin screen. */
+    sports(): SportApi[] {
+      return SPORT_APIS.map((api) => ({ ...api }))
+    },
     /** How much of our own daily allowance is left — for the admin screen, and for tests. */
     budget(): { remaining: number; used: number } {
       const remaining = budgetRemaining(now())

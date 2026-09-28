@@ -9,6 +9,8 @@ import type { LiveStream } from './types'
 export interface ApiFootballFixture {
   id: number
   kickoffMs: number | null
+  /** Which sport's API this came from. The authority on the question — the league name is not. */
+  sport?: string
   league: string
   country: string
   round: string

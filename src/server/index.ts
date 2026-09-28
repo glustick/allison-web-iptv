@@ -1941,7 +1941,12 @@ app.get('/api/sports/fixtures', requireAuth, (req, res) => {
       return
     }
     try {
-      const result = await sportsFixturesService.getFixtures(date, key)
+      const requested = String(req.query.sports ?? '').trim()
+      const sports =
+        requested.length > 0
+          ? requested.split(',').map((sport) => sport.trim()).filter((sport) => sport.length > 0).slice(0, 10)
+          : undefined
+      const result = await sportsFixturesService.getFixturesForSports(date, key, sports)
       res.json({ ok: true, configured: true, fixtures: result.fixtures, error: result.error })
     } catch (err) {
       console.error('[sports] fixtures failed:', err)

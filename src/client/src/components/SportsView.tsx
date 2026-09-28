@@ -121,8 +121,15 @@ function fixtureStatus(fixture: ApiFootballFixture, hour12: boolean): { text: st
  * competitions the provider carries, so those keep grouping under the league the operator knows;
  * everything else files under Football with its own league name as the group header.
  */
+/**
+ * Which sport a fixture belongs to.
+ *
+ * The **source API is the authority** — a fixture fetched from the basketball host is basketball, not
+ * whatever its league name happens to look like. The rule table is only a fallback, for a feed that
+ * does not say (and for the football-only responses the app used to get).
+ */
 function fixtureSportId(fixture: ApiFootballFixture): string {
-  return sportOfApiFixture(fixture.league)
+  return fixture.sport || sportOfApiFixture(fixture.league)
 }
 
 /**

@@ -5,8 +5,10 @@ import {
   createSportsFixturesService,
   describeInBandError,
   fixturesUrl,
+  normaliseGame,
   normalizeFixture,
-  parseFixturesResponse
+  parseFixturesResponse,
+  parseGamesResponse
 } from './sportsFixtures.js'
 
 // The api-football layer is tested two ways, following this repo's own convention (see
@@ -111,6 +113,89 @@ describe('normalizeFixture', () => {
     expect(
       normalizeFixture({ fixture: { id: 1, date: 'not a date', status: { short: 'NS' } } }).kickoffMs
     ).toBeNull()
+  })
+})
+
+describe('the sibling sport hosts', () => {
+  // Shapes taken from live responses on 2026-09-28, because the hosts genuinely differ: basketball
+  // nests the score under `total` with per-quarter detail, hockey puts a plain number there.
+  it('reads basketball, whose score is nested', () => {
+    const fixture = normaliseGame(
+      {
+        id: 1,
+        date: '2026-09-28T01:00:00+00:00',
+        status: { short: 'FT', long: 'Game Finished' },
+        league: { name: 'NBA W', country: null },
+        teams: { home: { name: 'Golden State Valkyries W' }, away: { name: 'Dallas Wings W' } },
+        scores: { home: { total: 104 }, away: { total: 96 } }
+      },
+      'basketball'
+    )
+    expect(fixture).toMatchObject({
+      sport: 'basketball',
+      league: 'NBA W',
+      homeGoals: 104,
+      awayGoals: 96,
+      finished: true,
+      live: false
+    })
+  })
+
+  it('reads hockey, whose score is a plain number', () => {
+    const fixture = normaliseGame(
+      {
+        id: 2,
+        date: '2026-09-28T18:00:00+00:00',
+        status: { short: 'FT', long: 'Finished' },
+        league: { name: 'NHL' },
+        teams: { home: { name: 'Bruins' }, away: { name: 'Rangers' } },
+        scores: { home: 5, away: 3 }
+      },
+      'ice-hockey'
+    )
+    expect(fixture).toMatchObject({ sport: 'ice-hockey', homeGoals: 5, awayGoals: 3, finished: true })
+  })
+
+  it('keeps a missing score null rather than inventing 0-0', () => {
+    const fixture = normaliseGame(
+      {
+        id: 3,
+        date: '2026-09-28T18:00:00+00:00',
+        status: { short: 'NS', long: 'Not Started' },
+        league: { name: 'NHL' },
+        teams: { home: { name: 'A' }, away: { name: 'B' } },
+        scores: { home: null, away: null }
+      },
+      'ice-hockey'
+    )
+    expect(fixture.homeGoals).toBeNull()
+    expect(fixture.awayGoals).toBeNull()
+  })
+
+  it('parses the /games envelope, in-band errors included', () => {
+    const ok = parseGamesResponse(
+      JSON.stringify({
+        errors: [],
+        response: [
+          {
+            id: 9,
+            date: '2026-09-28T18:00:00+00:00',
+            league: { name: 'NHL' },
+            teams: { home: { name: 'A' }, away: { name: 'B' } },
+            scores: { home: 1, away: 2 }
+          }
+        ]
+      }),
+      'ice-hockey'
+    )
+    expect(ok.error).toBeNull()
+    expect(ok.fixtures[0]).toMatchObject({ sport: 'ice-hockey', homeGoals: 1, awayGoals: 2 })
+
+    const refused = parseGamesResponse(
+      JSON.stringify({ errors: { token: 'Invalid API key' }, response: [] }),
+      'ice-hockey'
+    )
+    expect(refused.error).toBe('Invalid API key')
   })
 })
 
