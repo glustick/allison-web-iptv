@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { LivePlayer } from './LivePlayer'
@@ -23,6 +23,7 @@ import {
   type ApiFootballFixture
 } from '../lib/sportsFixtures'
 import { fetchSportsCatalogue } from '../lib/sportsCatalogue'
+import { parseCollapsedGroups, serializeCollapsedGroups, toggleCollapsedGroup } from '../lib/sportsGroups'
 import type { Category, LiveStream } from '../lib/types'
 
 // The Sports tab: the desktop sibling's (iptv-app 0.7.109 → 0.8.0), ported and re-arranged to the
@@ -50,6 +51,9 @@ const PLAYER_MAX_HEIGHT_CEILING = (): number => Math.round(window.innerHeight * 
 // Per-view layout prefs (localStorage, the same mechanism the sidebar and EPG column use).
 const PLAYER_MAX_HEIGHT_KEY = 'allison-web-iptv:sports-player-max-height'
 const CHANNELS_WIDTH_KEY = 'allison-web-iptv:sports-channels-width'
+
+// Which competition groups the fixtures pane is showing collapsed, remembered per device.
+const COLLAPSED_GROUPS_KEY = 'allison-web-iptv:sports-collapsed-leagues'
 
 type Selection = { kind: 'game'; key: string } | { kind: 'fixture'; id: number }
 
@@ -113,6 +117,76 @@ function fixtureSportId(fixture: ApiFootballFixture): string | null {
   return cls?.kind === 'league' ? sportOfLeague(cls.rule.id) : null
 }
 
+/**
+ * The collapsed groups for this device. Storage can throw in private modes — a view pref is not
+ * worth failing a render over, exactly as the resizable-panel helpers treat it.
+ */
+function loadCollapsedGroups(): Set<string> {
+  try {
+    return parseCollapsedGroups(window.localStorage.getItem(COLLAPSED_GROUPS_KEY))
+  } catch {
+    return new Set()
+  }
+}
+
+function saveCollapsedGroups(groups: Set<string>): void {
+  try {
+    window.localStorage.setItem(COLLAPSED_GROUPS_KEY, serializeCollapsedGroups(groups))
+  } catch {
+    // See loadCollapsedGroups.
+  }
+}
+
+/**
+ * One collapsible competition group in the fixtures pane.
+ *
+ * The header is a real button, so it is reachable by keyboard, and `aria-expanded` says what it
+ * does. Collapsing is remembered per league (see lib/sportsGroups.ts), so a group a viewer keeps
+ * shut — a regional competition they never watch — stays shut on the next visit.
+ */
+function LeagueGroup({
+  id,
+  bodyId,
+  label,
+  note,
+  count,
+  collapsed,
+  onToggle,
+  children
+}: {
+  id: string
+  bodyId: string
+  label: string
+  note?: string
+  count: number
+  collapsed: boolean
+  onToggle: (id: string) => void
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <div className="sports-group">
+      <button
+        type="button"
+        className={collapsed ? 'sports-group-head collapsed' : 'sports-group-head'}
+        aria-expanded={!collapsed}
+        aria-controls={bodyId}
+        onClick={() => onToggle(id)}
+        title={collapsed ? 'Show these fixtures' : 'Hide these fixtures'}
+      >
+        <span className="sports-group-chevron" aria-hidden="true">
+          {collapsed ? '▸' : '▾'}
+        </span>
+        <span className="sports-group-label">{label}</span>
+        {note ? <span className="sports-section-note">{note}</span> : null}
+        <span className="sports-group-count">
+          {count} {count === 1 ? 'fixture' : 'fixtures'}
+        </span>
+      </button>
+      {!collapsed && <div id={bodyId}>{children}</div>}
+    </div>
+  )
+}
+
 function feedCount(count: number): string {
   return `${count} feed${count === 1 ? '' : 's'}`
 }
@@ -169,6 +243,8 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
   const [selectedSportId, setSelectedSportId] = useState<string | null>(null)
   const [dayOffset, setDayOffset] = useState(0)
   const [selection, setSelection] = useState<Selection | null>(null)
+  // Which competition groups are collapsed, per device (see lib/sportsGroups.ts).
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsedGroups)
   const [nowPlaying, setNowPlaying] = useState<LiveStream | null>(null)
   // The schedule buckets games by day, so it is built once against a fixed "now"; the day *picker*
   // below uses the live clock, which is what "Today" means to a viewer.
@@ -371,6 +447,13 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
   const toggleFixture = useCallback((id: number): void => {
     setSelection((current) => (current?.kind === 'fixture' && current.id === id ? null : { kind: 'fixture', id }))
   }, [])
+  const toggleGroup = useCallback((id: string): void => {
+    setCollapsedGroups((current) => {
+      const next = toggleCollapsedGroup(current, id)
+      saveCollapsedGroups(next)
+      return next
+    })
+  }, [])
 
   const streamUrl = nowPlaying ? session.client.getStreamUrl('live', nowPlaying.stream_id, 'm3u8') : null
 
@@ -479,9 +562,16 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                   </div>
                 )}
 
-                {sportGamesForDay.map(({ league, games }) => (
-                  <div key={league.id}>
-                    <div className="sports-section">{league.label}</div>
+                {sportGamesForDay.map(({ league, games }, index) => (
+                  <LeagueGroup
+                    key={league.id}
+                    id={`provider-${league.id}`}
+                    bodyId={`sports-provider-${index}`}
+                    label={league.label}
+                    count={games.length}
+                    collapsed={collapsedGroups.has(`provider-${league.id}`)}
+                    onToggle={toggleGroup}
+                  >
                     {games.slice(0, MAX_ROWS).map((game) => (
                       <FixtureRow
                         key={game.key}
@@ -498,15 +588,20 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                     {games.length > MAX_ROWS && (
                       <div className="sports-empty">…and {games.length - MAX_ROWS} more fixtures</div>
                     )}
-                  </div>
+                  </LeagueGroup>
                 ))}
 
-                {unmatchedByLeague.map(([leagueLabel, list]) => (
-                  <div key={`api-${leagueLabel}`}>
-                    <div className="sports-section">
-                      {leagueLabel}
-                      <span className="sports-section-note">not on your provider</span>
-                    </div>
+                {unmatchedByLeague.map(([leagueLabel, list], index) => (
+                  <LeagueGroup
+                    key={`api-${leagueLabel}`}
+                    id={`api-${leagueLabel}`}
+                    bodyId={`sports-api-${index}`}
+                    label={leagueLabel}
+                    note="not on your provider"
+                    count={list.length}
+                    collapsed={collapsedGroups.has(`api-${leagueLabel}`)}
+                    onToggle={toggleGroup}
+                  >
                     {list.slice(0, MAX_ROWS).map((fixture) => (
                       <FixtureRow
                         key={`fixture-${fixture.id}`}
@@ -519,12 +614,19 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                         title={`${fixture.league} (${fixture.country}) — no channel on your provider names this fixture; select it to search`}
                       />
                     ))}
-                  </div>
+                  </LeagueGroup>
                 ))}
 
-                {sportUnscheduled.map(({ league, games }) => (
-                  <div key={`unscheduled-${league.id}`}>
-                    <div className="sports-section">{league.label} · unscheduled</div>
+                {sportUnscheduled.map(({ league, games }, index) => (
+                  <LeagueGroup
+                    key={`unscheduled-${league.id}`}
+                    id={`unscheduled-${league.id}`}
+                    bodyId={`sports-unscheduled-${index}`}
+                    label={`${league.label} · unscheduled`}
+                    count={games.length}
+                    collapsed={collapsedGroups.has(`unscheduled-${league.id}`)}
+                    onToggle={toggleGroup}
+                  >
                     {games.slice(0, MAX_ROWS).map((game) => (
                       <FixtureRow
                         key={game.key}
@@ -536,7 +638,7 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                         title={`${feedCount(game.channels.length)} carry this fixture`}
                       />
                     ))}
-                  </div>
+                  </LeagueGroup>
                 ))}
               </div>
             </div>

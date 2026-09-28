@@ -6,6 +6,13 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.58.1 — collapsible league groups in the Sports tab)
+
+The Sports tab's fixtures pane groups by competition exactly as before, and every competition header is
+now a **button**: click it to show or hide that league's fixtures. The fixture count stays visible while
+a group is shut, and the choice is remembered per league on that device. 621 tests, typecheck, lint and
+the client build clean.
+
 ## Current state (v0.58.0 — the sports catalogue, the key, and a 01:00 warm)
 
 The Sports tab's catalogue is now fetched by the server, cached on disk and shared by every account —

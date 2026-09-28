@@ -8,12 +8,21 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.58.0**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.58.1**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.58.1 — the Sports tab groups by competition, and each group collapses.** The fixtures pane
+already drew a competition header per league; it is now a real **button** that shows or hides that
+league's fixtures, with the fixture count staying visible so a shut group still says how much is
+inside (and `aria-expanded` saying what it does). Provider competitions, api-football-only
+competitions and the unscheduled buckets all collapse, and the choice is remembered **per league,
+per device** (`lib/sportsGroups.ts`, unit-tested — a corrupt or hand-edited stored value reads as
+“nothing collapsed” rather than throwing). Client-only; 621 tests (5 new), typecheck, lint and the
+client build clean.
 
 **v0.58.0 — the sports catalogue gets the guide treatment, the key goes system-wide, and both load
 at 01:00.** **(1) The Sports tab's catalogue is now fetched by the server, cached on disk and shared

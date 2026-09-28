@@ -1663,6 +1663,54 @@ body.resizing-col .resize-handle--feeds::after {
   line-height: 1.45;
 }
 
+/* Each competition in the fixtures pane is a group with a collapsible header — a real button, so it
+   works from the keyboard, and the fixture count stays visible when the group is shut. */
+.sports-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8a93a3;
+}
+
+.sports-group-head:hover {
+  color: #c6cad3;
+  background: #10131b;
+}
+
+/* Shut, the header is the whole group, so it gets its own rule underneath rather than floating. */
+.sports-group-head.collapsed {
+  padding-bottom: 12px;
+  border-bottom: 1px solid #1b1f2a;
+}
+
+.sports-group-chevron {
+  width: 10px;
+  flex-shrink: 0;
+}
+
+.sports-group-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sports-group-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 /* Narrow screens: stack the two panes instead of squeezing them side by side. */
 @media (max-width: 900px) {
   .sports-split {
