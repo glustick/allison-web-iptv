@@ -51,7 +51,7 @@ describe('describeUnplayableVideo', () => {
     expect(message).toMatch(/own HLS pipeline cannot present/)
   })
 
-  it('turns a measured device into something actionable', () => {
+  it('tells a comfortable device what it can do', () => {
     const message = describeUnplayableVideo({
       videoCodec: 'hevc',
       engine: 'hls',
@@ -60,7 +60,19 @@ describe('describeUnplayableVideo', () => {
       now: NOW
     })
     expect(message).toMatch(/242 fps/)
-    expect(message).toMatch(/client-side player is viable/)
+    expect(message).toMatch(/run comfortably/)
+  })
+
+  it('does not write off a device without hardware decode — it says what it managed', () => {
+    const message = describeUnplayableVideo({
+      videoCodec: 'hevc',
+      engine: 'hls',
+      nativeFailed: false,
+      verdict: { ...usable, framesPerSecond: 38 },
+      now: NOW
+    })
+    expect(message).toMatch(/38 fps/)
+    expect(message).toMatch(/worth having here/)
   })
 
   it('asks for the measurement when this device has none, and ignores a stale one', () => {

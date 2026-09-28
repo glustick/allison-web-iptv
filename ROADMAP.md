@@ -8,12 +8,23 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.0**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.1**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.61.1 — the decode gate is a tier per device, not a verdict on one machine.** The operator's
+correction (2026-09-28): *“i dont want this player to need the rtx 3080 TI, its just one of the system
+i have available, it should run on a varity of systems with or without hardware accesleration.”* The
+verdict from v0.60.0 was a yes/no against a 30 fps floor, which quietly made one benchmark machine the
+yardstick. It is now a **tier** — *comfortable* (100 fps or more: decode will not be what holds this
+device back), *marginal* (30-99 fps: drops frames, and still better than a black screen in a browser
+that cannot present HEVC any other way), or *insufficient* — and the messages built on it say what a
+device can do rather than writing it off: a machine with no hardware decode at all is told what it
+managed. Hardware decode is a fast path, never a prerequisite; a stream a device cannot carry at all
+still falls back to the server's own path. 660 tests, typecheck, lint and the client build clean.
 
 **v0.61.0 — what each channel needs is remembered once, in the database.** The operator's ask
 (2026-09-28): *“a persistent record for each channel's transcoding need … a database should be
@@ -1036,6 +1047,16 @@ be ported in two independent pieces — and lets the first land without anyone a
 ## Open work
 
 ### 0. Client-side decoding, so the NAS never transcodes video
+
+**Correction, 2026-09-28 (same scope, narrower assumption).** *The client-side player has to work on
+whatever device someone is watching on — with or without hardware decode.* The operator's words: *“i
+dont want this player to need the rtx 3080 TI, its just one of the system i have available, it should
+run on a varity of systems with or without hardware accesleration.”* So everywhere below that names
+one benchmark machine, read it as *an example of a fast client*, not as the requirement: the
+capability check is **tiered per device** — comfortable / marginal / insufficient, derived from a
+measurement on that device (lib/decodeGate.ts) — a machine with no GPU at all is told what it managed
+rather than written off, and a stream it cannot carry at all falls back to the server's own path.
+Hardware decode is a fast path, never a prerequisite.
 
 **The rule, decided 2026-09-22 on the operator's instruction:** *this NAS has no CPU headroom for
 video transcoding, and demanding it overloads the box. If transcoding can be done at the client edge,

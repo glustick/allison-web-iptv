@@ -1,4 +1,4 @@
-import { verdictIsUsable, type DecodeVerdict } from './decodeGate'
+import { tierForVerdict, type DecodeVerdict } from './decodeGate'
 
 /**
  * Why a channel will not play here — in one sentence, carrying the evidence that makes the next test
@@ -35,10 +35,17 @@ export function describeUnplayableVideo(opts: {
 
   const now = opts.now ?? Date.now()
   const verdict = opts.verdict
-  const tail = verdictIsUsable(verdict, now)
-    ? `This device measured ${Math.round(verdict?.framesPerSecond ?? 0)} fps decoding it directly, so a ` +
-      'client-side player is viable here — it is not built yet.'
-    : 'Run the decode check in Admin → System to find out whether this device could decode it client-side.'
+  const frames = Math.round(verdict?.framesPerSecond ?? 0)
+  // What this device CAN do — not a verdict on whether it is good enough. A machine with no hardware
+  // decode at all is told what it managed, and a machine whose measurement is missing is asked for
+  // one, rather than either being written off (the operator's correction, 2026-09-28).
+  const tier = tierForVerdict(verdict, now)
+  const tail =
+    tier === 'comfortable'
+      ? `This device decodes it directly at ${frames} fps, so a client-side player would run comfortably here — it is not built yet.`
+      : tier === 'marginal'
+        ? `This device decodes it directly at ${frames} fps — enough to watch, with frames dropped along the way — so a client-side player is worth having here.`
+        : 'Run the decode check in Admin → System on this device to see what it can carry.'
 
   return `${lead} ${tail}`
 }

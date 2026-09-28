@@ -7,9 +7,16 @@
 // this module remembers its answer per device, so the player and the diagnostics can both read it
 // without re-running it, and so a later session knows what this machine already proved.
 //
+// **What the verdict is for — corrected 2026-09-28 by the operator:** *"i dont want this player to
+// need the rtx 3080 TI, its just one of the system i have available, it should run on a varity of
+// systems with or without hardware accesleration."* So this is **not** a yes/no on whether one
+// benchmark machine is good enough to build for: it is a **tier**, read per device, so a laptop, a
+// phone or a browser with no GPU at all still gets the best path it can actually run — and the app
+// stops treating one machine as the yardstick. Hardware decode is a fast path, never a requirement.
+//
 // Pure rules over an injected { storage, now }, the same shape as lib/prefs.ts and
-// lib/sportsGroups.ts, so the TTL, the parsing and the "usable" threshold are unit-tested rather
-// than buried in a component.
+// lib/sportsGroups.ts, so the TTL, the parsing and the tiers are unit-tested rather than buried in a
+// component.
 
 export interface DecodeVerdict {
   /** When the measurement ran (epoch ms). */
@@ -27,36 +34,65 @@ export interface DecodeVerdict {
 export const VERDICT_TTL_MS = 14 * 24 * 60 * 60 * 1000
 
 /**
- * What "this device can carry a client-side player" means in numbers.
+ * What a measurement means for *this* device — tiered, not a yes/no.
  *
- * 30 fps, not "more than zero": these streams are 50-60 fps, and a decode path that cannot exceed
- * realtime will fall behind the live edge no matter how well it starts. The decode check measures
- * throughput rather than pacing, so this is deliberately the *floor* — a device that clears it is
- * worth building for, and one that does not is worth saying no to.
+ * "Cannot carry 4K" is not the same as "cannot carry this provider's HD channels", and a device that
+ * can do neither is still better served by the server's own path than by nothing at all. The bars are
+ * set against what these streams actually are — up to 50 fps UHD — rather than a synthetic benchmark.
  */
-export const USABLE_FPS = 30
+export type DecodeTier = 'comfortable' | 'marginal' | 'insufficient'
+
+/** Clear headroom over a 50 fps stream: decode is not what will hold this device back. */
+export const COMFORTABLE_FPS = 100
+
+/**
+ * Real-time-ish. A decode at this level drops frames and drifts behind the live edge rather than
+ * stopping — and in a browser that cannot present HEVC any other way, that is still better than a
+ * black screen, which is why "marginal" still counts as usable.
+ */
+export const MARGINAL_FPS = 30
 
 export const VERDICT_STORAGE_KEY = 'allison-web-iptv:client-decode-verdict'
 
 const MAX_AGE_TEXT = { day: 86_400_000, hour: 3_600_000, minute: 60_000 } as const
 
-/** Fresh, fast enough, and it actually produced a picture. */
-export function verdictIsUsable(verdict: DecodeVerdict | null, now: number = Date.now()): boolean {
-  if (!verdict) return false
-  if (!Number.isFinite(verdict.framesPerSecond) || verdict.framesPerSecond < USABLE_FPS) return false
-  if (!(verdict.presentedWidth > 0) || !(verdict.presentedHeight > 0)) return false
-  return now - verdict.measuredAt < VERDICT_TTL_MS
+/** Which tier this device's last measurement put it in. */
+export function tierForVerdict(verdict: DecodeVerdict | null, now: number = Date.now()): DecodeTier {
+  if (!verdict) return 'insufficient'
+  if (!Number.isFinite(verdict.framesPerSecond)) return 'insufficient'
+  if (!(verdict.presentedWidth > 0) || !(verdict.presentedHeight > 0)) return 'insufficient'
+  if (now - verdict.measuredAt >= VERDICT_TTL_MS) return 'insufficient'
+  if (verdict.framesPerSecond >= COMFORTABLE_FPS) return 'comfortable'
+  if (verdict.framesPerSecond >= MARGINAL_FPS) return 'marginal'
+  return 'insufficient'
 }
 
-/** One line for the diagnostics panel — says what was measured, when, and whether it is still current. */
+/**
+ * Fresh, produced a picture, and fast enough to be worth trying — the two tiers above `insufficient`.
+ * "Marginal" counts: on a device that cannot present HEVC at all, a decode that keeps up most of the
+ * time is the difference between watching and not.
+ */
+export function verdictIsUsable(verdict: DecodeVerdict | null, now: number = Date.now()): boolean {
+  return tierForVerdict(verdict, now) !== 'insufficient'
+}
+
+/** One line for the diagnostics panel — what was measured, when, and which tier it lands in. */
 export function describeVerdict(verdict: DecodeVerdict | null, now: number = Date.now()): string {
   if (!verdict) return 'not measured on this device — run the check in Admin → System'
+  const tier = tierForVerdict(verdict, now)
   const age = now - verdict.measuredAt
-  const stale = age >= VERDICT_TTL_MS
   const when = age < MAX_AGE_TEXT.minute ? 'just now' : formatAge(age)
   const size = verdict.presentedWidth > 0 ? `${verdict.presentedWidth}x${verdict.presentedHeight}` : 'no picture'
   const frames = Number.isFinite(verdict.framesPerSecond) ? `${verdict.framesPerSecond.toFixed(0)} fps` : 'unmeasured speed'
-  return `${frames} at ${size} — measured ${when}${stale ? ' (stale, re-run it)' : ''}`
+  const tierText =
+    tier === 'comfortable'
+      ? 'comfortable'
+      : tier === 'marginal'
+        ? 'marginal — may drop frames'
+        : age >= VERDICT_TTL_MS
+          ? 'stale, re-run it'
+          : 'not enough for these channels'
+  return `${frames} at ${size} — measured ${when} — ${tierText}`
 }
 
 function formatAge(ageMs: number): string {

@@ -1,18 +1,21 @@
 import { describe, it, expect } from 'vitest'
 import {
-  USABLE_FPS,
+  COMFORTABLE_FPS,
+  MARGINAL_FPS,
   VERDICT_TTL_MS,
   describeVerdict,
   loadVerdict,
   parseVerdict,
   saveVerdict,
+  tierForVerdict,
   verdictIsUsable,
   type DecodeVerdict
 } from './decodeGate'
 
-// The gate exists so a client-side player is only built (and only entered) where the machine has
-// proved it can carry one — so these pin the rules that decide "proved", and the tolerance that keeps
-// a corrupt value from breaking a panel.
+// The gate exists so a client-side player only enters a path the device can actually carry — and,
+// after the operator's correction of 2026-09-28, so that a device without hardware acceleration is
+// told what it CAN do rather than being written off. These pin the tiers, and the tolerance that
+// keeps a corrupt value from breaking a panel.
 
 const NOW = Date.parse('2026-09-28T16:00:00Z')
 
@@ -20,22 +23,31 @@ function verdict(partial: Partial<DecodeVerdict> = {}): DecodeVerdict {
   return { measuredAt: NOW - 60_000, framesPerSecond: 240, presentedWidth: 3840, presentedHeight: 2160, codec: 'hev1.1.6.L153.B0', ...partial }
 }
 
-describe('verdictIsUsable', () => {
-  it('accepts a fresh, fast measurement that produced a picture', () => {
-    expect(verdictIsUsable(verdict(), NOW)).toBe(true)
+describe('tierForVerdict', () => {
+  it('calls a fast decode comfortable — hardware or not, the number is the number', () => {
+    expect(tierForVerdict(verdict(), NOW)).toBe('comfortable')
+    expect(tierForVerdict(verdict({ framesPerSecond: COMFORTABLE_FPS }), NOW)).toBe('comfortable')
   })
 
-  it('refuses one below realtime — a slideshow with a green tick is the failure this guards', () => {
-    expect(verdictIsUsable(verdict({ framesPerSecond: USABLE_FPS - 1 }), NOW)).toBe(false)
-    expect(verdictIsUsable(verdict({ framesPerSecond: USABLE_FPS }), NOW)).toBe(true)
+  it('calls a realtime-ish decode marginal rather than unusable', () => {
+    // A device decoding at 40 fps on these 50 fps streams drops frames — but a browser that cannot
+    // present HEVC any other way is still better off watching than staring at a black screen.
+    expect(tierForVerdict(verdict({ framesPerSecond: MARGINAL_FPS }), NOW)).toBe('marginal')
+    expect(tierForVerdict(verdict({ framesPerSecond: COMFORTABLE_FPS - 1 }), NOW)).toBe('marginal')
+    expect(verdictIsUsable(verdict({ framesPerSecond: MARGINAL_FPS }), NOW)).toBe(true)
   })
 
-  it('refuses a measurement that presented no picture', () => {
-    expect(verdictIsUsable(verdict({ presentedWidth: 0, presentedHeight: 0 }), NOW)).toBe(false)
+  it('calls a slideshow insufficient', () => {
+    expect(tierForVerdict(verdict({ framesPerSecond: MARGINAL_FPS - 1 }), NOW)).toBe('insufficient')
+    expect(verdictIsUsable(verdict({ framesPerSecond: 4 }), NOW)).toBe(false)
   })
 
-  it('refuses a stale measurement, and nothing at all', () => {
-    expect(verdictIsUsable(verdict({ measuredAt: NOW - VERDICT_TTL_MS - 1 }), NOW)).toBe(false)
+  it('treats no picture as insufficient, whatever the frame count said', () => {
+    expect(tierForVerdict(verdict({ presentedWidth: 0, presentedHeight: 0 }), NOW)).toBe('insufficient')
+  })
+
+  it('treats a stale measurement as unmeasured — a new GPU can arrive, and so can a driver regression', () => {
+    expect(tierForVerdict(verdict({ measuredAt: NOW - VERDICT_TTL_MS - 1 }), NOW)).toBe('insufficient')
     expect(verdictIsUsable(null, NOW)).toBe(false)
   })
 })
@@ -61,11 +73,15 @@ describe('parseVerdict', () => {
 })
 
 describe('describeVerdict', () => {
-  it('says what was measured and when', () => {
-    expect(describeVerdict(verdict(), NOW)).toBe('240 fps at 3840x2160 — measured 1 min ago')
+  it('names the tier, not just the number', () => {
+    expect(describeVerdict(verdict(), NOW)).toBe('240 fps at 3840x2160 — measured 1 min ago — comfortable')
   })
 
-  it('says so when nothing has been measured', () => {
+  it('is honest about a marginal device', () => {
+    expect(describeVerdict(verdict({ framesPerSecond: 42 }), NOW)).toMatch(/marginal — may drop frames/)
+  })
+
+  it('says so when nothing has been measured on this device', () => {
     expect(describeVerdict(null, NOW)).toMatch(/not measured on this device/)
   })
 
