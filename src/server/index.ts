@@ -708,6 +708,16 @@ function writeSportsKey(key: string | null, updatedBy: string): void {
   })
 }
 
+/** The stored key plus its provenance, for the admin screen (which may show it) — see the endpoint. */
+function readSportsKeyMeta(): { key: string | null; updatedAt: string | null; updatedBy: string | null } {
+  const stored = systemSettings.read<{ keyEnc?: unknown; updatedAt?: unknown; updatedBy?: unknown }>(SPORTS_KEY_SETTING)
+  return {
+    key: typeof stored?.keyEnc === 'string' && stored.keyEnc.length > 0 ? readSportsKey() : null,
+    updatedAt: typeof stored?.updatedAt === 'string' ? stored.updatedAt : null,
+    updatedBy: typeof stored?.updatedBy === 'string' ? stored.updatedBy : null
+  }
+}
+
 /**
  * Adopts legacy per-account settings into the system-wide ones, once.
  *
@@ -1788,6 +1798,20 @@ app.get('/api/sports/catalogue', requireAuth, (req, res) => {
       res.status(502).json({ error: `Could not load the sports catalogue: ${err instanceof Error ? err.message : String(err)}` })
     }
   })()
+})
+
+// The stored key **in clear**, for the admin screen. This is the one place a credential is returned
+// to the browser, and it is deliberate: the operator asked to see and change the key rather than
+// only learn whether one is set (2026-09-28). Admin-only, same-origin, and never logged — the
+// provider credentials keep their own rule (never returned at all, v0.11.0).
+app.get('/api/sports/key', requireAuth, requireAdmin, (_req, res) => {
+  try {
+    const meta = readSportsKeyMeta()
+    res.json({ ok: true, key: meta.key, keySet: meta.key !== null, updatedAt: meta.updatedAt, updatedBy: meta.updatedBy })
+  } catch (err) {
+    console.error('[sports] could not read the stored key:', err instanceof Error ? err.message : String(err))
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
 })
 
 app.post('/api/sports/key', requireAuth, requireAdmin, (req, res) => {

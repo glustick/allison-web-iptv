@@ -36,6 +36,25 @@ export async function fetchSportsConfig(): Promise<{ keySet: boolean }> {
   return { keySet: Boolean(data.keySet) }
 }
 
+/**
+ * The key itself, for the admin screen's field (which shows it and lets it be changed). Admin-only
+ * server-side; a non-admin gets a 403, which the caller shows as-is rather than retrying.
+ */
+export async function fetchSportsKey(): Promise<{
+  key: string | null
+  updatedAt: string | null
+  updatedBy: string | null
+}> {
+  const res = await fetch('/api/sports/key')
+  if (!res.ok) throw new Error(`Could not read the api-football key (${res.status})`)
+  const data = (await res.json()) as { key?: unknown; updatedAt?: unknown; updatedBy?: unknown }
+  return {
+    key: typeof data.key === 'string' && data.key.length > 0 ? data.key : null,
+    updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : null,
+    updatedBy: typeof data.updatedBy === 'string' ? data.updatedBy : null
+  }
+}
+
 /** Sets (or, with null, clears) the account's api-football key. The key itself is never returned. */
 export async function saveSportsKey(key: string | null): Promise<{ keySet: boolean }> {
   const res = await fetch('/api/sports/key', {

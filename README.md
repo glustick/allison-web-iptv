@@ -6,6 +6,12 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.59.2 — the api-football key is visible and editable)
+
+Admin → Sports data now **shows** the stored api-football key and lets it be changed, rather than only
+reporting whether one is set (admin-only, same-origin, never logged). It also names where the key came
+from. 626 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.59.1 — the api-football key can be supplied from the environment or a file)
 
 The Sports tab's key no longer has to be typed in: the app adopts one from `SPORTS_API_KEY`, or from a

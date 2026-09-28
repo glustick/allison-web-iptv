@@ -1,24 +1,40 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
-import { fetchSportsConfig, saveSportsKey } from '../lib/sportsFixtures'
+import { fetchSportsConfig, fetchSportsKey, saveSportsKey } from '../lib/sportsFixtures'
 
 // Admin → Sports data: the api-football.com key behind the Sports tab's fixtures and live scores.
 //
-// The key is a credential, so it is stored server-side encrypted with the account's other
-// credentials and is **never returned** — this screen only ever learns whether one is set. The
-// server makes every request, the same rule the provider credentials have followed since v0.11.0.
+// Like the guide sources it is a **system-wide setting** — one key for the household, stored
+// encrypted at rest, written only by an admin, and spent only by the server.
+//
+// The field *shows* the key and lets it be changed, which the operator asked for (2026-09-28). That
+// is a deliberate exception to the rule the provider credentials follow (never returned at all,
+// v0.11.0): this one is a lesser secret, and the alternative — a field that says "a key is set" and
+// nothing else — made it impossible to check what was actually configured. It reaches nobody who is
+// not an admin, and it is never logged.
 
 export function SportsPanel(): JSX.Element {
-  const [keySet, setKeySet] = useState<boolean | null>(null)
+  const [stored, setStored] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  const [provenance, setProvenance] = useState<{ updatedAt: string | null; updatedBy: string | null }>({
+    updatedAt: null,
+    updatedBy: null
+  })
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
-      const { keySet: present } = await fetchSportsConfig()
-      setKeySet(present)
+      const config = await fetchSportsConfig()
+      const info = config.keySet
+        ? await fetchSportsKey()
+        : { key: null, updatedAt: null, updatedBy: null }
+      setStored(info.key)
+      setDraft(info.key ?? '')
+      setProvenance({ updatedAt: info.updatedAt, updatedBy: info.updatedBy })
+      setError(null)
     } catch (err) {
-      setNote(err instanceof Error ? err.message : 'Could not read the sports settings')
+      setError(err instanceof Error ? err.message : 'Could not read the sports settings')
     }
   }, [])
 
@@ -29,21 +45,23 @@ export function SportsPanel(): JSX.Element {
   const save = async (key: string | null): Promise<void> => {
     setBusy(true)
     setNote(null)
+    setError(null)
     try {
-      const { keySet: present } = await saveSportsKey(key)
-      setKeySet(present)
-      setDraft('')
+      await saveSportsKey(key)
+      await refresh()
       setNote(
         key === null
-          ? 'Key cleared — the Sports tab keeps its schedule and drops the scores.'
+          ? 'Key cleared — the Sports tab keeps its schedule and drops the fixtures and scores.'
           : 'Key saved. Reload the Sports tab to pick it up.'
       )
     } catch (err) {
-      setNote(err instanceof Error ? err.message : 'Could not save the key')
+      setError(err instanceof Error ? err.message : 'Could not save the key')
     } finally {
       setBusy(false)
     }
   }
+
+  const dirty = draft.trim() !== (stored ?? '')
 
   return (
     <section className="admin-section">
@@ -55,23 +73,20 @@ export function SportsPanel(): JSX.Element {
         <a href="https://www.api-football.com/" target="_blank" rel="noopener noreferrer">
           api-football.com
         </a>{' '}
-        key gives the Sports tab its fixtures and live scores. Like the guide sources, it is a{' '}
-        <strong>system-wide setting</strong>: one key for everyone, stored encrypted on the server
-        and never sent to the browser — the server makes every request.{' '}
-        {keySet === null
-          ? 'Checking…'
-          : keySet
-            ? 'A key is set.'
-            : 'No key is set, so the tab shows the provider’s own schedule without scores.'}
+        key gives the Sports tab its fixtures and live scores. Like the guide sources it is a{' '}
+        <strong>system-wide setting</strong> — one key for everyone — stored encrypted on the server
+        and spent only there. Only an admin can see or change it.
       </p>
+      {error && <div className="login-error admin-error">{error}</div>}
       <div className="epg-preset-row">
-        <label htmlFor="sports-key">{keySet ? 'Replace key' : 'API key'}</label>
+        <label htmlFor="sports-key">API key</label>
         <input
           id="sports-key"
           className="sports-key-input"
-          type="password"
+          type="text"
           value={draft}
-          placeholder={keySet ? '•••••• (already set)' : 'x-apisports-key'}
+          placeholder="x-apisports-key"
+          spellCheck={false}
           autoComplete="off"
           onChange={(e) => setDraft(e.target.value)}
         />
@@ -79,16 +94,23 @@ export function SportsPanel(): JSX.Element {
           type="button"
           className="admin-small-btn"
           onClick={() => void save(draft.trim())}
-          disabled={busy || draft.trim().length === 0}
+          disabled={busy || !dirty || draft.trim().length === 0}
         >
-          {busy ? 'Saving…' : 'Save'}
+          {busy ? 'Saving…' : stored ? 'Save change' : 'Save'}
         </button>
-        {keySet && (
+        {stored && (
           <button type="button" className="admin-small-btn danger" onClick={() => void save(null)} disabled={busy}>
             Clear
           </button>
         )}
       </div>
+      <p className="setup-hint">
+        {stored
+          ? `A key is set${provenance.updatedBy ? ` (${provenance.updatedBy}${provenance.updatedAt ? `, ${new Date(provenance.updatedAt).toLocaleString()}` : ''})` : ''} — the Sports tab is using it. Clear it to fall back to the provider's own schedule.`
+          : 'No key is set, so the Sports tab shows the provider’s own schedule, without fixtures or scores.'}{' '}
+        A key can also be supplied out of band with <code>SPORTS_API_KEY</code> or a file at{' '}
+        <code>/appdata/api-football.txt</code>; one saved here takes precedence over a file.
+      </p>
       {note && <p className="setup-hint">{note}</p>}
     </section>
   )

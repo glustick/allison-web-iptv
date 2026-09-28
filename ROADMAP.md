@@ -8,12 +8,21 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.59.1**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.59.2**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.59.2 — the api-football key is visible and editable in the admin screen.** The Sports data
+section only ever reported *whether* a key was set; the field **shows** it now and lets it be changed
+(the operator's ask, 2026-09-28). That is a deliberate exception to the rule the provider credentials
+follow (never returned at all, v0.11.0), and it is confined: `GET /api/sports/key` is admin-only and
+same-origin, the value is never logged, and it reaches nobody who is not an admin. The panel also
+names where the key came from — the account that saved it, with the date — and Save only enables when
+the field actually differs from what is stored. 626 tests, typecheck, lint and the client build
+clean.
 
 **v0.59.1 — the api-football key can be supplied out of band.** Until now the only way to set it was
 the admin screen. The app now also adopts a key from the `SPORTS_API_KEY` environment variable, or
