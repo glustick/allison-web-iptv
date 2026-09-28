@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { stallRecoveryShape, useTranscodeFallback } from '../lib/transcodeFallback'
-import { noteStreamNeedsTranscode, streamNeedsTranscode, streamNeedsVideoTranscode } from '../lib/transcodeHints'
+import { noteStreamNeedsTranscode, reportChannelPlanFailed, streamNeedsTranscode, streamNeedsVideoTranscode } from '../lib/transcodeHints'
 import { prefersNativePlayback } from '../lib/nativePlayback'
 import { loadVerdict } from '../lib/decodeGate'
 import { describeUnplayableVideo } from '../lib/playbackDiagnosis'
@@ -536,6 +536,11 @@ let stallCount = 0
               // Native or nothing (v0.48.2): no re-encode is offered, because on this host one could
               // not keep up with a 4K feed anyway. Say so, and let the viewer pick another channel.
               fatalErrorShown = true
+              // The plan said this channel needs converting; it was converted; it still would not play
+              // — so the plan is wrong, and the next click should discover it again rather than repeat
+              // it (see lib/channelPlans.ts). Nothing is reported when the direct source failed, since
+              // then no plan was acted on.
+              if (getSourceUrl(url) !== url) reportChannelPlanFailed(url, 'the converted session failed to play')
               setError(
                 'This channel can’t be played in this browser — its video needs decoding this browser ' +
                   'cannot do. Choose another channel.'
@@ -550,6 +555,7 @@ let stallCount = 0
             break
           default:
             fatalErrorShown = true
+            if (getSourceUrl(url) !== url) reportChannelPlanFailed(url, `media error: ${data.details}`)
             setError(`Playback error: ${data.details}`)
             instance.destroy()
         }

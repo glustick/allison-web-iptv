@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.61.0 — each channel's transcoding need is remembered once)
+
+What a channel needs — the video re-encode tier, the audio remux — is now recorded in the app's
+database (`channel_plans`) rather than per browser: one row per channel per account, in the persisted
+volume, shared by every device and surviving image updates. A plan is written only from a playback that
+worked, expires after 30 days, and is **deleted the moment it fails**, so a wrong answer is
+re-discovered once rather than repeated for a month. The player still reads it synchronously — no round
+trip on the playback path. 657 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.60.0 — a measured client-decode verdict, and honest failure messages)
 
 The decode check now saves a **per-device verdict** — frames per second, the size it actually

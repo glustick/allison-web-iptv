@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
+import { syncChannelPlans } from './lib/transcodeHints'
 import { LoginScreen } from './components/LoginScreen'
 import { SetupScreen } from './components/SetupScreen'
 import { IptvConfigScreen } from './components/IptvConfigScreen'
@@ -35,6 +36,14 @@ type IptvPhase = 'checking' | 'unconfigured' | 'connecting' | 'failed'
 export default function App(): JSX.Element {
   const [authState, setAuthState] = useState<AuthState | null>(null)
   const [session, setSession] = useState<Session | null>(null)
+
+  // The household's channel plans, pulled once a session exists so the playback path never pays for
+  // the lookup (see lib/transcodeHints.ts). Fire-and-forget — a failure here just means the local
+  // mirror stands, and the first click on a channel still works.
+  useEffect(() => {
+    if (!session) return
+    void syncChannelPlans()
+  }, [session])
   const [savedConfig, setSavedConfig] = useState<IptvConfig | null>(null)
   const [iptvPhase, setIptvPhase] = useState<IptvPhase>('checking')
   const [autoConnectError, setAutoConnectError] = useState<string | null>(null)

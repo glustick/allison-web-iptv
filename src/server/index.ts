@@ -40,6 +40,7 @@ import { createSystemEpgStore } from './lib/systemEpg.js'
 import { createSystemSettingsStore } from './lib/systemSettings.js'
 import { createSportsCatalogueService } from './lib/sportsCatalogue.js'
 import { readSuppliedSportsKey } from './lib/sportsKeySource.js'
+import { createChannelPlansStore } from './lib/channelPlans.js'
 import { dropCachedGuide } from './lib/epgCache.js'
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
 import { createSearchService } from './lib/searchService.js'
@@ -317,6 +318,7 @@ const systemSettings = createSystemSettingsStore({ dataDir: DATA_DIR })
 const systemEpgStore = createSystemEpgStore({ dataDir: DATA_DIR, settings: systemSettings })
 const epgService = createEpgService({ dataDir: DATA_DIR })
 const sportsCatalogue = createSportsCatalogueService({ dataDir: DATA_DIR })
+const channelPlans = createChannelPlansStore({ dataDir: DATA_DIR })
 // One-time migration: guide sources and the api-football key used to live on each account. If the
 // system-wide settings have never been written, adopt whatever an account already had (an admin's
 // first) so nobody has to re-enter what they had already configured.
@@ -1739,6 +1741,61 @@ app.put('/api/iptv/playlists', requireAuth, (req, res) => {
     res.json({ ok: true, playlists: publicPlaylists(replaced.envelope.playlists) })
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Could not save the playlists' })
+  }
+})
+
+// --- Channel plans (what each channel needs, remembered) ------------------------------------
+// One row per channel: whether it needed the video re-encode tier, and whether its audio had to be
+// re-encoded. Written only from a playback that WORKED, cleared the moment one fails, and read by
+// the player before it asks the provider anything — which is the whole point: the discovery it
+// replaces cost 10-30 seconds of black screen on every click (see lib/channelPlans.ts).
+app.get('/api/channels/plans', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    res.json({ ok: true, plans: channelPlans.list(session.username) })
+  } catch (err) {
+    console.error('[plans] list failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
+app.post('/api/channels/plans', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : ''
+  if (!key || key.length > 300) {
+    res.status(400).json({ error: 'key must be the stream url the player is using' })
+    return
+  }
+  try {
+    const plan = channelPlans.record(session.username, key, {
+      video: req.body?.video === true,
+      audio: req.body?.audio === true,
+      note: typeof req.body?.note === 'string' ? req.body.note.slice(0, 200) : null
+    })
+    res.json({ ok: true, plan })
+  } catch (err) {
+    console.error('[plans] record failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+  }
+})
+
+app.post('/api/channels/plans/failed', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : ''
+  if (!key || key.length > 300) {
+    res.status(400).json({ error: 'key must be the stream url the player is using' })
+    return
+  }
+  try {
+    channelPlans.markFailed(
+      session.username,
+      key,
+      typeof req.body?.reason === 'string' ? req.body.reason.slice(0, 200) : null
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[plans] markFailed failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
   }
 })
 

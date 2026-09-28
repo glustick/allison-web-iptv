@@ -8,12 +8,29 @@ exercised against the v0.45.0 tier or the v0.46.x resolution cap. Those entries 
 Worth recording as a habit: a note inherited from an earlier session is a hypothesis, not a fact —
 check it before repeating it into a release note.
 
-Recommended enhancements for future development, refreshed **2026-09-28 against v0.60.0**.
+Recommended enhancements for future development, refreshed **2026-09-28 against v0.61.0**.
 Grouped by theme rather than a strict backlog — pick based on what matters most to whoever
 picks this up next. See `README.md` for the full current state and `EFFORT-ASSESSMENT.md` for
 the original scoping writeup this project started from.
 
 ## Current release
+
+**v0.61.0 — what each channel needs is remembered once, in the database.** The operator's ask
+(2026-09-28): *“a persistent record for each channel's transcoding need … a database should be
+reference for the last known working config, if that fails for whatever reason then it should be
+reassessed and updated … persistent through different builds.”* There was already a hint for this —
+`lib/transcodeHints.ts`, localStorage, per device, 14 days — and it worked, but it was rebuilt on
+every new browser and invisible to the server, which is where the transcoder actually is. The record
+now lives in the app's own database (`channel_plans`, lib/channelPlans.ts) in the persisted volume:
+one row per channel per account, shared by every device, surviving image updates. Two rules do the
+real work. **A plan is a bet, not a fact** — it carries the moment it was proved, expires after 30
+days, and is only ever written from a playback that *worked*. **A failure forgets it** — when a
+converted session still will not play, the player reports it and the row is deleted, so the next
+click re-discovers once instead of repeating a wrong answer for a month; the report is skipped when
+the direct source was the one that failed, since then no plan was acted on. The client keeps reading
+**synchronously** on the playback path — a hint that cost a round trip would defeat its own purpose —
+from an in-memory mirror refreshed once a session, with localStorage as the instant-boot copy and the
+offline fallback. 657 tests (12 new), typecheck, lint and the client build clean.
 
 **v0.60.0 — a measured client-decode verdict, and failure messages that tell the two paths apart.**
 Two pieces of the client-side decoding work, both of them the parts that had to come first.
