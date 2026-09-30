@@ -30,12 +30,40 @@ export interface FixturesResponse {
   error: string | null
 }
 
-/** Whether this account has an api-football key set. */
-export async function fetchSportsConfig(): Promise<{ keySet: boolean }> {
+/** One sport the server will query for fixtures when a key is set. */
+export interface SportFeed {
+  sport: string
+  label: string
+}
+
+/** What the persisted fixture cache holds (Admin → Sports data). */
+export interface FixtureCacheInfo {
+  days: number
+  oldest: string | null
+  newest: string | null
+}
+
+/** Whether this account has an api-football key set — and, for the admin screen, what it buys. */
+export async function fetchSportsConfig(): Promise<{
+  keySet: boolean
+  sports?: SportFeed[]
+  budget?: { remaining: number; used: number }
+  cache?: FixtureCacheInfo
+}> {
   const res = await fetch('/api/sports/config')
   if (!res.ok) throw new Error(`Could not read the sports settings (${res.status})`)
-  const data = (await res.json()) as { keySet?: boolean }
-  return { keySet: Boolean(data.keySet) }
+  const data = (await res.json()) as {
+    keySet?: boolean
+    sports?: SportFeed[]
+    budget?: { remaining: number; used: number }
+    cache?: FixtureCacheInfo
+  }
+  return {
+    keySet: Boolean(data.keySet),
+    sports: Array.isArray(data.sports) ? data.sports : undefined,
+    budget: data.budget,
+    cache: data.cache
+  }
 }
 
 /**

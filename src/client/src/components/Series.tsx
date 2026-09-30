@@ -132,6 +132,9 @@ export function Series({
   const [nowPlaying, setNowPlaying] = useState<{ episode: SeriesEpisode } | null>(null)
   const [startAt, setStartAt] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // True once the category fetch has *answered* — an empty catalogue that arrived as an answer is
+  // the provider's to explain, and it deserves a sentence rather than a silently bare sidebar.
+  const [categoriesAnswered, setCategoriesAnswered] = useState(false)
   const [selection, setSelection] = useState<Selection>({ type: 'all' })
   const [prefs, setPrefs] = useState<PrefsState>(EMPTY_PREFS)
   const seriesFavourites = useMemo(() => prefs.favourites.filter((f) => f.kind === 'series'), [prefs.favourites])
@@ -146,7 +149,11 @@ export function Series({
   useEffect(() => {
     session.client
       .getSeriesCategories()
-      .then(setCategories)
+      .then((list) => {
+        setCategories(list)
+        setCategoriesAnswered(true)
+        setLoadError(null)
+      })
       .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load categories'))
   }, [session])
 
@@ -154,7 +161,10 @@ export function Series({
     if (selection.type === 'history') return
     session.client
       .getSeries(selection.type === 'provider' ? selection.id : undefined)
-      .then(setSeriesList)
+      .then((list) => {
+        setSeriesList(list)
+        setLoadError(null)
+      })
       .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load series'))
   }, [session, selection])
 
@@ -325,6 +335,13 @@ export function Series({
           <div className="login-error" style={{ padding: '8px 16px' }}>
             {loadError}
           </div>
+        )}
+        {!loadError && categoriesAnswered && categories.length === 0 && (
+          <p className="list-hint" style={{ padding: '8px 16px' }}>
+            The provider answered with no series categories — an empty catalogue on their side, not a
+            load failure. Live TV is unaffected; if this is new, the account's VOD access may have
+            changed on the provider.
+          </p>
         )}
         {selection.type === 'history' ? (
           <div className="channel-list">

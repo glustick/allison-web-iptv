@@ -15,6 +15,101 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.63.0 — the whole sport catalogue, and answers that survive the restart that asked for them.**
+The operator's report (2026-09-30): *"checking the API football, i can only see the football api
+calls … AFL baseball basketball formula 1 NBA NFL are all missing api calls"* — and, right: the
+client's sport list carried American Football, Aussie Rules and Motorsport all along, but the
+server's host table had nothing behind them, so `sportApiFor` returned null and the multi-sport
+fetch **fell back to football-only**. Three hosts were added — `v1.american-football` (NFL),
+`v1.afl` (Aussie Rules) and `v1.formula-1` — with everyday aliases resolved onto the right feed
+(`nba`→basketball deliberately: NBA's games are already inside basketball's `/games`, and querying
+both would double the request count for the same fixtures), and the in-play status codes extended
+with the american quarters (Q1-Q4, OT). Baseball and basketball were already wired (v0.61.5); the
+confirmation of the three new shapes wants the same live pass the original five got. **Formula 1 is
+not two teams and a score**: `/races` answers a *season calendar*, so each session (practice,
+qualifying, the race) becomes a fixture at its own kickoff, a season is fetched once and memoised
+for a day, and live/finished are derived from the asking clock rather than cached — a stored "live"
+flag would be a lie the next day.
+
+The second half is the operator's other rule, verbatim: *"we should be storing the data and
+referencing it when we can, not pulling it again from the API database … check that you have the
+data before you poll the API again. This information should be stored on the storage mount so its
+not lost on update."* Every fixture answer now lands in **`sports_fixtures_cache`** in the app's own
+SQLite database on the persisted volume, kept **for seven days and purged beyond that** (on write
+and on boot). Reads are cache-first all the way down — memory, then the database, then the API —
+and a **past day is final**: fetched 26+ hours after the day it describes, its results can no longer
+change, so it is served from storage for its whole seven-day life without another request. Today
+keeps the live (5 min) and idle (1 h) windows it always had, because an hour-old score is not a
+score. The **request counter is persisted too** — a restart used to reset our own ceiling while the
+provider's kept counting. Admin → Sports data now shows the whole catalogue the key is asked for,
+requests spent today, and what the store holds (days, oldest to newest) — "only football calls are
+being made" is answerable from the screen. Also landed, from the same day's report (*"VOD is missing
+movies and TV"*): when the provider *answers* with an empty movie or series catalogue, the tabs now
+say so in a sentence instead of rendering a silently bare sidebar — an empty answer is the
+provider's to explain, and a load failure already had its banner. And one reported the same day, the sharpest of the set:
+*"the error Xtream request failed: 502 Bad Gateway appears, but then its not cleared, even if the
+channel is switched and the video is playing correctly"* — three fetch paths set the live tab's
+error banner and **nothing ever cleared it**, so a banner from one of the provider's transient
+silent windows (surfaced by the relay as 502) outlived the outage by however long the tab stayed
+open. Every list fetch now clears the banner on its own success, and a channel that actually plays
+clears it too — video working *is* the provider answering again, and the player has its own error
+state, so nothing real can be hidden. The VOD tabs got the same success-clears-error rule.
+
+**And the stale logins, reported the same day:** *"i have only one login but i can see 3 previous
+logins still active, one even streaming a channel. Only one login per account should be active, the
+other stale logins should be automatically cleaned out."* The idle timeout could never reap those by
+itself — a tab left open on a channel heartbeats every ~15s, which *is* activity, so an abandoned
+login never went idle and kept its provider connection forever. Now **a fresh sign-in retires every
+other login of that account** (`lib/singleSession.ts`, pure and tested): the abandoned tab's next
+request 401s, the player's session-expired state takes over, playback stops, and the transcode
+idle-reaper collects whatever it was holding. Found alongside, and fixed in the same move:
+`destroyAuthSession` never removed the SQLite row, so even a *logged-out* (or admin-force-logged-out)
+session lingered on disk until the idle prune and was **revived by a restart** — the exact "stale
+login still active" shape. Retirements are audited as a new `revoked` outcome in the sign-in trail.
+730 tests (33 new), typecheck, lint and the client build clean.
+
+**v0.62.0 — the WebCodecs engine's live loop, proven standalone.** The gate the roadmap demanded
+before this work — *measure the target machine first; a capability is not a throughput* — was passed
+on 2026-09-30: the operator ran the decode check on channel 668 and it read **265.1 frames/second at
+3840x2160 on the hardware path**, a comfortable tier with five times the headroom the 50 fps streams
+need. The same afternoon the NAS-side transcoder died reading that very channel (exit 255, the
+still-unexplained signature from 2026-09-22) — the whole argument for client-side decoding in one
+exchange. This release builds the engine's risky half and proves it where a bug costs a canvas, not a
+channel: **Admin → System now carries "Client-side live playback — video only"** beside the decode
+check. It polls the playlist, fetches new segments while their signatures are young, demuxes with
+PTS, decodes with WebCodecs, and presents on a canvas paced by the frames' own timestamps — the exact
+video pipeline the player will run. Three pure modules carry the decisions, each unit-tested:
+
+- **`lib/liveSegmentLoop.ts`** — the playlist planner hls.js would otherwise own: join ~9s behind the
+  live edge, notice new segments by *absolute sequence number* across the sliding window, bound a
+  catch-up over several polls, poll at playlist cadence when at the edge, and remap a refused segment
+  (400/403 — the ~25s signatures) by sequence from a fresh playlist, the same move the relay makes.
+  It also detects a **playlist that never advances** — five caught-up polls with an unmoved window
+  reports "this channel may not be broadcasting" instead of waiting forever, the honest half of the
+  open "isn't broadcasting" item below, landed where it was cheap.
+- **`lib/framePresenter.ts`** — the presentation clock: anchored on the first drawn frame, advanced
+  by wall time (audio's clock arrives with the player integration), presenting the newest frame whose
+  time has come and closing everything older — a decoder that falls behind skips ahead rather than
+  queueing 4K frames into GPU memory.
+- **`lib/tsHevc.ts` learned timestamps**: each PES header's PTS is carried onto the access units that
+  start inside it (mapped by byte range, so a PES carrying several pictures shares one honest time),
+  with 33-bit wrap handling and a discontinuity rule that re-anchors on a timeline reset without
+  mistaking **B-frame reordering** for one — the fixture taught that decode order is not presentation
+  order, and the presenter keys off the decoder's output (display) order accordingly. Chunks are
+  marked `key` from real IRAP detection (NAL types 16-23) rather than "first frame of a segment",
+  which the provider is under no obligation to make true.
+
+One correction to the check itself, found while building this: **the codec string is now read from
+the stream's own SPS** (`hevcCodecStringFromAnnexB`). The decode check had hardcoded
+`hev1.1.6.L153.B0` — Main — which would have measured this provider's Main 10 HDR UHD feeds as Main.
+The SPS's profile_tier_level layout was pinned empirically against x265's own output for Main,
+Main 10 and Rext before trusting it (the compatibility flags sit *before* level_idc, and profile_idc
+in the byte's low five bits — both easy to get subtly wrong, so the derivation and its candidates
+are pinned by tests including a forced-Main cross-check). **Video only, on purpose**: audio stays on
+the server's AAC path until this engine joins the player, which is the next release's work — the
+engine choice in LivePlayer, the audio session, and A/V sync against a real clock. 709 tests (12
+new), typecheck, lint and the client build clean.
+
 **v0.61.8 — the plan records the working channels too.** The operator's original ask was *“a database
 should be reference for the last known working config”*, and until now only the failures were recorded:
 a plan was written when a channel needed converting, so a channel that simply worked read as
@@ -1231,6 +1326,15 @@ worth building; single digits means a software path and a different decision.
 **Still to build, in order:** wire the decoder into the player — canvas presentation with A/V sync
 against the MSE-fed audio, the playlist/segment loop for live, and the capability gate (a startup probe
 rather than a capability string, since a "yes" from `isConfigSupported` is not proof of throughput).
+
+**Update 2026-09-30 (v0.62.0):** the loop and the pacing are built and proven standalone — see the
+release note at the top of this file. The target machine measured itself (265 fps at 4K on hardware,
+comfortable tier), the live segment loop and the presentation clock exist as tested pure modules
+(`lib/liveSegmentLoop.ts`, `lib/framePresenter.ts`), and Admin → System runs the whole video pipeline
+continuously. What remains is the player integration proper: the engine choice in LivePlayer, the
+server's AAC audio session, and A/V sync against a real audio clock — plus, one cheap measurement
+first, running the loop on a **Main 10 HDR** UHD channel, since channel 668 reads as Main 8-bit and
+the hard feeds are Main 10.
 
 **Where the capability evidence actually comes from, and where it does not:** the operator's three
 readings — `Native HLS pipeline: yes (maybe)`, `MSE accepts HEVC: yes`, `WebCodecs HEVC: yes` — were

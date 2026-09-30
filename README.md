@@ -6,6 +6,33 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.63.0 — the whole sport catalogue, persisted for seven days)
+
+Every sport the key can reach is now asked for, not only football: basketball (NBA inside it),
+american football (NFL), baseball, ice hockey, Aussie Rules (AFL), rugby and Formula 1 — the last
+as a season calendar whose sessions each become a fixture at its own time. Every answer is stored in
+the app's database on the persisted volume for **seven days** and purged beyond that, reads check
+memory, then the database, then the API, a past day's final results are never re-requested, and the
+daily request counter survives restarts — all of it visible in Admin → Sports data. Movie and series
+tabs that get an *empty* catalogue from the provider now say so instead of looking broken, and a
+transient "502 Bad Gateway" list error now clears the moment a channel plays or a list loads,
+rather than sitting over working video, and **one account keeps one active login**: a fresh sign-in
+retires the account's other logins (an abandoned tab that was still streaming stops at its next
+request), while logged-out sessions no longer linger on disk to be revived by a restart. 730 tests,
+typecheck, lint and the client build clean.
+
+## Current state (v0.62.0 — the client-side engine's live loop, proven standalone)
+
+The direction the roadmap has been building toward since the NAS was ruled out of video transcoding:
+decoding at the client edge. The target machine measured itself (265 fps at 4K on the hardware path
+— a comfortable tier), and Admin → System now runs the engine's whole video pipeline continuously —
+poll the playlist, fetch new segments, demux with PTS, decode with WebCodecs, present on a canvas
+paced by the frames' own timestamps. The decisions live in three tested pure modules (the playlist
+planner with its stagnant-playlist detector, the presentation clock, and a PTS-aware TS demuxer that
+also reads the codec string from the stream's own SPS instead of assuming Main). Video only for now;
+audio joins when the engine wires into the player. 709 tests, typecheck, lint and the client build
+clean.
+
 ## Current state (v0.61.4 — the app manages its own api-football quota)
 
 The api-football key is a free plan (100 requests/day), and the Sports tab's five-minute polling would

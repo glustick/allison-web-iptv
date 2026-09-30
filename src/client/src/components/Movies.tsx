@@ -46,6 +46,9 @@ export function Movies({
   // whether we resumed or started fresh.
   const [startAt, setStartAt] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // True once the category fetch has *answered* — an empty catalogue that arrived as an answer is
+  // the provider's to explain, and it deserves a sentence rather than a silently bare sidebar.
+  const [categoriesAnswered, setCategoriesAnswered] = useState(false)
   const [prefs, setPrefs] = useState<PrefsState>(EMPTY_PREFS)
   const { sidebarWidth, startSidebarDrag } = useSidebarWidth()
 
@@ -54,7 +57,11 @@ export function Movies({
   useEffect(() => {
     session.client
       .getVodCategories()
-      .then(setCategories)
+      .then((list) => {
+        setCategories(list)
+        setCategoriesAnswered(true)
+        setLoadError(null)
+      })
       .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load categories'))
   }, [session])
 
@@ -68,7 +75,10 @@ export function Movies({
     if (selection.type !== 'all' && selection.type !== 'provider') return
     session.client
       .getVodStreams(selection.type === 'provider' ? selection.id : undefined)
-      .then(setMovies)
+      .then((list) => {
+        setMovies(list)
+        setLoadError(null)
+      })
       .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load movies'))
   }, [session, selection])
 
@@ -230,6 +240,13 @@ export function Movies({
           <div className="login-error" style={{ padding: '8px 16px' }}>
             {loadError}
           </div>
+        )}
+        {!loadError && categoriesAnswered && categories.length === 0 && (
+          <p className="list-hint" style={{ padding: '8px 16px' }}>
+            The provider answered with no movie categories — an empty VOD catalogue on their side, not
+            a load failure. Live TV is unaffected; if this is new, the account's VOD access may have
+            changed on the provider.
+          </p>
         )}
         <div className="list-toolbar">
           <span className="list-toolbar-title">{sectionTitle}</span>

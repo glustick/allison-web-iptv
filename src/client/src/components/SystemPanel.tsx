@@ -29,6 +29,7 @@ function formatBytesShort(bytes: number): string {
 
 import { sourceLabel } from '../lib/sourceLabel'
 import { DecoderCheck } from './DecoderCheck'
+import { ClientDecodeLoop } from './ClientDecodeLoop'
 export function SystemPanel(): JSX.Element {
   const [health, setHealth] = useState<HealthReport | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -449,6 +450,7 @@ export function SystemPanel(): JSX.Element {
       </section>
 
       <DecoderCheck />
+      <ClientDecodeLoop />
     </div>
   )
 }

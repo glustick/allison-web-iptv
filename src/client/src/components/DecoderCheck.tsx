@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { extractHevcAnnexB, splitAccessUnits } from '../lib/tsHevc'
+import { codecCandidates, extractHevcAnnexB, hevcCodecStringFromAnnexB, splitAccessUnits } from '../lib/tsHevc'
 import { saveVerdict } from '../lib/decodeGate'
 
 /**
@@ -73,11 +73,21 @@ export function DecoderCheck() {
       }
 
       // hev1, not hvc1: in-band parameter sets, which is what Annex-B carries, so WebCodecs needs no
-      // codec description. Main 10 at level 5.3 is the UHD profile this provider actually serves.
-      const config = { codec: 'hev1.1.6.L153.B0', hardwareAcceleration: 'prefer-hardware' as const }
-      const support = await ctor.isConfigSupported(config)
-      if (!support.supported) {
-        setStatus(`the platform refused ${config.codec} — a client-side player would need software fallback`)
+      // codec description. The string itself is read from the stream's own SPS (lib/tsHevc.ts), so a
+      // Main 10 HDR channel is measured as Main 10 rather than as whatever the last hardcode said.
+      let config: { codec: string; hardwareAcceleration: 'prefer-hardware' } | null = null
+      for (const candidate of codecCandidates(hevcCodecStringFromAnnexB(extracted.data))) {
+        const attempt = { codec: candidate, hardwareAcceleration: 'prefer-hardware' as const }
+        // The platform's own answer decides — the derived string first, the provider's two known
+        // shapes behind it.
+        const support = await ctor.isConfigSupported(attempt)
+        if (support.supported) {
+          config = attempt
+          break
+        }
+      }
+      if (!config) {
+        setStatus('the platform refused every HEVC configuration this stream offered — a client-side player would need software fallback')
         return
       }
 

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
-import { fetchSportsConfig, fetchSportsKey, saveSportsKey } from '../lib/sportsFixtures'
+import {
+  fetchSportsConfig,
+  fetchSportsKey,
+  saveSportsKey,
+  type FixtureCacheInfo,
+  type SportFeed
+} from '../lib/sportsFixtures'
 
 // Admin → Sports data: the api-football.com key behind the Sports tab's fixtures and live scores.
 //
@@ -22,10 +28,18 @@ export function SportsPanel(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // What the key reaches and what it costs — the admin screen's window onto the catalogue and the
+  // quota, so "only football calls are being made" is answerable from the screen itself.
+  const [feeds, setFeeds] = useState<SportFeed[] | null>(null)
+  const [budget, setBudget] = useState<{ remaining: number; used: number } | null>(null)
+  const [cache, setCache] = useState<FixtureCacheInfo | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
       const config = await fetchSportsConfig()
+      setFeeds(config.sports ?? null)
+      setBudget(config.budget ?? null)
+      setCache(config.cache ?? null)
       const info = config.keySet
         ? await fetchSportsKey()
         : { key: null, updatedAt: null, updatedBy: null }
@@ -111,6 +125,19 @@ export function SportsPanel(): JSX.Element {
         A key can also be supplied out of band with <code>SPORTS_API_KEY</code> or a file at{' '}
         <code>/appdata/api-football.txt</code>; one saved here takes precedence over a file.
       </p>
+      {feeds && feeds.length > 0 && (
+        <p className="setup-hint">
+          The catalogue this key is asked for ({feeds.length} feeds, one request each per day):{' '}
+          {feeds.map((feed) => feed.label).join(' · ')}. NBA lives inside the basketball feed — the
+          app does not query it twice.
+          {budget && ` Requests today: ${budget.used} of 80 (the app's own ceiling under the plan's 100).`}
+          {cache &&
+            cache.days > 0 &&
+            ` Stored answers: ${cache.days} day${cache.days === 1 ? '' : 's'}${
+              cache.oldest ? `, ${cache.oldest} to ${cache.newest}` : ''
+            } — kept 7 days in the database, then purged.`}
+        </p>
+      )}
       {note && <p className="setup-hint">{note}</p>}
     </section>
   )

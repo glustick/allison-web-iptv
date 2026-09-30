@@ -4,7 +4,7 @@
 // every deploy, so the ring itself is in memory but each entry is *also* written to the container
 // log, which is where you actually look afterwards. Usernames, IPs and user-agents only; never a
 // password, never a token.
-export type AuthOutcome = 'ok' | 'failed' | 'locked' | 'logout' | 'setup'
+export type AuthOutcome = 'ok' | 'failed' | 'locked' | 'logout' | 'setup' | 'revoked'
 
 export interface AuthAuditEntry {
   at: string

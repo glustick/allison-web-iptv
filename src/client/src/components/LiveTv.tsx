@@ -124,7 +124,10 @@ export function LiveTv({
   useEffect(() => {
     session.client
       .getLiveCategories()
-      .then(setCategories)
+      .then((list) => {
+        setCategories(list)
+        setLoadError(null)
+      })
       .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load categories'))
   }, [session])
 
@@ -141,12 +144,22 @@ export function LiveTv({
     const categoryId = selection.type === 'provider' ? selection.id : null
     session.client
       .getLiveStreams(categoryId ?? undefined)
-      .then(setProviderChannels)
+      .then((list) => {
+        setProviderChannels(list)
+        setLoadError(null)
+      })
       .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load channels'))
   }, [session, selection, picking])
 
   useEffect(() => {
     reportNowPlaying(nowPlaying?.name ?? null, 'live')
+  }, [nowPlaying])
+
+  // A channel that actually plays says the provider is answering again — a list error left over
+  // from a transient 502 must not sit over working video until the tab is reloaded. The player has
+  // its own error state, so this can never hide a playback failure.
+  useEffect(() => {
+    if (nowPlaying) setLoadError(null)
   }, [nowPlaying])
   useEffect(() => () => reportNowPlaying(null), [])
 
@@ -901,7 +914,10 @@ export function LiveTv({
                   setPickerSourceId(id || null)
                   session.client
                     .getLiveStreams(id || undefined)
-                    .then(setProviderChannels)
+                    .then((list) => {
+                      setProviderChannels(list)
+                      setLoadError(null)
+                    })
                     .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load channels'))
                 }}
               >

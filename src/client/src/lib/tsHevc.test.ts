@@ -4,15 +4,24 @@ import { createRequire } from 'module'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { annexBNalTypes, extractHevcAnnexB, findHevcPid, splitAccessUnits, TS_PACKET_SIZE } from './tsHevc.js'
+import {
+  accessUnitIsKey,
+  annexBNalTypes,
+  codecCandidates,
+  extractHevcAccessUnits,
+  extractHevcAnnexB,
+  extractHevcAnnexBPes,
+  findHevcPid,
+  hevcCodecStringFromAnnexB,
+  splitAccessUnits,
+  TS_PACKET_SIZE,
+  unwrapPts
+} from './tsHevc.js'
 
 describe('splitAccessUnits', () => {
   // The failure this exists for, measured 2026-09-28: the decode check fed a whole elementary stream
   // as ONE chunk, the decoder accepted it, and produced zero frames — which then read as a verdict on
   // the device. A chunk is one frame, so the stream has to be cut into frames first.
-  function nal(type: number, payload: number[] = []): number[] {
-    return [0, 0, 0, 1, type << 1, 1, ...payload]
-  }
 
   it('splits on the first slice of each picture, keeping parameter sets with what follows', () => {
     const stream = Uint8Array.from([
@@ -165,6 +174,157 @@ describe('extractHevcAnnexB (hand-built bytes)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// PTS-bearing extraction — the player paces pictures against these numbers, so the reading is pinned
+// on hand-built headers first, then on real muxer output below.
+// ---------------------------------------------------------------------------
+
+/** A NAL unit in Annex-B form — one start code, the 2-byte HEVC header, then payload. */
+function nal(type: number, payload: number[] = []): number[] {
+  return [0, 0, 0, 1, type << 1, 1, ...payload]
+}
+
+/** A PES header, optionally opening with the five PTS bytes (flags '10', header length 5). */
+function pesHeader(payloadLength: number, pts?: number): number[] {
+  const withPts = pts !== undefined
+  const length = payloadLength + 3 + (withPts ? 5 : 0)
+  const base = [0x00, 0x00, 0x01, 0xe0, (length >> 8) & 0xff, length & 0xff, 0x80, withPts ? 0x80 : 0x00, withPts ? 0x05 : 0x00]
+  if (!withPts) return base
+  const top = Math.floor(pts / 2 ** 30)
+  const upper = Math.floor(pts / 2 ** 22) & 0xff
+  const middle = Math.floor(pts / 2 ** 15) & 0x7f
+  const lower = Math.floor(pts / 2 ** 7) & 0xff
+  const bottom = pts & 0x7f
+  return [...base, 0x20 | (top << 1) | 1, upper, (middle << 1) | 1, lower, (bottom << 1) | 1]
+}
+
+function transportStreamPts(videoPid: number, entries: Array<{ payload: Uint8Array; pts?: number }>): Uint8Array {
+  const pmtPid = 0x1000
+  const pat = psi(Uint8Array.from([0x00, 0xb0, 0x0d, 0x00, 0x01, 0xc1, 0x00, 0x00, 0x00, 0x01, 0xe0 | (pmtPid >> 8), pmtPid & 0xff, 0, 0, 0, 0]))
+  const pmt = psi(
+    Uint8Array.from([0x02, 0xb0, 0x12, 0x00, 0x01, 0xc1, 0x00, 0x00, 0xe1, 0x01, 0xf0, 0x00, 0x24, 0xe0 | (videoPid >> 8), videoPid & 0xff, 0xf0, 0x00, 0, 0, 0, 0])
+  )
+  const packets: Uint8Array[] = [packet(0, pat, { start: true }), packet(pmtPid, pmt, { start: true })]
+  entries.forEach((entry, index) => {
+    const header = pesHeader(entry.payload.length, entry.pts)
+    const pes = new Uint8Array(header.length + entry.payload.length)
+    pes.set(header, 0)
+    pes.set(entry.payload, header.length)
+    let written = 0
+    let counter = index * 8
+    while (written < pes.length) {
+      const take = Math.min(184, pes.length - written)
+      packets.push(packet(videoPid, pes.subarray(written, written + take), { start: written === 0, counter: counter++ }))
+      written += take
+    }
+  })
+  const out = new Uint8Array(packets.length * TS_PACKET_SIZE)
+  packets.forEach((p, i) => out.set(p, i * TS_PACKET_SIZE))
+  return out
+}
+
+/** One picture's worth of NALs — parameter sets attached to a first slice, as splitAccessUnits expects. */
+function picture(firstSliceByte: number, sliceNalType = 1): Uint8Array {
+  return Uint8Array.from([...nal(32), ...nal(33), ...nal(34), ...nal(sliceNalType, [firstSliceByte, 0xaa])])
+}
+
+describe('extractHevcAnnexBPes / extractHevcAccessUnits', () => {
+  it('carries each PES header\'s PTS onto the access units that start inside it', () => {
+    const ts = transportStreamPts(0x0101, [
+      { payload: picture(0x80), pts: 90_000 },
+      { payload: picture(0x80), pts: 99_000 },
+      { payload: picture(0x80), pts: 108_000 }
+    ])
+    const units = extractHevcAccessUnits(ts)
+    expect(units?.units.map((unit) => unit.pts)).toEqual([90_000, 99_000, 108_000])
+  })
+
+  it('gives every access unit in one PES that PES\'s timestamp', () => {
+    // Two pictures in a single PES — legal muxing, and the reason the mapping is by byte range.
+    const ts = transportStreamPts(0x0101, [{ payload: Uint8Array.from([...picture(0x80), ...picture(0x80)]), pts: 90_000 }])
+    const units = extractHevcAccessUnits(ts)
+    expect(units?.units).toHaveLength(2)
+    expect(units?.units.every((unit) => unit.pts === 90_000)).toBe(true)
+  })
+
+  it('leaves pts null when the PES header carries none, and the bytes still extract identically', () => {
+    const ts = transportStreamPts(0x0101, [{ payload: picture(0x80) }])
+    const withPes = extractHevcAnnexBPes(ts)
+    expect(withPes?.pes[0]?.pts).toBeNull()
+    const units = extractHevcAccessUnits(ts)
+    expect(units?.units).toHaveLength(1)
+    expect(units?.units[0]?.pts).toBeNull()
+    expect(Array.from(units!.units[0].data)).toEqual([...picture(0x80)])
+  })
+})
+
+describe('unwrapPts', () => {
+  it('lifts a wrapped PTS onto the continuous timeline', () => {
+    const modulus = 2 ** 33
+    const beforeWrap = modulus - 90_000
+    const afterWrap = 90_000 // really modulus + 90_000
+    expect(unwrapPts(beforeWrap, beforeWrap)).toBe(beforeWrap)
+    expect(unwrapPts(afterWrap, beforeWrap)).toBe(modulus + 90_000)
+    // And backwards across the wrap, should a re-ordering ever hand one over.
+    expect(unwrapPts(beforeWrap, modulus + 90_000)).toBe(beforeWrap)
+  })
+})
+
+describe('accessUnitIsKey', () => {
+  it('marks IRAP pictures (IDR, CRA, BLA — NAL types 16-23) as keys', () => {
+    expect(accessUnitIsKey(Uint8Array.from([...nal(32), ...nal(33), ...nal(34), ...nal(19, [0x80, 0x00])]))).toBe(true) // IDR_W_RADL
+    expect(accessUnitIsKey(Uint8Array.from([...nal(33), ...nal(21, [0x80, 0x00])]))).toBe(true) // CRA
+  })
+
+  it('does not mark trailing pictures, and says so for units with no VCL NAL at all', () => {
+    expect(accessUnitIsKey(picture(0x80))).toBe(false) // TRAIL_R
+    expect(accessUnitIsKey(Uint8Array.from([...nal(32), ...nal(33)]))).toBe(false)
+  })
+})
+
+describe('hevcCodecStringFromAnnexB', () => {
+  /** An SPS NAL whose body starts with the given bytes after the 2-byte NAL header. */
+  function sps(body: number[]): Uint8Array {
+    return Uint8Array.from([0, 0, 0, 1, 33 << 1, 1, ...body])
+  }
+
+  it('reads profile, tier, level and compatibility flags into the string — pinned against the known-good Main shape', () => {
+    // Byte layout (verified against x265's own output): [1] space/tier/idc, [2..5] compat flags,
+    // [6] first constraint byte, [12] level. Main is idc 1 with compat 0x60000000 → reverse bit
+    // order → 6; level 153 is 5.1; constraints 0xB0.
+    const annexB = sps([0x01, 0x01, 0x60, 0x00, 0x00, 0x00, 0xb0, 0, 0, 0, 0, 0, 153])
+    expect(hevcCodecStringFromAnnexB(annexB)).toBe('hev1.1.6.L153.B0')
+  })
+
+  it('reads Main 10 in the high tier with its own compatibility flags', () => {
+    // 0x22: space 0, tier H, idc 2 (Main 10); compat 0x20000000 → reverse bit order → 4.
+    const annexB = sps([0x01, 0x22, 0x20, 0x00, 0x00, 0x00, 0x90, 0, 0, 0, 0, 0, 153])
+    expect(hevcCodecStringFromAnnexB(annexB)).toBe('hev1.2.4.H153.90')
+  })
+
+  it('strips emulation prevention before reading the fields', () => {
+    // The intended compatibility bytes are 00 00 06 00, which a muxer escapes as 00 00 03 06 00.
+    // compat 0x00000600 → reverse bit order → 0x600000.
+    const annexB = sps([0x01, 0x01, 0x00, 0x00, 0x03, 0x06, 0x00, 0xb0, 0, 0, 0, 0, 0, 93])
+    expect(hevcCodecStringFromAnnexB(annexB)).toBe('hev1.1.600000.L93.B0')
+  })
+
+  it('returns null with no SPS to read, and finds the SPS when it is not the stream\'s first NAL', () => {
+    expect(hevcCodecStringFromAnnexB(picture(0x80))).toBeNull()
+    const afterVps = Uint8Array.from([
+      ...nal(32),
+      ...sps([0x01, 0x01, 0x60, 0x00, 0x00, 0x00, 0xb0, 0, 0, 0, 0, 0, 153])
+    ])
+    expect(hevcCodecStringFromAnnexB(afterVps)).toBe('hev1.1.6.L153.B0')
+  })
+
+  it('orders the derived string first and never repeats a candidate', () => {
+    expect(codecCandidates('hev1.2.4.H153.90')).toEqual(['hev1.2.4.H153.90', 'hev1.2.4.L153.B0', 'hev1.1.6.L153.B0'])
+    expect(codecCandidates('hev1.1.6.L153.B0')).toEqual(['hev1.1.6.L153.B0', 'hev1.2.4.L153.B0'])
+    expect(codecCandidates(null)).toEqual(['hev1.2.4.L153.B0', 'hev1.1.6.L153.B0'])
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Real bytes. A hand-built fixture passes while the parser is wrong (it did), so the extraction is
 // also proved against a transport stream that genuinely carries HEVC, and the extracted stream is
 // handed to ffmpeg — if the extraction dropped a byte in the wrong place, nothing decodes.
@@ -220,6 +380,43 @@ describe.skipIf(!ffmpegPath)('extractHevcAnnexB (real HEVC-in-TS bytes)', () => 
       expect(frames, `ffmpeg reported no frames:\n${decoded.stderr.slice(-800)}`).not.toBeNull()
       expect(Number(frames![1]), `ffmpeg decoded ${frames?.[1]} frames:\n${decoded.stderr.slice(-800)}`).toBeGreaterThan(10)
     })
+  }, 60000)
+
+  it('carries every picture\'s PTS from the real muxer, on the fixture\'s own display cadence', () => {
+    const units = extractHevcAccessUnits(segment)!.units
+    expect(units.length).toBeGreaterThan(10)
+    // The fixture has B-frames, so decode order (the order units arrive in) is NOT presentation
+    // order — PTS may legitimately move backwards between consecutive units. What must hold is the
+    // display cadence: sorted, the timestamps are exactly one frame apart (10 fps = 9000 ticks).
+    const ptsList = units.map((unit) => unit.pts)
+    expect(ptsList.every((pts): pts is number => pts !== null)).toBe(true)
+    const sorted = [...ptsList].sort((a, b) => (a as number) - (b as number)) as number[]
+    expect(sorted[0]).toBeGreaterThan(0)
+    for (let i = 1; i < sorted.length; i++) {
+      expect(Math.abs(sorted[i] - sorted[i - 1] - 9_000)).toBeLessThanOrEqual(90)
+    }
+  })
+
+  it('derives the codec string from the real SPS — the profile the stream actually is', async () => {
+    const units = extractHevcAccessUnits(segment)!.units
+    // The default fixture encodes testsrc, which is RGB, so libx265 writes Range Extensions
+    // (profile_idc 4) — ffmpeg's own banner for this fixture says "hevc (Rext)".
+    expect(hevcCodecStringFromAnnexB(units[0].data)).toMatch(/^hev1\.4\./)
+    expect(accessUnitIsKey(units[0].data)).toBe(true)
+
+    // And the forced-Main twin must derive Main — the same derivation, cross-checked against a
+    // stream whose profile is known because it was requested.
+    const mainFixture = join(dir, 'main.ts')
+    const built = await run(ffmpegPath as string, [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-f', 'lavfi', '-i', 'testsrc=duration=1:size=320x240:rate=10',
+      '-pix_fmt', 'yuv420p', '-c:v', 'libx265', '-preset', 'ultrafast', '-profile', 'main',
+      '-x265-params', 'log-level=error', '-f', 'mpegts', mainFixture
+    ])
+    expect(built.code).toBe(0)
+    const mainUnits = extractHevcAccessUnits(new Uint8Array(readFileSync(mainFixture)))!.units
+    expect(hevcCodecStringFromAnnexB(mainUnits[0].data)).toMatch(/^hev1\.1\./)
+    expect(accessUnitIsKey(mainUnits[0].data)).toBe(true)
   }, 60000)
 
   it('extracts the same bytes as ffmpeg does for a real captured 4K segment, when one is supplied', async () => {

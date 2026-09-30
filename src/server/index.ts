@@ -36,6 +36,7 @@ import {
 import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UserRole } from './lib/usersStore.js'
 import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
 import { createSportsFixturesService } from './lib/sportsFixtures.js'
+import { createSportsFixturesStore } from './lib/sportsFixturesStore.js'
 import { createSystemEpgStore } from './lib/systemEpg.js'
 import { createSystemSettingsStore } from './lib/systemSettings.js'
 import { createSportsCatalogueService } from './lib/sportsCatalogue.js'
@@ -61,6 +62,7 @@ import {
 import { createAuthAudit } from './lib/authAudit.js'
 import { createAuthAuditStore } from './lib/authAuditStore.js'
 import { createAuthSessionStore } from './lib/authSessionStore.js'
+import { revocableSessionTokens } from './lib/singleSession.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
 import {
   applyPendingRestore,
@@ -211,6 +213,9 @@ function clearAuthCookie(res: ServerResponse, secure: boolean): void {
 function destroyAuthSession(token: string): void {
   authSessions.delete(token)
   sessionProxyTargets.delete(token)
+  // The row too: without this, a logged-out session lingered on disk until the idle prune and was
+  // revived by a restart — the exact "stale login still active" shape reported 2026-09-30.
+  authSessionStore.remove(token)
 }
 
 // Periodic sweep so abandoned sessions (closed tabs, no more heartbeats) don't accumulate
@@ -325,7 +330,11 @@ const channelPlans = createChannelPlansStore({ dataDir: DATA_DIR })
 seedSystemSettingsFromAccounts()
 // The nightly warm: guides and the sports catalogue are loaded once a day, at 01:00.
 scheduleNightlyWarm()
-const sportsFixturesService = createSportsFixturesService()
+// Fixture answers are persisted (lib/sportsFixturesStore.ts): a day already fetched is served from
+// the database for its seven-day life instead of being re-bought from the API after every restart,
+// and the request counter survives restarts with them. Creation also purges rows past the window.
+const sportsFixturesStore = createSportsFixturesStore({ dataDir: DATA_DIR })
+const sportsFixturesService = createSportsFixturesService({ store: sportsFixturesStore })
 
 const MAX_EPG_URLS = 8
 
@@ -484,6 +493,15 @@ app.post('/api/auth/login', (req, res) => {
     // uncaught throw turn into an opaque HTML 500.
     usersStore.recordLogin(user.username)
     const session = createAuthSession(user.username, user.role)
+    // One account, one active login: retiring the others here is what makes an abandoned tab stop
+    // streaming — its next request 401s, the player's session-expired state takes over, and the
+    // transcode idle-reaper collects whatever it was holding.
+    const retired = revocableSessionTokens(authSessions, user.username, session.token)
+    for (const token of retired) destroyAuthSession(token)
+    if (retired.length > 0) {
+      authAudit.record({ outcome: 'revoked', username: user.username, ...auditContext(req) })
+      console.log(`[auth] retired ${retired.length} stale login(s) for ${user.username}`)
+    }
     setAuthCookie(res, session.token, isSecureRequest(req))
     res.json({ ok: true, user: { username: user.username, role: user.role } })
   } catch (err) {
@@ -1830,7 +1848,16 @@ app.post('/api/channels/plans/failed', requireAuth, (req, res) => {
 app.get('/api/sports/config', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
   try {
-    res.json({ ok: true, keySet: readSportsKey() !== null, canEdit: session.role === 'admin' })
+    res.json({
+      ok: true,
+      keySet: readSportsKey() !== null,
+      canEdit: session.role === 'admin',
+      // The whole catalogue the key is asked for, and what it cost today — visible rather than taken
+      // on trust, the same rule the guide sources follow.
+      sports: sportsFixturesService.sports(),
+      budget: sportsFixturesService.budget(),
+      cache: sportsFixturesStore.stats()
+    })
   } catch (err) {
     console.error('[sports] config failed:', err)
     res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })

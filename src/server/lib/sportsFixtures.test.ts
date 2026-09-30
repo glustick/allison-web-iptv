@@ -1,15 +1,26 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import { createServer, type Server } from 'http'
 import type { AddressInfo } from 'net'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import {
   createSportsFixturesService,
   describeInBandError,
   fixturesUrl,
   normaliseGame,
+  normaliseRaces,
   normalizeFixture,
   parseFixturesResponse,
-  parseGamesResponse
+  parseGamesResponse,
+  racesForDate,
+  refreshMotorSportFlags,
+  sportApiFor,
+  sportUrl,
+  SPORT_APIS,
+  SPORT_API_IDS
 } from './sportsFixtures.js'
+import { createSportsFixturesStore, type SportsFixturesStore } from './sportsFixturesStore.js'
 
 // The api-football layer is tested two ways, following this repo's own convention (see
 // proxyServer.test.ts / nodeUpstreamRequest.test.ts): the response shape as pure units, and the
@@ -196,6 +207,285 @@ describe('the sibling sport hosts', () => {
       'ice-hockey'
     )
     expect(refused.error).toBe('Invalid API key')
+  })
+})
+
+describe('the catalogue', () => {
+  it('carries every sport the operator named, each on its own api-sports host', () => {
+    // The ask (2026-09-30): "AFL baseball basketball formula 1 NBA NFL are all missing api calls."
+    // Baseball and basketball were already wired (v0.61.5); the missing three are the point here.
+    expect(SPORT_API_IDS).toEqual([
+      'football',
+      'basketball',
+      'american-football',
+      'baseball',
+      'ice-hockey',
+      'aussie-rules',
+      'rugby',
+      'motorsport'
+    ])
+    expect(sportApiFor('american-football')).toMatchObject({ host: 'v1.american-football.api-sports.io', path: '/games' })
+    expect(sportApiFor('aussie-rules')).toMatchObject({ host: 'v1.afl.api-sports.io', path: '/games' })
+    expect(sportApiFor('motorsport')).toMatchObject({ host: 'v1.formula-1.api-sports.io', path: '/races' })
+  })
+
+  it('resolves the everyday names onto the right host, with NBA on basketball — not queried twice', () => {
+    expect(sportApiFor('nba')?.sport).toBe('basketball')
+    expect(sportApiFor('nfl')?.sport).toBe('american-football')
+    expect(sportApiFor('afl')?.sport).toBe('aussie-rules')
+    expect(sportApiFor('f1')?.sport).toBe('motorsport')
+    expect(sportApiFor('formula-1')?.sport).toBe('motorsport')
+    expect(sportApiFor('hockey')?.sport).toBe('ice-hockey')
+    expect(sportApiFor('tennis')).toBeNull() // a sport the key has no host for costs nothing
+  })
+
+  it('builds the season query for formula-1 and the date query for everyone else', () => {
+    expect(sportUrl(sportApiFor('motorsport')!, '2026-10-01')).toBe('https://v1.formula-1.api-sports.io/races?season=2026')
+    expect(sportUrl(sportApiFor('basketball')!, '2026-10-01')).toBe('https://v1.basketball.api-sports.io/games?date=2026-10-01')
+  })
+
+  it('reads NFL and AFL through the same /games normaliser as their siblings', () => {
+    const nfl = normaliseGame(
+      {
+        id: 4411,
+        date: '2026-10-01T17:00:00+00:00',
+        status: { short: 'Q1', long: 'In Progress' },
+        league: { name: 'NFL', country: 'USA' },
+        teams: { home: { name: 'Chiefs' }, away: { name: 'Ravens' } },
+        scores: { home: 10, away: 7 }
+      },
+      'american-football'
+    )
+    expect(nfl).toMatchObject({ sport: 'american-football', league: 'NFL', homeGoals: 10, awayGoals: 7, live: true })
+
+    const afl = normaliseGame(
+      {
+        id: 5522,
+        date: '2026-10-02T09:30:00+00:00',
+        status: { short: 'FT', long: 'Game Finished' },
+        league: { name: 'AFL', country: 'Australia' },
+        teams: { home: { name: 'Collingwood' }, away: { name: 'Carlton' } },
+        scores: { home: 97, away: 84 }
+      },
+      'aussie-rules'
+    )
+    expect(afl).toMatchObject({ sport: 'aussie-rules', finished: true, homeGoals: 97 })
+  })
+})
+
+describe('formula-1 races', () => {
+  const body = JSON.stringify({
+    errors: [],
+    response: [
+      {
+        id: 34,
+        name: 'British Grand Prix',
+        competition: { name: 'Formula 1' },
+        circuit: { name: 'Silverstone Circuit', country: { name: 'England' } },
+        sessions: {
+          fp1: '2026-10-01T10:30:00+00:00',
+          qualifying: '2026-10-01T14:00:00+00:00',
+          race: '2026-10-02T13:00:00+00:00'
+        }
+      }
+    ]
+  })
+
+  it('turns each session into a fixture with its own kickoff, and names the day it lands on', () => {
+    const season = normaliseRaces(body)
+    expect(season.error).toBeNull()
+    expect(season.fixtures.map((fixture) => fixture.round)).toEqual(['Practice 1', 'Qualifying', 'Race'])
+    expect(season.fixtures[0]).toMatchObject({
+      sport: 'motorsport',
+      homeTeam: 'British Grand Prix',
+      awayTeam: 'Practice 1',
+      country: 'England',
+      league: 'Formula 1',
+      kickoffMs: Date.parse('2026-10-01T10:30:00+00:00')
+    })
+    // Distinct ids per session of the same race.
+    expect(new Set(season.fixtures.map((fixture) => fixture.id)).size).toBe(3)
+
+    const friday = racesForDate(season, '2026-10-01')
+    expect(friday.fixtures.map((fixture) => fixture.round)).toEqual(['Practice 1', 'Qualifying'])
+    const saturday = racesForDate(season, '2026-10-02')
+    expect(saturday.fixtures.map((fixture) => fixture.round)).toEqual(['Race'])
+    expect(racesForDate(season, '2026-10-03').fixtures).toHaveLength(0)
+  })
+
+  it('derives live and finished from the clock, with a longer window for the race itself', () => {
+    const season = normaliseRaces(body)
+    const duringQuali = refreshMotorSportFlags(season.fixtures, Date.parse('2026-10-01T14:30:00+00:00'))
+    expect(duringQuali.find((fixture) => fixture.round === 'Qualifying')?.live).toBe(true)
+    expect(duringQuali.find((fixture) => fixture.round === 'Practice 1')?.finished).toBe(true)
+    // The race runs two hours, not one.
+    const duringRace = refreshMotorSportFlags(season.fixtures, Date.parse('2026-10-02T14:30:00+00:00'))
+    expect(duringRace.find((fixture) => fixture.round === 'Race')?.live).toBe(true)
+    const after = refreshMotorSportFlags(season.fixtures, Date.parse('2026-10-02T16:00:00+00:00'))
+    expect(after.find((fixture) => fixture.round === 'Race')?.finished).toBe(true)
+  })
+
+  it('surfaces an in-band error like every other host', () => {
+    expect(normaliseRaces(JSON.stringify({ errors: { token: 'Invalid API key' }, response: [] })).error).toBe('Invalid API key')
+  })
+})
+
+describe('the persisted fixture cache', () => {
+  let store: SportsFixturesStore
+  let dir: string
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true })
+  })
+
+  async function gameOrigin(counters: { hits: number; url?: string }): Promise<string> {
+    const server = createServer((req, res) => {
+      counters.hits += 1
+      counters.url = req.url
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          errors: [],
+          response: [
+            {
+              id: counters.hits,
+              date: '2026-10-01T18:00:00+00:00',
+              status: { short: 'NS', long: 'Not Started' },
+              league: { name: 'NBA', country: 'USA' },
+              teams: { home: { name: 'Celtics' }, away: { name: 'Lakers' } },
+              scores: { home: null, away: null }
+            }
+          ]
+        })
+      )
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const { port } = server.address() as AddressInfo
+    return `http://127.0.0.1:${port}`
+  }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'allison-fixtures-svc-'))
+    store = createSportsFixturesStore({ dataDir: dir })
+  })
+
+  it('serves a restart from storage without spending another request', async () => {
+    const counters = { hits: 0 }
+    const origin = await gameOrigin(counters)
+    let clock = Date.parse('2026-10-01T18:00:00Z') // the day itself
+    const first = createSportsFixturesService({ origin, store, now: () => clock })
+    await first.getFixturesForSports('2026-10-01', 'k', ['basketball'])
+    expect(counters.hits).toBe(1)
+
+    // A fresh process, memory empty, same store: the answer is already paid for.
+    clock += 10 * 60_000
+    const restarted = createSportsFixturesService({ origin, store, now: () => clock })
+    const served = await restarted.getFixturesForSports('2026-10-01', 'k', ['basketball'])
+    expect(counters.hits).toBe(1)
+    expect(served.fixtures[0]).toMatchObject({ homeTeam: 'Celtics' })
+  })
+
+  it('never re-asks a past day whose results are final, for its whole stored life', async () => {
+    const counters = { hits: 0 }
+    const origin = await gameOrigin(counters)
+    let clock = Date.parse('2026-09-28T12:00:00Z') // asking about a finished day, days later
+    const service = createSportsFixturesService({ origin, store, now: () => clock })
+    await service.getFixturesForSports('2026-09-20', 'k', ['basketball'])
+    expect(counters.hits).toBe(1)
+
+    // Days pass; the stored answer is final and keeps serving.
+    clock += 3 * 24 * 60 * 60_000
+    const again = await service.getFixturesForSports('2026-09-20', 'k', ['basketball'])
+    expect(counters.hits).toBe(1)
+    expect(again.fixtures[0]).toMatchObject({ homeTeam: 'Celtics' })
+  })
+
+  it('keeps today refreshing on the idle cadence — storage does not freeze a live day', async () => {
+    const counters = { hits: 0 }
+    const origin = await gameOrigin(counters)
+    let clock = Date.parse('2026-10-01T12:00:00Z')
+    const service = createSportsFixturesService({ origin, store, now: () => clock })
+    await service.getFixturesForSports('2026-10-01', 'k', ['basketball'])
+    expect(counters.hits).toBe(1)
+
+    // A later process, more than an hour on: the day is today, so it is asked again.
+    clock += 90 * 60_000
+    const later = createSportsFixturesService({ origin, store, now: () => clock })
+    await later.getFixturesForSports('2026-10-01', 'k', ['basketball'])
+    expect(counters.hits).toBe(2)
+  })
+
+  it('carries the request count across restarts, so the ceiling stays honest', async () => {
+    const counters = { hits: 0 }
+    const origin = await gameOrigin(counters)
+    const clock = () => Date.parse('2026-10-01T12:00:00Z')
+    // Eighty distinct days, each asked once: every request is spent on a day nobody has stored.
+    const first = createSportsFixturesService({ origin, store, now: clock })
+    for (let i = 0; i < 80; i += 1) {
+      const day = new Date(Date.parse('2026-08-01T00:00:00Z') + i * 24 * 60 * 60_000).toISOString().slice(0, 10)
+      await first.getFixturesForSports(day, 'k', ['basketball'])
+    }
+    expect(counters.hits).toBe(80)
+
+    // The restarted process inherits the spent count and refuses to spend more.
+    const restarted = createSportsFixturesService({ origin, store, now: clock })
+    const over = await restarted.getFixturesForSports('2026-12-01', 'k', ['basketball'])
+    expect(counters.hits).toBe(80)
+    expect(over.error).toMatch(/budget/)
+  })
+})
+
+describe('formula-1 through the service', () => {
+  it('fetches a season once and serves each day from it', async () => {
+    const counters = { hits: 0, urls: [] as string[] }
+    const server = createServer((req, res) => {
+      counters.hits += 1
+      counters.urls.push(req.url ?? '')
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          errors: [],
+          response: [
+            {
+              id: 34,
+              name: 'British Grand Prix',
+              competition: { name: 'Formula 1' },
+              circuit: { name: 'Silverstone Circuit', country: { name: 'England' } },
+              sessions: {
+                fp1: '2026-10-01T10:30:00+00:00',
+                qualifying: '2026-10-01T14:00:00+00:00',
+                race: '2026-10-02T13:00:00+00:00'
+              }
+            }
+          ]
+        })
+      )
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const { port } = server.address() as AddressInfo
+    const origin = `http://127.0.0.1:${port}`
+
+    let clock = Date.parse('2026-10-01T12:00:00Z')
+    const service = createSportsFixturesService({ origin, now: () => clock })
+    const friday = await service.getFixturesForSports('2026-10-01', 'k', ['motorsport'])
+    expect(friday.fixtures.map((fixture) => fixture.round)).toEqual(['Practice 1', 'Qualifying'])
+    // Live/finished derived at read time, from the asking clock (12:00): practice over, quali not begun.
+    expect(friday.fixtures.find((fixture) => fixture.round === 'Practice 1')?.finished).toBe(true)
+    expect(friday.fixtures.find((fixture) => fixture.round === 'Qualifying')?.live).toBe(false)
+
+    // Half an hour into qualifying, the same stored day reads differently — no request spent.
+    clock = Date.parse('2026-10-01T14:30:00Z')
+    const midQuali = await service.getFixturesForSports('2026-10-01', 'k', ['motorsport'])
+    expect(midQuali.fixtures.find((fixture) => fixture.round === 'Qualifying')?.live).toBe(true)
+    expect(counters.hits).toBe(1)
+    clock = Date.parse('2026-10-01T12:10:00Z')
+    const saturday = await service.getFixturesForSports('2026-10-02', 'k', ['motorsport'])
+    expect(saturday.fixtures.map((fixture) => fixture.round)).toEqual(['Race'])
+    // One season fetch served both days.
+    expect(counters.hits).toBe(1)
+    expect(counters.urls[0]).toBe('/races?season=2026')
   })
 })
 
