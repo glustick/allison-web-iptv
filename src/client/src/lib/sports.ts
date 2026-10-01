@@ -151,7 +151,8 @@ const LEAGUE_RULES: LeagueRule[] = [
 // under "Other sports" rather than breaking.
 export type SportId =
   | 'football' | 'american-football' | 'basketball' | 'ice-hockey' | 'baseball' | 'fighting'
-  | 'tennis' | 'cricket' | 'rugby' | 'motorsport' | 'aussie-rules' | 'golf' | 'cue-sports' | 'other'
+  | 'tennis' | 'cricket' | 'rugby' | 'handball' | 'volleyball' | 'motorsport' | 'aussie-rules'
+  | 'golf' | 'cue-sports' | 'other'
 
 const SPORT_LABELS: Record<SportId, string> = {
   football: 'Football',
@@ -159,10 +160,12 @@ const SPORT_LABELS: Record<SportId, string> = {
   basketball: 'Basketball',
   'ice-hockey': 'Ice Hockey',
   baseball: 'Baseball',
-  fighting: 'Fighting',
+  fighting: 'Fighting (MMA)',
   tennis: 'Tennis',
   cricket: 'Cricket',
   rugby: 'Rugby',
+  handball: 'Handball',
+  volleyball: 'Volleyball',
   motorsport: 'Motorsport',
   'aussie-rules': 'Aussie Rules',
   golf: 'Golf',
@@ -184,6 +187,8 @@ const SPORT_OF_LEAGUE: Record<string, SportId> = {
   tennis: 'tennis',
   cricket: 'cricket',
   rugby: 'rugby',
+  handball: 'handball',
+  volleyball: 'volleyball',
   motorsport: 'motorsport',
   'aussie-rules': 'aussie-rules',
   golf: 'golf',

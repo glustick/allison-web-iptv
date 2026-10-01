@@ -6,6 +6,17 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.64.0 — every sport was asking football's host)
+
+Only football ever reached its own product: since v0.61.5, every non-football request was addressed
+to football's host (`/games` does not exist there), so the provider's dashboard showed a decade of
+zeros that were the app's own addressing. Fixed — verified live at 262 fixtures across ten sports —
+and pinned by a wire-level test that records which host each request actually reaches. Handball,
+volleyball and MMA joined (eleven feeds now); Formula 1's free-plan season refusal is held instead
+of re-billed; one sport's failure no longer banners over a working day; and the fixtures pane says
+"loading fixtures…" on a cold fill instead of sitting static. 734 tests, typecheck, lint and the
+client build clean.
+
 ## Current state (v0.63.2 — the loop's first live run, and the draw cost it exposed)
 
 The client-side live loop's first real run (Chrome, 4K Main 10) decoded at ~8x realtime on the

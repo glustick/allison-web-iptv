@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest'
+import { EventEmitter } from 'events'
+import { Writable } from 'stream'
 import { createServer, type Server } from 'http'
 import type { AddressInfo } from 'net'
 import { mkdtempSync, rmSync } from 'fs'
@@ -222,11 +224,21 @@ describe('the catalogue', () => {
       'ice-hockey',
       'aussie-rules',
       'rugby',
+      'handball',
+      'volleyball',
+      'fighting',
       'motorsport'
     ])
     expect(sportApiFor('american-football')).toMatchObject({ host: 'v1.american-football.api-sports.io', path: '/games' })
     expect(sportApiFor('aussie-rules')).toMatchObject({ host: 'v1.afl.api-sports.io', path: '/games' })
     expect(sportApiFor('motorsport')).toMatchObject({ host: 'v1.formula-1.api-sports.io', path: '/races' })
+  })
+
+  it('resolves MMA onto the fighting feed', () => {
+    expect(sportApiFor('mma')?.sport).toBe('fighting')
+    expect(sportApiFor('ufc')?.sport).toBe('fighting')
+    expect(sportApiFor('handball')).toMatchObject({ host: 'v1.handball.api-sports.io', path: '/games' })
+    expect(sportApiFor('volleyball')).toMatchObject({ host: 'v1.volleyball.api-sports.io', path: '/games' })
   })
 
   it('resolves the everyday names onto the right host, with NBA on basketball — not queried twice', () => {
@@ -486,6 +498,108 @@ describe('formula-1 through the service', () => {
     // One season fetch served both days.
     expect(counters.hits).toBe(1)
     expect(counters.urls[0]).toBe('/races?season=2026')
+  })
+})
+
+describe('every sport asks its own host', () => {
+  // The bug this exists for shipped in v0.61.5 and lived until 2026-10-01: the service passed
+  // football's origin to every sport's URL builder, so basketball et al asked
+  // v3.football.api-sports.io for /games — "The Games endpoint does not exist", then 429s — and
+  // only football ever reached its own product. No fake-origin test could see it (a fake origin
+  // serves every path happily); this one watches the wire.
+  function fakeUpstream(answer: (url: string) => { status: number; body: string }): {
+    create: unknown
+    seen: string[]
+  } {
+    const seen: string[] = []
+    const create = (opts: { url: string }): unknown => {
+      const req = new EventEmitter() as unknown as Record<string, unknown> & EventEmitter
+      req.setHeader = (): unknown => undefined
+      req.abort = (): unknown => undefined
+      req.followRedirect = (): unknown => undefined
+      req.end = (): unknown => undefined
+      setImmediate(() => {
+        seen.push(opts.url)
+        const { status, body } = answer(opts.url)
+        req.emit('response', {
+          statusCode: status,
+          headers: {},
+          pipe(sink: Writable) {
+            sink.write(Buffer.from(body))
+            sink.end()
+            return sink
+          }
+        })
+      })
+      return req
+    }
+    return { create, seen }
+  }
+
+  it('sends each sport to its own api-sports host, football to football alone', async () => {
+    const { create, seen } = fakeUpstream(() => ({ status: 200, body: JSON.stringify({ errors: [], response: [] }) }))
+    const service = createSportsFixturesService({
+      createUpstreamRequest: create as unknown as typeof import('./nodeUpstreamRequest.js').createNodeUpstreamRequest
+    })
+    const result = await service.getFixturesForSports('2026-10-01', 'k')
+    expect(result.error).toBeNull()
+    const hosts = seen.map((url) => new URL(url).host)
+    expect(new Set(hosts).size).toBe(SPORT_APIS.length)
+    expect(hosts.filter((host) => host === 'v3.football.api-sports.io')).toHaveLength(1)
+    expect(hosts).toContain('v1.basketball.api-sports.io')
+    expect(hosts).toContain('v1.american-football.api-sports.io')
+    expect(hosts).toContain('v1.afl.api-sports.io')
+    expect(hosts).toContain('v1.handball.api-sports.io')
+    expect(hosts).toContain('v1.mma.api-sports.io')
+    expect(hosts).toContain('v1.formula-1.api-sports.io')
+  })
+
+  it('does not hang a failing sport over a day that answered — F1 plan limits stay quiet', async () => {
+    const { create } = fakeUpstream((url) => {
+      if (url.includes('formula-1')) {
+        return { status: 200, body: JSON.stringify({ errors: { season: 'Free plans do not have access to this season, try from 2022 to 2024.' }, response: [] }) }
+      }
+      if (url.includes('v3.football')) {
+        return { status: 200, body: JSON.stringify({ errors: [], response: [rawFixture()] }) }
+      }
+      return {
+        status: 200,
+        body: JSON.stringify({
+          errors: [],
+          response: [
+            { id: 7, date: '2026-10-01T18:00:00+00:00', league: { name: 'NBA' }, teams: { home: { name: 'A' }, away: { name: 'B' } }, scores: { home: 1, away: 2 } }
+          ]
+        })
+      }
+    })
+    const service = createSportsFixturesService({
+      createUpstreamRequest: create as unknown as typeof import('./nodeUpstreamRequest.js').createNodeUpstreamRequest
+    })
+    const result = await service.getFixturesForSports('2026-10-01', 'k')
+    expect(result.fixtures).toHaveLength(SPORT_APIS.length - 1) // everyone but F1 answered one game
+    expect(result.error).toBeNull()
+  })
+
+  it('holds formula-1 plan refusals for the season TTL instead of re-billing every poll', async () => {
+    let racesCalls = 0
+    const { create } = fakeUpstream((url) => {
+      if (url.includes('formula-1')) {
+        racesCalls += 1
+        return { status: 200, body: JSON.stringify({ errors: { season: 'Free plans do not have access to this season, try from 2022 to 2024.' }, response: [] }) }
+      }
+      return { status: 200, body: JSON.stringify({ errors: [], response: [] }) }
+    })
+    let clock = Date.parse('2026-10-01T12:00:00Z')
+    const service = createSportsFixturesService({
+      createUpstreamRequest: create as unknown as typeof import('./nodeUpstreamRequest.js').createNodeUpstreamRequest,
+      now: () => clock
+    })
+    await service.getFixturesForSports('2026-10-01', 'k', ['motorsport'])
+    // A later poll: the day's error entry has aged out of memory (60s) — the *season* refusal is
+    // what must still be held, so no second request goes out.
+    clock += 10 * 60_000
+    await service.getFixturesForSports('2026-10-01', 'k', ['motorsport'])
+    expect(racesCalls).toBe(1)
   })
 })
 

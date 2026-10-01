@@ -269,6 +269,9 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
   const [fixtures, setFixtures] = useState<ApiFootballFixture[]>([])
   const [keySet, setKeySet] = useState<boolean | null>(null)
   const [fixturesError, setFixturesError] = useState<string | null>(null)
+  // A cold fill asks eleven separate feeds, one request each — that is seconds of waiting, and a
+  // pane that simply sits empty reads as a hang (reported 2026-10-01). Say so instead.
+  const [fixturesLoading, setFixturesLoading] = useState(false)
 
   const hour12 = useMemo(localeUses12Hour, [])
 
@@ -348,16 +351,19 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
     if (!keySet) return
     let cancelled = false
     const load = (): void => {
+      setFixturesLoading(true)
       void fetchFixtures(dayKey)
         .then((result) => {
           if (cancelled) return
           setFixtures(result.fixtures)
           setFixturesError(result.error)
+          setFixturesLoading(false)
         })
         .catch((err) => {
           if (cancelled) return
           setFixtures([])
           setFixturesError(err instanceof Error ? err.message : 'Could not load fixtures')
+          setFixturesLoading(false)
         })
     }
     load()
@@ -566,6 +572,11 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                 <span className="sports-head-sub">
                   {dayCount} fixture{dayCount === 1 ? '' : 's'}
                 </span>
+                {fixturesLoading && (
+                  <span className="sports-head-hint" title="Asking each sport's feed — the first load of a day is the slow one">
+                    loading fixtures…
+                  </span>
+                )}
                 {apiMode ? (
                   <span className="sports-head-hint" title="Fixtures and scores come from api-football.com">
                     via api-football.com

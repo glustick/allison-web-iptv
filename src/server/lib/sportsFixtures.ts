@@ -64,7 +64,7 @@ export interface SportApi {
   sport: string
   label: string
   host: string
-  path: '/fixtures' | '/games' | '/races'
+  path: '/fixtures' | '/games' | '/races' | '/fights'
 }
 
 export const SPORT_APIS: SportApi[] = [
@@ -75,6 +75,9 @@ export const SPORT_APIS: SportApi[] = [
   { sport: 'ice-hockey', label: 'Ice Hockey (NHL)', host: 'v1.hockey.api-sports.io', path: '/games' },
   { sport: 'aussie-rules', label: 'Aussie Rules (AFL)', host: 'v1.afl.api-sports.io', path: '/games' },
   { sport: 'rugby', label: 'Rugby', host: 'v1.rugby.api-sports.io', path: '/games' },
+  { sport: 'handball', label: 'Handball', host: 'v1.handball.api-sports.io', path: '/games' },
+  { sport: 'volleyball', label: 'Volleyball', host: 'v1.volleyball.api-sports.io', path: '/games' },
+  { sport: 'fighting', label: 'Fighting (MMA)', host: 'v1.mma.api-sports.io', path: '/fights' },
   { sport: 'motorsport', label: 'Motorsport (Formula 1)', host: 'v1.formula-1.api-sports.io', path: '/races' }
 ]
 
@@ -92,7 +95,9 @@ const SPORT_ALIASES: Record<string, string> = {
   'formula-1': 'motorsport',
   formula1: 'motorsport',
   f1: 'motorsport',
-  hockey: 'ice-hockey'
+  hockey: 'ice-hockey',
+  mma: 'fighting',
+  ufc: 'fighting'
 }
 
 export function sportApiFor(sport: string): SportApi | null {
@@ -452,7 +457,12 @@ function ttlForResult(entry: { at: number; result: FixturesResult }, dateIso: st
 export function createSportsFixturesService(deps: SportsFixturesDeps = {}) {
   const createUpstreamRequest = deps.createUpstreamRequest ?? createNodeUpstreamRequest
   const now = deps.now ?? Date.now
-  const origin = deps.origin ?? API_ORIGIN
+  // The origin override exists for tests. It is deliberately NOT defaulted here: passing
+  // API_ORIGIN (football's host) to every sport is exactly the bug that made v0.61.5-v0.63.2 ask
+  // v3.football for /games and /races — "The Games endpoint does not exist", then 429s — so only
+  // football ever reached its own product. Every sport builds its own host unless a test says
+  // otherwise.
+  const originOverride = deps.origin ?? null
   const store = deps.store ?? null
   // Overridable so a test can shorten the live window rather than waiting five minutes for it.
   const liveTtlMs = deps.cacheTtlMs ?? LIVE_CACHE_TTL_MS
@@ -514,7 +524,7 @@ export function createSportsFixturesService(deps: SportsFixturesDeps = {}) {
     try {
       const body = await fetchTextViaUpstream(
         createUpstreamRequest,
-        fixturesUrl(dateIso, origin),
+        fixturesUrl(dateIso, originOverride ?? API_ORIGIN),
         FIXTURES_STALL_TIMEOUT_MS,
         undefined,
         FIXTURES_RESPONSE_TIMEOUT_MS,
@@ -603,7 +613,7 @@ export function createSportsFixturesService(deps: SportsFixturesDeps = {}) {
         if (!season) {
           const body = await fetchTextViaUpstream(
             createUpstreamRequest,
-            sportUrl(api, dateIso, origin),
+            sportUrl(api, dateIso, originOverride ?? undefined),
             FIXTURES_STALL_TIMEOUT_MS,
             undefined,
             FIXTURES_RESPONSE_TIMEOUT_MS,
@@ -613,14 +623,15 @@ export function createSportsFixturesService(deps: SportsFixturesDeps = {}) {
           season = { at: now(), result: normaliseRaces(body), keyHash }
           seasonCache.set(seasonKey, season)
         }
-        // An in-band error is returned as the day's result (and cached briefly below, like every
-        // other sport's error) rather than memoised as a broken season.
         result = season.result.error ? { fixtures: [], error: season.result.error } : racesForDate(season.result, dateIso)
-        if (season.result.error) seasonCache.delete(seasonKey)
+        // The error stays in the season cache for its full TTL: a refusal like "Free plans do not
+        // have access to this season" (the free F1 product covers 2022-2024 only — measured
+        // 2026-10-01) is a fact about the plan, not a flap, and re-asking hourly would spend
+        // quota to learn it again.
       } else {
         const body = await fetchTextViaUpstream(
           createUpstreamRequest,
-          sportUrl(api, dateIso, origin),
+          sportUrl(api, dateIso, originOverride ?? undefined),
           FIXTURES_STALL_TIMEOUT_MS,
           undefined,
           FIXTURES_RESPONSE_TIMEOUT_MS,
@@ -658,10 +669,17 @@ export function createSportsFixturesService(deps: SportsFixturesDeps = {}) {
     const wanted = apis.length > 0 ? apis : SPORT_APIS.filter((api) => api.sport === 'football')
     const results = await Promise.all(wanted.map((api) => getSportFixtures(api, dateIso, key)))
     const errors = results.map((result) => result.error).filter((error): error is string => error !== null)
+    const anyFixtures = results.some((result) => result.fixtures.length > 0)
     return {
       fixtures: results.flatMap((result) => result.fixtures),
-      // One error wins if it is the plan's date limit — the rest are almost always the same message.
-      error: errors.length === 0 ? null : (errors.find((error) => /free plans|budget/i.test(error)) ?? errors[0])
+      // A day with fixtures is a working day: one sport's refusal (say, F1's plan limit) must not
+      // hang an error banner over eleven sports that answered. Only when nothing came back does
+      // the error speak — and the plan's own limit message wins, because the rest agree with it.
+      error: anyFixtures
+        ? null
+        : errors.length === 0
+          ? null
+          : (errors.find((error) => /free plans|budget/i.test(error)) ?? errors[0])
     }
   }
 

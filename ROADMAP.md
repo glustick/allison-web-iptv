@@ -15,6 +15,29 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.64.0 — every sport was asking football's host.** The operator's report (2026-10-01): *"looking
+at the api requests there are only football requests, no AFL Baseball Basketball Formula 1 Handball
+Volleyball rugby nfl nba mma and hockey are all 0."* The evidence trail: the persisted store held
+exactly one row (football) against 16 requests spent; curl from the NAS reached every host with the
+account's key; and a reproduction through the service's own code showed the truth — **every
+non-football request was addressed to `v3.football.api-sports.io`** (`HTTP 429 fetching
+https://v3.football.api-sports.io/games`), because `getSportFixtures` passed the *football* origin
+default into every sport's URL builder. Basketball had been asking football for `/games` — "The
+Games endpoint does not exist" — since **v0.61.5**: the hosts were confirmed by curl back then, never
+through the app, and no test could see it because a fake test origin happily serves every path. The
+fix is one line of intent (the origin override is for tests, and nothing else); the regression test
+that now pins it watches the wire itself — a fake upstream that records which host each request
+actually reached. Verified against the real API after the fix: **262 fixtures across ten sports**
+(basketball 42, ice-hockey 61, handball 20, baseball 12, volleyball 3, football 123), 11 requests for
+11 sports, and honest zeros for the out-of-season ones. Three more sports joined on the same report:
+**handball, volleyball and MMA** (`mma`/`ufc` resolve to the fighting feed), taking the catalogue to
+eleven. Formula 1's refusal — the free plan covers seasons 2022-2024 only, so the current calendar
+is a paid feature — is now held for the season's TTL instead of re-billed every poll, and one sport's
+refusal no longer hangs an error banner over a day that answered. And the tab's other ask landed
+with it: the fixtures pane says **"loading fixtures…"** while a cold fill asks its eleven feeds,
+rather than sitting static and reading as a hang. 734 tests (4 new), typecheck, lint and the client
+build clean.
+
 **v0.63.2 — the loop's first live run, and the draw cost it exposed.** The operator ran the
 client-side live loop on the 4K Main 10 channel in Chrome (2026-10-01): decode was magnificent —
 **3,643 frames on the hardware path, ~8x realtime** — while presentation starved: 411 frames drawn
