@@ -15,6 +15,22 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.66.2 — the first live run's three findings, fixed.** The ".48 Chrome" test (2026-10-01,
+written up in `/agent/test`): the diagnostics loop read **50 fps presented, zero dropped frames**,
+and the decode check 425.7 fps at 4K Main 10 — the engine's video half is done. The player
+surfaced three bugs, all now fixed. **(1) No audio, no clock — the v0.24.0 lesson repeated in new
+code**: WebCodecsPlayer called `crypto.randomUUID()`, which exists only in secure contexts, so over
+the plain-HTTP LAN address the audio session's start threw before any promise, was silently
+swallowed, and the picture ran unclocked and silent. The codebase's own `newSessionId()` exists for
+exactly this; the player now uses it. (The "initially audio with no video" the operator heard was
+the ladder's direct MSE attempt playing audio-only before escalating — honest, and now followed by
+a working engine.) **(2) The player collapsed to a small strip**: the audio carrier has no video
+track and therefore no intrinsic size, and the absolutely-positioned canvas contributes no layout —
+the carrier now carries the player's 16:9 shape itself. **(3) The controls' fullscreen button
+black-screened**: it fullscreens the *video element*, leaving the canvas on the page behind —
+redirected to the wrapper (canvas and controls together), with double-click kept. 738 tests,
+typecheck, lint and the client build clean.
+
 **v0.66.1 — the measured-lie rescue: the engine catches what MSE falsely claimed.** The operator's
 first live test (2026-10-01, Chrome on the Mac, Sky Sports Main Event UHD) hit the terminal
 sentence — and exposed a hole in the proactive gate. This Mac's Chrome answers

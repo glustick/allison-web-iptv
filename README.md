@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.66.2 — the first live run's three findings, fixed)
+
+The first live run of the client-side player (".48 Chrome") found the video half done — 50 fps
+presented, zero drops in the diagnostics loop — and three player bugs, now fixed: the audio session
+never started over plain-HTTP LAN (`crypto.randomUUID` is secure-context-only; the codebase's own
+`newSessionId()` is used now — the v0.24.0 lesson repeated in new code), the player collapsed to a
+strip (the audio carrier now carries the 16:9 shape), and the fullscreen button black-screened
+(redirected to the wrapper). 738 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.66.1 — the measured-lie rescue)
 
 The client-side engine catches what MSE falsely claimed: a browser that answers "yes" to HEVC and

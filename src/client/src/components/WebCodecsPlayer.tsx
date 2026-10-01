@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { runWebCodecsVideo, type WebCodecsVideoStats } from '../lib/webCodecsVideo'
 import { verdictIsUsable, loadVerdict } from '../lib/decodeGate'
+import { newSessionId } from '../lib/sessionId'
 
 // The client-side engine, in the player. The picture is decoded in this browser (WebCodecs, the
 // device's own GPU — gated on the decode verdict this device saved for itself) straight off the
@@ -38,6 +39,19 @@ export function WebCodecsPlayer({
       return
     }
 
+    // The controls' own fullscreen button fullscreens the *video element* — the canvas would stay
+    // behind on the page. Redirect it to the wrapper (canvas + controls together). The guard makes
+    // the redirect's own change event a no-op.
+    const onFullscreenChange = (): void => {
+      if (document.fullscreenElement === audioVideo) {
+        void document
+          .exitFullscreen()
+          .then(() => wrapRef.current?.requestFullscreen().catch(() => {}))
+          .catch(() => {})
+      }
+    }
+    audioVideo.addEventListener('fullscreenchange', onFullscreenChange)
+
     let hls: Hls | null = null
     let engine: ReturnType<typeof runWebCodecsVideo> | null = null
     let sessionUrl: string | null = null
@@ -52,7 +66,10 @@ export function WebCodecsPlayer({
         const res = await fetch('/api/transcode/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sourceUrl: url, isVod: false, sessionId: crypto.randomUUID(), audioOnly: true })
+          // newSessionId, never crypto.randomUUID: the raw API exists only in secure contexts,
+          // and this deployment is reached over plain HTTP on the LAN — the v0.24.0 lesson,
+          // repeated in new code (2026-10-01, ".48 chrome" test: video with no audio, no clock).
+          body: JSON.stringify({ sourceUrl: url, isVod: false, sessionId: newSessionId(), audioOnly: true })
         })
         if (res.ok) {
           const data = (await res.json()) as { url?: string }
@@ -109,6 +126,7 @@ export function WebCodecsPlayer({
 
     return () => {
       cancelled = true
+      audioVideo.removeEventListener('fullscreenchange', onFullscreenChange)
       engine?.stop()
       hls?.destroy()
       if (sessionUrl) {
@@ -135,8 +153,15 @@ export function WebCodecsPlayer({
       title="Double-click for fullscreen"
     >
       {/* The audio carrier: a video element with no picture to show, but real controls — volume,
-          pause, the lot. The canvas above it paints the picture and lets every click through. */}
-      <video ref={audioVideoRef} controls playsInline style={{ background: '#000' }} />
+          pause, the lot. The canvas above it paints the picture and lets every click through. With
+          no video track the element has no intrinsic size, so it carries the player's shape
+          itself — without this the whole player collapses to a small strip (".48 chrome" test). */}
+      <video
+        ref={audioVideoRef}
+        controls
+        playsInline
+        style={{ width: '100%', aspectRatio: '16 / 9', background: '#000' }}
+      />
       <canvas
         ref={canvasRef}
         style={{
@@ -162,7 +187,7 @@ export function WebCodecsPlayer({
       {stats && !error && (
         <div
           className="setup-hint"
-          style={{ position: 'absolute', bottom: 52, right: 8, fontSize: '0.75rem', opacity: 0.85 }}
+          style={{ position: 'absolute', bottom: 52, right: 8, fontSize: '0.75rem', opacity: 0.85, whiteSpace: 'nowrap' }}
         >
           WebCodecs · {stats.codec ?? '…'} · drawn {stats.drawn}
           {stats.latencyBehindSec !== null ? ` · ${stats.latencyBehindSec.toFixed(1)}s behind` : ''}
