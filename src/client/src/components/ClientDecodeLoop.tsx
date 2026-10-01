@@ -100,11 +100,18 @@ export function ClientDecodeLoop(): JSX.Element {
 
   function drawFrame(frame: VideoFrameLike, canvas: HTMLCanvasElement | null): void {
     if (!canvas) return
-    if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
-      canvas.width = frame.displayWidth
-      canvas.height = frame.displayHeight
+    // Draw at the size the canvas is actually displayed at, never the stream's own 3840x2160.
+    // Measured 2026-10-01 on the 4K Main 10 channel: decode ran at ~8x realtime while only about
+    // 13% of due frames got drawn — a full-resolution blit per frame into a 2D canvas starves
+    // presentation all by itself. The browser scales the canvas element up visually; what this
+    // surface proves is a moving picture, not eight million pixels per draw.
+    const width = Math.max(160, Math.floor(canvas.clientWidth || frame.displayWidth))
+    const height = Math.max(90, Math.round((width * frame.displayHeight) / Math.max(1, frame.displayWidth)))
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width
+      canvas.height = height
     }
-    canvas.getContext('2d')?.drawImage(frame as unknown as CanvasImageSource, 0, 0)
+    canvas.getContext('2d')?.drawImage(frame as unknown as CanvasImageSource, 0, 0, width, height)
   }
 
   async function pickCodec(
@@ -380,7 +387,10 @@ export function ClientDecodeLoop(): JSX.Element {
         segments while their signatures are young, decode with WebCodecs, and present on the canvas
         paced by the frames&rsquo; own timestamps. Video only for now — audio stays on the server&rsquo;s
         path until this engine joins the player. Runs on the WebCodecs path — Chrome, Brave or Edge;
-        Safari plays live HEVC natively and does not need this engine. The numbers that matter: presented fps (should sit
+        Safari plays live HEVC natively and does not need this engine. Two behaviours that are not
+        faults: the first seconds drop a burst of frames (joining at the live edge pays for the
+        buffer all at once), and a hidden tab draws nothing — the browser stops the draw loop while
+        decoding continues. The numbers that matter: presented fps (should sit
         near the stream&rsquo;s own rate), latency behind the edge, and dropped frames (a few under load;
         climbing means the decode cannot keep up).
       </p>
@@ -417,6 +427,9 @@ export function ClientDecodeLoop(): JSX.Element {
             {stats.latencyBehindSec !== null ? `${stats.latencyBehindSec.toFixed(1)} s behind the live edge` : 'measuring latency…'}
             {stats.playlistStagnant ? ' — the playlist has not advanced; this channel may not be broadcasting' : ''}
           </li>
+          {typeof document !== 'undefined' && document.hidden && (
+            <li>drawing paused — this tab is hidden (the browser stops requestAnimationFrame; decoding continues)</li>
+          )}
         </ul>
       )}
       <canvas ref={canvasRef} style={{ maxWidth: '100%', marginTop: 8, background: '#000' }} />

@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.63.2 — the loop's first live run, and the draw cost it exposed)
+
+The client-side live loop's first real run (Chrome, 4K Main 10) decoded at ~8x realtime on the
+hardware path while presentation starved — every frame was being blitted at the stream's full
+3840x2160 into a diagnostics canvas the browser then scales down. The loop now draws at its
+displayed size, says plainly when a hidden tab has paused drawing (rAF stops; decoding continues),
+and names the joining burst of drops as the non-fault it is. The engine's timing logic was never the
+problem — it is pure and test-pinned. 730 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.63.1 — a Safari refusal gets its sentence)
 
 The decode check, run in Safari, answered with a bare "Decoder failure" — WebKit's decoder refusing

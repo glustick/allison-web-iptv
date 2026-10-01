@@ -15,6 +15,22 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.63.2 — the loop's first live run, and the draw cost it exposed.** The operator ran the
+client-side live loop on the 4K Main 10 channel in Chrome (2026-10-01): decode was magnificent —
+**3,643 frames on the hardware path, ~8x realtime** — while presentation starved: 411 frames drawn
+against 2,645 dropped late, the queue pinned at its cap, and "8.4 s behind the live edge". Two
+causes, both on the drawing side, and neither a flaw in the engine's timing logic (which is pure and
+pinned by tests). **First, the canvas blitted every frame at the stream's full 3840x2160** into a 2D
+context that the browser then scaled down to panel width — the draw alone consumed more than a frame
+interval, so the newest-due policy dropped everything it skipped; the loop now draws at the canvas's
+displayed size, which is what a diagnostics canvas is for (the stream's own resolution reaches the
+player integration, where the canvas is the television). **Second, a hidden tab draws nothing** —
+the browser stops requestAnimationFrame outright while decoding happily continues, which read as
+"presented 0 fps" over a backgrounded stretch; the stats now say so in a line rather than letting it
+look like a stall. The intro also now names the two behaviours that are not faults before they look
+like bugs: the joining burst of drops (the edge buffer is paid for all at once) and the hidden-tab
+pause. 730 tests, typecheck, lint and the client build clean.
+
 **v0.63.1 — a Safari refusal gets its sentence.** The operator ran the decode check in Safari
 (2026-10-01) and got a bare `check failed: Decoder failure` — the check had walked the whole chain
 (fetch, demux, codec negotiation) and then WebKit's decoder answered with its generic refusal, most
