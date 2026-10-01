@@ -19,7 +19,7 @@ import { tierForVerdict, type DecodeVerdict } from './decodeGate'
  */
 export function describeUnplayableVideo(opts: {
   videoCodec: string | null
-  engine: 'native' | 'hls' | null
+  engine: 'native' | 'hls' | 'webcodecs' | null
   /** True when the native pipeline failed first and hls.js was attached as the fallback. */
   nativeFailed: boolean
   verdict: DecodeVerdict | null

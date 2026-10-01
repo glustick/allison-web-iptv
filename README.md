@@ -6,6 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.66.0 — the client-side engine joins the player)
+
+On a browser whose MSE cannot present a live HEVC channel, the device's own GPU decodes it:
+LivePlayer picks the WebCodecs engine when the saved decode verdict says the device can, presents
+the provider's own bits on a canvas at full resolution with no re-encode, and plays the sound from
+an audio-only session whose wall-clock stamps are the A/V clock — the two renditions agree because
+they describe the same source. No clock, or a failed audio session, runs the picture on wall time
+and says so. Safari's native path and Chrome's MSE-decodable channels are untouched. 738 tests,
+typecheck, lint and the client build clean.
+
 ## Current state (v0.65.0 — the audio half of the client-side player)
 
 The client-side engine's validation completed (the live loop presented 37 fps of a 50 fps 4K stream

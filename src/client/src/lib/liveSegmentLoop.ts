@@ -16,6 +16,13 @@ export interface LivePlaylistSegment {
   url: string
   /** From #EXTINF, when the playlist states it — 0 when it does not. */
   durationSec: number
+  /**
+   * #EXT-X-PROGRAM-DATE-TIME as epoch ms, when the segment carries one — the wall-clock instant
+   * the segment's first sample plays at. This provider stamps its playlists (the tag ffmpeg kept
+   * tripping over in its own logs), and it is what lets two independently-delivered renditions of
+   * the same source — canvas video and an audio session — agree on where "now" is.
+   */
+  programDateTimeMs: number | null
 }
 
 export interface LivePlaylist {
@@ -36,6 +43,7 @@ export function parseLivePlaylist(text: string): LivePlaylist | null {
   let ended = false
   let sawTag = false
   let pendingDuration: number | null = null
+  let pendingDateTimeMs: number | null = null
   for (const raw of text.split('\n')) {
     const line = raw.trim()
     if (line === '') continue
@@ -50,13 +58,17 @@ export function parseLivePlaylist(text: string): LivePlaylist | null {
       } else if (line.startsWith('#EXTINF:')) {
         const value = Number.parseFloat(line.slice('#EXTINF:'.length).split(',')[0])
         pendingDuration = Number.isFinite(value) && value > 0 ? value : null
+      } else if (line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) {
+        const parsed = Date.parse(line.slice('#EXT-X-PROGRAM-DATE-TIME:'.length))
+        pendingDateTimeMs = Number.isFinite(parsed) ? parsed : null
       } else if (line.startsWith('#EXT-X-ENDLIST')) {
         ended = true
       }
       continue
     }
-    segments.push({ url: line, durationSec: pendingDuration ?? 0 })
+    segments.push({ url: line, durationSec: pendingDuration ?? 0, programDateTimeMs: pendingDateTimeMs })
     pendingDuration = null
+    pendingDateTimeMs = null
   }
   // A playlist this app is handed always carries tags (#EXTM3U at minimum); an error body or a raw
   // TS answer does not. Anything without one is not a playlist, whatever its lines look like.

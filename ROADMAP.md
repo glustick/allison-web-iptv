@@ -15,6 +15,31 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.66.0 — the client-side engine joins the player.** The direction this file has been building
+since the NAS was ruled out of video transcoding (2026-09-22), landed. On a browser whose MSE
+cannot present a live HEVC channel, **the device's own GPU now decodes it**: LivePlayer chooses
+the WebCodecs engine when the saved verdict says the device can (measured twice on the target
+machine: 396.7 and 383.8 fps at 4K Main 10), the canvas presents the provider's own bits — full
+resolution, zero re-encode, the server never touches the picture — and the sound rides the
+audio-only session, whose PROGRAM-DATE-TIME stamps are the A/V clock. Both renditions describe the
+same source, so the same wall instant names the same content instant: the engine maps the audio
+element's playhead through its fragment stamps onto the video's own playlist stamps, presents the
+frame the ear says is due, and degrades honestly at every step — no clock yet or a failed session
+runs the picture on wall time *and says so*; a browser without the verdict keeps today's honest
+paths untouched (native, remux, the sentence).
+
+The pieces: `lib/webCodecsVideo.ts` is the controller (loop + decode + present, driven by an
+injectable clock — fake-driven end-to-end in tests, real TS bytes in, the audio clock's frame
+choices out); `WebCodecsPlayer.tsx` is the surface (a picture-less `<video>` underneath carries
+real controls and the sound, the canvas paints over it letting every click through, double-click
+fullscreens the pair); the planner learned to read `#EXT-X-PROGRAM-DATE-TIME`; the audio tier
+stamps its playlists (`+program_date_time`); and the fallback hook grew an audio-session lifecycle
+that never touches the transcode ladder's own bookkeeping. Engine order is unchanged for everyone
+else: Safari native, Chrome-with-MSE-HEVC direct, and the engine only where MSE says no and the
+device said yes. 738 tests (3 new), typecheck, lint and the client build clean. **Wants its live
+proof on the deployment** — the UHD channels in Chrome on the measured machine — and the media
+stats panel now names the engine when it runs.
+
 **v0.65.0 — the audio half of the client-side player: a session that carries sound alone.** The
 loop's validation run came in clean first (2026-10-01: presented 37 fps against a 50 fps stream,
 **queue empty, 0.1 s behind the live edge** — presentation keeping pace where it previously starved

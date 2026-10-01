@@ -3,7 +3,7 @@ import { describeVerdict, loadVerdict } from '../lib/decodeGate'
 
 interface MediaStatsProps {
   video: HTMLVideoElement | null
-  engine: 'native' | 'hls' | null
+  engine: 'native' | 'hls' | 'webcodecs' | null
   videoCodec: string | null
   audioTrackCount: number | null
   /** The player's bandwidth estimate, where its engine provides one (hls.js does). */
@@ -177,7 +177,8 @@ export function MediaStats({
     return () => clearInterval(timer)
   }, [video, readBandwidth])
 
-  const engineLabel = engine === 'native' ? 'native HLS' : engine === 'hls' ? 'hls.js (MSE)' : 'starting'
+  const engineLabel =
+    engine === 'native' ? 'native HLS' : engine === 'hls' ? 'hls.js (MSE)' : engine === 'webcodecs' ? 'WebCodecs (canvas)' : 'starting'
 
   return (
     <div

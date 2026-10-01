@@ -1447,6 +1447,9 @@ describe('video re-encode tier', () => {
       expect(args[ca + 1]).toBe('aac')
       // Live semantics stay: the input stays paced (-re) and the window stays live-sized.
       expect(args).toContain('-re')
+      // And the playlist carries wall-clock stamps — the A/V alignment rides on them.
+      const flags = args.indexOf('-hls_flags')
+      expect(args[flags + 1]).toContain('program_date_time')
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true })
     }

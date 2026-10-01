@@ -820,7 +820,12 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
             '-hls_list_size',
             '15',
             '-hls_flags',
-            'delete_segments+omit_endlist'
+            // +program_date_time in the audio-only tier: the client-side engine aligns its
+            // canvas video against this session's clock through the wall-clock stamps both sides
+            // carry (the provider stamps its own playlists), so lips stay attached without any
+            // shared timeline being negotiated. The other tiers leave their flags untouched —
+            // their players never needed PDT, and their playlists are not this engine's problem.
+            audioOnly ? 'delete_segments+omit_endlist+program_date_time' : 'delete_segments+omit_endlist'
           ]),
       '-hls_segment_filename',
       join(dir, 'seg_%05d.m4s'),

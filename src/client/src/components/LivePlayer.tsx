@@ -10,7 +10,7 @@ import {
   streamNeedsVideoTranscode
 } from '../lib/transcodeHints'
 import { prefersNativePlayback } from '../lib/nativePlayback'
-import { loadVerdict } from '../lib/decodeGate'
+import { loadVerdict, verdictIsUsable } from '../lib/decodeGate'
 import { describeUnplayableVideo } from '../lib/playbackDiagnosis'
 import { sniffStreamKind } from '../lib/streamKind'
 import { probeStreamTracks } from '../lib/audioTrackProbe'
@@ -20,6 +20,7 @@ import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRec
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
 import { MediaStats } from './MediaStats'
+import { WebCodecsPlayer } from './WebCodecsPlayer'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
 // Matches the desktop app's own Player.tsx recovery tuning (see its ROADMAP): a fatal
@@ -101,8 +102,12 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   // provider's container as-is with hardware decode instead of remuxing everything for MSE (see
   // lib/nativePlayback.ts). hls.js remains the engine for browsers without one, and a native failure
   // re-attaches with hls.js once, so the worst case is the old behaviour a retry later.
-  const engineRef = useRef<'native' | 'hls' | null>(null)
+  const engineRef = useRef<'native' | 'hls' | 'webcodecs' | null>(null)
   const nativeFailedRef = useRef(false)
+  // The client-side decode engine: chosen when this browser cannot present the stream's video
+  // through MSE but the device's own saved verdict says its GPU can decode it — the Chrome-on-a-
+  // good-GPU case this whole direction exists for. Rendered instead of the <video> machinery.
+  const [webCodecs, setWebCodecs] = useState(false)
 
   // A genuinely different channel resets the fallback (and stops any in-flight ffmpeg
   // session) — an internal reload (reloadTick bumping after a successful fallback) must not,
@@ -112,9 +117,11 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     reloadAttemptsRef.current = 0
     engineRef.current = null
     nativeFailedRef.current = false
+    setWebCodecs(false)
   }, [channelKey, reset])
 
   useEffect(() => {
+    if (webCodecs) return
     const video = videoRef.current
     if (!video) return
     setError(null)
@@ -596,7 +603,7 @@ let stallCount = 0
       video.removeAttribute('src')
       video.load()
     }
-  }, [channelKey, reloadTick])
+  }, [channelKey, reloadTick, webCodecs])
 
   // Some channels are not HLS at all: the provider answers the playlist URL with raw MPEG-TS,
   // which hls.js cannot parse — and because this player deliberately ignores playlist *parsing*
@@ -645,6 +652,22 @@ let stallCount = 0
       // server-side remux instead, with ~5.8s segments and an extra hop, and stuttered. So ask the
       // browser first; only the native engine (which cannot present HEVC-in-TS at all) skips the ask.
       const mseCanDecode = canDecodeVideoCodec(videoCodec, decodeProbe)
+      // The client-side engine, offered where it is the honest best path: this browser's MSE
+      // cannot present the stream's video, but this device measured itself decoding it
+      // comfortably (the verdict the decode check saves). The GPU decodes the provider's own
+      // bytes; the server never touches the picture.
+      if (
+        engineRef.current === 'hls' &&
+        !mseCanDecode &&
+        needsStreamCopyRemux({ videoCodec, isLive: true }) &&
+        typeof VideoDecoder !== 'undefined' &&
+        verdictIsUsable(loadVerdict())
+      ) {
+        console.warn(`[player] ${videoCodec} video undecodable by this browser's MSE — decoding client-side (WebCodecs)`)
+        engineRef.current = 'webcodecs'
+        setWebCodecs(true)
+        return
+      }
       if (
         needsStreamCopyRemux({ videoCodec, isLive: true }) &&
         (engineRef.current === 'native' || !mseCanDecode)
@@ -750,7 +773,11 @@ let stallCount = 0
           />
         )}
       </div>
-      <video ref={videoRef} controls />
+      {webCodecs ? (
+        <WebCodecsPlayer url={url} />
+      ) : (
+        <video ref={videoRef} controls />
+      )}
       <TrackControls
         audioTracks={audioTracks}
         audioTrack={audioTrack}

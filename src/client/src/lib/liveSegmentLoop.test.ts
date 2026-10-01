@@ -15,6 +15,8 @@ function playlistText(options: {
   count: number
   durationSec?: number
   ended?: boolean
+  /** False to omit #EXT-X-PROGRAM-DATE-TIME — a playlist that never carried stamps. */
+  dated?: boolean
   urlAt?: (sequence: number) => string
 }): string {
   const mediaSequence = options.mediaSequence ?? 100
@@ -25,6 +27,7 @@ function playlistText(options: {
   lines.push(`#EXT-X-MEDIA-SEQUENCE:${mediaSequence}`)
   for (let i = 0; i < options.count; i++) {
     const sequence = mediaSequence + i
+    if (options.dated !== false) lines.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(Date.UTC(2026, 9, 1, 12, 0, 0) + sequence * 4000).toISOString()}`)
     lines.push(`#EXTINF:${duration},`)
     lines.push(urlAt(sequence))
   }
@@ -37,12 +40,22 @@ describe('parseLivePlaylist', () => {
     expect(parsed).not.toBeNull()
     expect(parsed!.mediaSequence).toBe(4100)
     expect(parsed!.targetDurationSec).toBe(4)
-    expect(parsed!.segments).toEqual([
-      { url: '/seg-4100.ts', durationSec: 4 },
-      { url: '/seg-4101.ts', durationSec: 4 },
-      { url: '/seg-4102.ts', durationSec: 4 }
-    ])
+    expect(parsed!.segments).toEqual([4100, 4101, 4102].map((sequence) => ({
+      url: `/seg-${sequence}.ts`,
+      durationSec: 4,
+      programDateTimeMs: Date.parse('2026-10-01T12:00:00Z') + sequence * 4000
+    })))
     expect(parsed!.ended).toBe(false)
+  })
+
+  it('reads each segment\'s PROGRAM-DATE-TIME, and tolerates a playlist without any', () => {
+    const dated = parseLivePlaylist(playlistText({ mediaSequence: 100, count: 3 }))!
+    expect(dated.segments[0].programDateTimeMs).toBe(Date.parse('2026-10-01T12:00:00Z') + 100 * 4000)
+    // One tag per segment, absolute — the next segment is exactly one duration on.
+    expect(dated.segments[1].programDateTimeMs).toBe(dated.segments[0].programDateTimeMs! + 4000)
+
+    const undated = parseLivePlaylist(playlistText({ count: 2, dated: false }))!
+    expect(undated.segments.every((segment) => segment.programDateTimeMs === null)).toBe(true)
   })
 
   it('marks ENDLIST, survives a missing media sequence, and rejects text that is not a playlist', () => {

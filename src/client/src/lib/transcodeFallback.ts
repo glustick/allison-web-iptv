@@ -132,8 +132,16 @@ export function useTranscodeFallback(): {
   escalateToVideoTranscode: (originalUrl: string, onReload: () => void, onError?: (message: string) => void) => boolean
   /** Whether the video re-encode tier has already been tried in this run. */
   hasTriedVideoTranscode: () => boolean
+  /** The client-side engine's audio companion: starts an audio-only session, resolves its URL (null on failure). */
+  startAudioOnlySession: (originalUrl: string) => Promise<string | null>
+  /** Stops the audio companion, if one is running. */
+  stopAudioOnlySession: () => void
 } {
   const transcodedUrlRef = useRef<string | null>(null)
+  // The client-side engine's audio session, kept apart from the video-session refs above: it is
+  // not a fallback (nothing converts), it is a companion, and it must not confuse hasSession()'s
+  // answers about the transcode ladder.
+  const audioSessionIdRef = useRef<string | null>(null)
   const triedRef = useRef(false)
   const awaitingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
@@ -175,10 +183,24 @@ export function useTranscodeFallback(): {
         stopSessionRef.current(sessionId)
       }
     }
+    const stopAudioSession = (): void => {
+      const sessionId = audioSessionIdRef.current
+      if (!sessionId) return
+      audioSessionIdRef.current = null
+      try {
+        const body = new Blob([JSON.stringify({ sessionId })], { type: 'application/json' })
+        navigator.sendBeacon?.('/api/transcode/stop', body)
+      } catch {
+        stopSessionRef.current(sessionId)
+      }
+    }
     window.addEventListener('pagehide', stopCurrent)
+    window.addEventListener('pagehide', stopAudioSession)
     return () => {
       window.removeEventListener('pagehide', stopCurrent)
+      window.removeEventListener('pagehide', stopAudioSession)
       stopCurrent()
+      stopAudioSession()
     }
   }, [])
 
@@ -316,6 +338,38 @@ export function useTranscodeFallback(): {
     [startFallback, stopSession]
   )
 
+  /**
+   * The client-side engine's audio companion (see lib/webCodecsVideo.ts): an audio-only session
+   * whose playlist is both the sound and the A/V clock. Deliberately NOT touching the fallback
+   * refs — starting it must not count as "this stream needed converting".
+   */
+  const startAudioOnlySession = useCallback((originalUrl: string): Promise<string | null> => {
+    if (originalUrl.startsWith('/__transcode/')) return Promise.resolve(null)
+    const sessionId = newSessionId()
+    audioSessionIdRef.current = sessionId
+    return fetch('/api/transcode/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceUrl: originalUrl, isVod: false, sessionId, audioOnly: true })
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.text()) || `audio session failed: ${res.status}`)
+        return res.json() as Promise<StartTranscodeResponse>
+      })
+      .then(({ url }) => url)
+      .catch((err) => {
+        audioSessionIdRef.current = null
+        console.warn('[player] audio session could not start — the engine will run silent:', err instanceof Error ? err.message : String(err))
+        return null
+      })
+  }, [])
+
+  const stopAudioOnlySession = useCallback((): void => {
+    const stale = audioSessionIdRef.current
+    audioSessionIdRef.current = null
+    if (stale) stopSessionRef.current(stale)
+  }, [])
+
   return {
     getSourceUrl,
     tryFallback,
@@ -326,6 +380,8 @@ export function useTranscodeFallback(): {
     hasSession,
     restartFallback,
     escalateToVideoTranscode,
-    hasTriedVideoTranscode
+    hasTriedVideoTranscode,
+    startAudioOnlySession,
+    stopAudioOnlySession
   }
 }
