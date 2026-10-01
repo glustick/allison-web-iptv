@@ -29,6 +29,12 @@ export function WebCodecsPlayer({
   const [stats, setStats] = useState<WebCodecsVideoStats | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  // The carrier starts muted — muted autoplay is always allowed, so the clock engages immediately —
+  // and unmutes on the first interaction. Unmuted play() is rejected because the engine mounts long
+  // after the channel click that earned the activation (the ladder takes seconds), and a paused
+  // element means no sound AND no clock: FRAG_CHANGED only fires for played fragments (the ".48
+  // Chrome" run's silent, unclocked picture, 2026-10-01).
+  const [muted, setMuted] = useState(true)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -42,6 +48,19 @@ export function WebCodecsPlayer({
     // The controls' own fullscreen button fullscreens the *video element* — the canvas would stay
     // behind on the page. Redirect it to the wrapper (canvas + controls together). The guard makes
     // the redirect's own change event a no-op.
+    // First interaction anywhere on the page unmutes the sound (and nudges play, in case even the
+    // muted start was refused).
+    const unmute = (): void => {
+      audioVideo.muted = false
+      setMuted(false)
+      void audioVideo.play().catch(() => {})
+    }
+    document.addEventListener('pointerdown', unmute, { once: true })
+    document.addEventListener('keydown', unmute, { once: true })
+    audioVideo.addEventListener('volumechange', () => {
+      if (!audioVideo.muted) setMuted(false)
+    })
+
     const onFullscreenChange = (): void => {
       if (document.fullscreenElement === audioVideo) {
         void document
@@ -74,9 +93,11 @@ export function WebCodecsPlayer({
         if (res.ok) {
           const data = (await res.json()) as { url?: string }
           sessionUrl = typeof data.url === 'string' ? data.url : null
+        } else {
+          setNotice(`the audio stream could not start (HTTP ${res.status}) — playing silent`)
         }
-      } catch {
-        // Silence, then — the engine's notice will say so.
+      } catch (err) {
+        setNotice(`the audio stream could not start (${err instanceof Error ? err.message : String(err)}) — playing silent`)
       }
       if (cancelled) return
 
@@ -104,7 +125,11 @@ export function WebCodecsPlayer({
         })
         hls.loadSource(sessionUrl)
         hls.attachMedia(audioVideo)
-        void audioVideo.play().catch(() => {})
+        audioVideo.muted = true
+        void audioVideo.play().catch(() => {
+          // Retried on canplay and on the first interaction; the unmute chip says what to do.
+          audioVideo.addEventListener('canplay', () => void audioVideo.play().catch(() => {}), { once: true })
+        })
       }
 
       engine = runWebCodecsVideo({
@@ -126,6 +151,8 @@ export function WebCodecsPlayer({
 
     return () => {
       cancelled = true
+      document.removeEventListener('pointerdown', unmute)
+      document.removeEventListener('keydown', unmute)
       audioVideo.removeEventListener('fullscreenchange', onFullscreenChange)
       engine?.stop()
       hls?.destroy()
@@ -174,6 +201,20 @@ export function WebCodecsPlayer({
           background: '#000'
         }}
       />
+      {muted && !error && (
+        <button
+          type="button"
+          className="admin-small-btn"
+          style={{ position: 'absolute', top: 8, left: 8, zIndex: 5 }}
+          onClick={() => {
+            audioVideoRef.current && (audioVideoRef.current.muted = false)
+            setMuted(false)
+            void audioVideoRef.current?.play().catch(() => {})
+          }}
+        >
+          🔊 Tap for sound
+        </button>
+      )}
       {notice && (
         <div className="player-error" role="status" style={{ position: 'absolute', top: 8, left: 8 }}>
           <span>{notice}</span>

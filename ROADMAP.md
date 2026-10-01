@@ -15,6 +15,21 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.66.3 — the paused carrier: why the sound and the clock died together.** The retest (".48
+Chrome", v0.66.2) confirmed the screen and fullscreen fixed — and still no audio, still no clock,
+which pointed the diagnosis somewhere new. The server side was proven first this time: the exact
+audioOnly argv, run against real ffmpeg, produces a correct audio-only fMP4 playlist with
+PROGRAM-DATE-TIME on every segment (`video:0kB audio:141kB` — nothing to fix there). The cause was
+client-side and explains both symptoms at once: **the audio element never started playing**.
+`FRAG_CHANGED` fires only for *played* fragments, so a paused element gives no sound and no clock —
+and it was paused because its `play()` ran long after the channel click that earned Chrome's
+transient user activation (the ladder takes seconds to reach the engine), so unmuted autoplay was
+refused and the refusal was swallowed. The carrier now **starts muted — always allowed, clock and
+sync engage immediately — and unmutes on the first interaction**, with a visible "Tap for sound"
+chip until then (the native controls' own unmute works too). And a session that cannot start now
+says why, with the server's own message, instead of vanishing into the engine's generic no-clock
+notice. 738 tests, typecheck, lint and the client build clean.
+
 **v0.66.2 — the first live run's three findings, fixed.** The ".48 Chrome" test (2026-10-01,
 written up in `/agent/test`): the diagnostics loop read **50 fps presented, zero dropped frames**,
 and the decode check 425.7 fps at 4K Main 10 — the engine's video half is done. The player

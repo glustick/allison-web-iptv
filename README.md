@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.66.3 — the paused carrier)
+
+The retest pinned the missing audio on a classic: the audio element's unmuted play() ran past
+Chrome's user-activation window (the ladder takes seconds), was refused, and a paused element gives
+no sound *and* no clock — FRAG_CHANGED only fires for played fragments. The carrier starts muted
+now (always allowed; sync engages immediately) and unmutes on the first interaction, with a visible
+prompt. The server side was verified against real ffmpeg first: the audio-only playlist is correct,
+PDT and all. 738 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.66.2 — the first live run's three findings, fixed)
 
 The first live run of the client-side player (".48 Chrome") found the video half done — 50 fps
