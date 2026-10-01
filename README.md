@@ -6,6 +6,13 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.66.1 — the measured-lie rescue)
+
+The client-side engine catches what MSE falsely claimed: a browser that answers "yes" to HEVC and
+then fails the append (this Mac's Chrome, measured) walks the recovery ladder to its end — and the
+new last rung hands the channel to the device's own GPU when its saved decode verdict says it can.
+Honest browsers are untouched. 738 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.66.0 — the client-side engine joins the player)
 
 On a browser whose MSE cannot present a live HEVC channel, the device's own GPU decodes it:

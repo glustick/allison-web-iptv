@@ -15,6 +15,20 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.66.1 — the measured-lie rescue: the engine catches what MSE falsely claimed.** The operator's
+first live test (2026-10-01, Chrome on the Mac, Sky Sports Main Event UHD) hit the terminal
+sentence — and exposed a hole in the proactive gate. This Mac's Chrome answers
+`isTypeSupported(hvc1) → true` and then fails the actual append (the exact lie videoCapability.ts
+has documented since v0.45.0), so the gate's `!mseCanDecode` condition never fired and the ladder
+walked itself to the end: direct → copy session → append fails again → "cannot be played". The fix
+is the ladder's new last rung: **when playback has provably failed and the device holds a usable
+decode verdict, the client's own GPU gets the channel** — one bounded attempt per run, the dead
+session stopped, the engine mounted in place of the error. Browsers whose MSE tells the truth are
+untouched: a yes that works stays direct, a no hits the proactive gate as before. Also from the
+morning's cut: the v0.66.0 tag moved one commit forward after CI's typecheck caught a stale
+interface declaration (the TranscodeService interface had never grown `audioOnly`; the gate worked
+exactly as built). 738 tests, typecheck, lint and the client build clean.
+
 **v0.66.0 — the client-side engine joins the player.** The direction this file has been building
 since the NAS was ruled out of video transcoding (2026-09-22), landed. On a browser whose MSE
 cannot present a live HEVC channel, **the device's own GPU now decodes it**: LivePlayer chooses

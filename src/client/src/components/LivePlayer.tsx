@@ -108,6 +108,9 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   // through MSE but the device's own saved verdict says its GPU can decode it — the Chrome-on-a-
   // good-GPU case this whole direction exists for. Rendered instead of the <video> machinery.
   const [webCodecs, setWebCodecs] = useState(false)
+  // Bounds the ladder's escalation to the engine to one try per run — the engine is a leaf, and
+  // nothing may bounce between it and MSE.
+  const webCodecsTriedRef = useRef(false)
 
   // A genuinely different channel resets the fallback (and stops any in-flight ffmpeg
   // session) — an internal reload (reloadTick bumping after a successful fallback) must not,
@@ -118,6 +121,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     engineRef.current = null
     nativeFailedRef.current = false
     setWebCodecs(false)
+    webCodecsTriedRef.current = false
   }, [channelKey, reset])
 
   useEffect(() => {
@@ -555,7 +559,21 @@ let stallCount = 0
               // rather than to make on their behalf — and on a 10-bit 4K feed it is also the most
               // expensive thing this host can be asked to do.
               // Native or nothing (v0.48.2): no re-encode is offered, because on this host one could
-              // not keep up with a 4K feed anyway. Say so, and let the viewer pick another channel.
+              // not keep up with a 4K feed anyway.
+              //
+              // v0.66.1: there is one rung before giving up, and it is the measured-lie rescue —
+              // this Mac's Chrome answers isTypeSupported(hvc1) → true and then fails the append,
+              // so the proactive gate never fired, but the *device* can decode (its saved verdict
+              // says so). Playback has now provably failed; the client's own GPU gets the channel.
+              if (typeof VideoDecoder !== 'undefined' && !webCodecsTriedRef.current && verdictIsUsable(loadVerdict())) {
+                console.warn('[player] MSE claimed this video and then failed it — handing the channel to the client-side engine')
+                webCodecsTriedRef.current = true
+                instance.destroy()
+                reset()
+                engineRef.current = 'webcodecs'
+                setWebCodecs(true)
+                break
+              }
               fatalErrorShown = true
               // The plan said this channel needs converting; it was converted; it still would not play
               // — so the plan is wrong, and the next click should discover it again rather than repeat
