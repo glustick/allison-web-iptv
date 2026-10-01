@@ -432,7 +432,14 @@ export interface TranscodeService {
     // fails the actual decode (see the -c:v comment in the argv below).
     videoTranscode?: boolean,
     /** Extra HTTP headers for the input (see startTranscode's implementation). */
-    inputHeaders?: string
+    inputHeaders?: string,
+    /** Internal: the implementation's own HLS-argument retry sets this. No caller passes it. */
+    hlsInputArgsDisabled?: boolean,
+    /**
+     * The client-side engine's audio companion: map audio alone (AAC, video unmapped) — see the
+     * implementation's own doc for why the browser's decode needs a server-side sound track.
+     */
+    audioOnly?: boolean
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }>
   stopTranscode(sessionId: string): Promise<void>
   serveTranscodeFile(url: string, res: ServerResponse): Promise<void>
