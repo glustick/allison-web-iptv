@@ -93,6 +93,33 @@ export interface WebCodecsVideoHandle {
   stop: () => void
 }
 
+/**
+ * The wall-clock instant an audio element is playing, from the fragments it has buffered and their
+ * PROGRAM-DATE-TIME stamps. Built from **buffered** fragments, not played ones: FRAG_CHANGED only
+ * fires during playback, so a carrier that has not started (autoplay refused, activation expired)
+ * gave no clock at all — measured live as the silent, unclocked picture (".48 Chrome", 2026-10-01)
+ * while the playlist carried perfectly good timestamps the whole time. Buffering begins regardless
+ * of playback, so the clock engages as soon as the first fragment lands; a paused element freezes
+ * currentTime and the clock with it, which is exactly what a held picture should do.
+ */
+export interface StampedFragment {
+  /** The fragment's start on the element's media timeline, seconds. */
+  startSec: number
+  /** The fragment's PROGRAM-DATE-TIME, epoch ms. */
+  pdtMs: number
+}
+
+export function playingWallMsFromFrags(frags: StampedFragment[], currentTimeSec: number): number | null {
+  let best: StampedFragment | null = null
+  for (const frag of frags) {
+    if (frag.startSec <= currentTimeSec && (!best || frag.startSec > best.startSec)) best = frag
+  }
+  // Before the first buffered fragment there is nothing to map through yet — the engine stays on
+  // its wall clock and says so, rather than inventing an instant.
+  if (!best) return null
+  return best.pdtMs + (currentTimeSec - best.startSec) * 1000
+}
+
 /** A decoded frame awaiting its turn; the decoder emits display order, so the queue is pts-sorted. */
 interface QueuedFrame {
   frame: VideoFrameLike

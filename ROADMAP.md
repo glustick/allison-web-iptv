@@ -15,6 +15,20 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.66.4 — the clock listens to buffering, not playback.** Still "no audio clock" on the ".48
+Chrome" retest (both Sky Sports Main Event UHD and Sky Sports F1 UHD) — and this time the chain was
+verified link by link until the broken one had nowhere to hide. Real ffmpeg produces a correct
+audio-only playlist, PDT on every segment (v0.66.3's check). A real browser (headless Chrome
+against that very playlist, hls.js 1.7) proved the client-side parsing: the fragment fields carry
+the stamps fine — **on `FRAG_BUFFERED`**. What never arrives is `FRAG_CHANGED`: it fires only for
+fragments that actually *play*, and the carrier still has not started playing when the clock needs
+it (autoplay refused past the activation window; even the muted start is not guaranteed before the
+first fragment is wanted). The clock is therefore built from **buffered** fragments now
+(`playingWallMsFromFrags`, pure and unit-tested): the map engages the moment the first fragment
+lands, regardless of playback state; a paused element freezes `currentTime` and the clock with it —
+a held picture, which is what a held sound track should produce. 741 tests (3 new), typecheck, lint
+and the client build clean.
+
 **v0.66.3 — the paused carrier: why the sound and the clock died together.** The retest (".48
 Chrome", v0.66.2) confirmed the screen and fullscreen fixed — and still no audio, still no clock,
 which pointed the diagnosis somewhere new. The server side was proven first this time: the exact

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { runWebCodecsVideo, type WebCodecsVideoStats } from './webCodecsVideo.js'
+import { playingWallMsFromFrags, runWebCodecsVideo, type WebCodecsVideoStats } from './webCodecsVideo.js'
 import { PTS_HZ } from './framePresenter.js'
 import { TS_PACKET_SIZE } from './tsHevc.js'
 
@@ -242,5 +242,28 @@ describe('runWebCodecsVideo', () => {
     })
     expect(errors[0]).toMatch(/no WebCodecs VideoDecoder/)
     handle.stop()
+  })
+})
+
+describe('playingWallMsFromFrags', () => {
+  const frags = [
+    { startSec: 0, pdtMs: 1_000_000 },
+    { startSec: 4, pdtMs: 1_004_000 },
+    { startSec: 8, pdtMs: 1_008_000 }
+  ]
+
+  it('maps the playhead through the fragment that contains it', () => {
+    expect(playingWallMsFromFrags(frags, 5.5)).toBe(1_005_500)
+    expect(playingWallMsFromFrags(frags, 8.25)).toBe(1_008_250)
+    expect(playingWallMsFromFrags(frags, 0)).toBe(1_000_000)
+  })
+
+  it('extrapolates past the newest buffered fragment, as a live playhead will', () => {
+    expect(playingWallMsFromFrags(frags, 10)).toBe(1_010_000)
+  })
+
+  it('answers nothing before the first buffered fragment, rather than inventing an instant', () => {
+    expect(playingWallMsFromFrags(frags, -1)).toBeNull()
+    expect(playingWallMsFromFrags([], 5)).toBeNull()
   })
 })

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
-import { runWebCodecsVideo, type WebCodecsVideoStats } from '../lib/webCodecsVideo'
+import { runWebCodecsVideo, playingWallMsFromFrags, type StampedFragment, type WebCodecsVideoStats } from '../lib/webCodecsVideo'
 import { verdictIsUsable, loadVerdict } from '../lib/decodeGate'
 import { newSessionId } from '../lib/sessionId'
 
@@ -75,8 +75,10 @@ export function WebCodecsPlayer({
     let engine: ReturnType<typeof runWebCodecsVideo> | null = null
     let sessionUrl: string | null = null
     let cancelled = false
-    // The fragment the audio element is playing, with its wall-clock stamp — the master clock.
-    let playingFrag: { pdtMs: number; startSec: number } | null = null
+    // The audio element's buffered fragments with their wall-clock stamps — the master clock's
+    // raw material. FRAG_BUFFERED, not FRAG_CHANGED: buffering begins whether or not playback
+    // has been allowed to start, and the clock must not wait for it.
+    const frags: StampedFragment[] = []
 
     void (async () => {
       // The audio session first: it takes a moment to start, and the engine runs silent until it
@@ -107,17 +109,24 @@ export function WebCodecsPlayer({
           // the source start within a second or two of the same content instant.
           liveSyncDurationCount: 2
         })
-        hls.on(Hls.Events.FRAG_CHANGED, (_event, data) => {
-          const frag = data.frag as { programDateTime?: number | null; start: number }
-          if (typeof frag.programDateTime === 'number' && Number.isFinite(frag.programDateTime)) {
-            playingFrag = { pdtMs: frag.programDateTime, startSec: frag.start }
+        hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
+          const frag = data.frag as { programDateTime?: number | null; rawProgramDateTime?: string | null; start: number }
+          const pdt =
+            typeof frag.programDateTime === 'number' && Number.isFinite(frag.programDateTime)
+              ? frag.programDateTime
+              : typeof frag.rawProgramDateTime === 'string' && Number.isFinite(Date.parse(frag.rawProgramDateTime))
+                ? Date.parse(frag.rawProgramDateTime)
+                : null
+          if (pdt !== null) {
+            frags.push({ startSec: frag.start, pdtMs: pdt })
+            if (frags.length > 24) frags.shift() // the live window is 15; a little history is plenty
           }
         })
         hls.on(Hls.Events.ERROR, (_event, data) => {
           if (data.fatal) {
             // The audio died; the picture keeps going on wall time and says so. Not fatal to the
-            // engine — a silent picture beats a dead channel.
-            playingFrag = null
+            // engine — a silent picture beats a dead channel. The buffered fragments' stamps stay
+            // valid until the element runs past them.
             hls?.destroy()
             hls = null
             setNotice('the audio stream failed — the picture continues without it')
@@ -135,11 +144,7 @@ export function WebCodecsPlayer({
       engine = runWebCodecsVideo({
         source: url,
         canvas,
-        masterWallMs: () => {
-          if (!playingFrag) return null
-          // The audio element's playhead inside the stamped fragment, in wall-clock ms.
-          return playingFrag.pdtMs + (audioVideo.currentTime - playingFrag.startSec) * 1000
-        },
+        masterWallMs: () => playingWallMsFromFrags(frags, audioVideo.currentTime),
         onStats: setStats,
         onNotice: (message) => {
           setNotice(message)

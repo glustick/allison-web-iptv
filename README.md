@@ -6,6 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.66.4 — the clock listens to buffering, not playback)
+
+The A/V clock is built from the audio session's **buffered** fragments and their wall-clock stamps —
+verified in a real browser that the stamps arrive on buffering, and that the play-only event the old
+clock depended on never fires before playback starts. The clock now engages the moment the first
+fragment lands; a paused sound track holds the picture, as it should. 741 tests, typecheck, lint and
+the client build clean.
+
 ## Current state (v0.66.3 — the paused carrier)
 
 The retest pinned the missing audio on a classic: the audio element's unmuted play() ran past
