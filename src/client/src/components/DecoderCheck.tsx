@@ -107,14 +107,17 @@ export function DecoderCheck() {
           }
           frame.close()
         },
-        error: (error) => setStatus(`decoder error: ${error.message}`)
+        error: (error) =>
+          setStatus(
+            `the decoder failed mid-run on ${config?.codec ?? 'the chosen configuration'} (${error.message}) — ` +
+              'a finding about this browser build, not the stream or the device'
+          )
       })
 
       const units = splitAccessUnits(extracted.data)
       const unitCount = units.length
       setStatus(`decoding ${unitCount} access units (${(extracted.data.length / 1_000_000).toFixed(2)} MB)…`)
       const started = performance.now()
-      decoder.configure(config)
       const Chunk = (
         globalThis as unknown as {
           EncodedVideoChunk: new (init: {
@@ -126,10 +129,30 @@ export function DecoderCheck() {
       ).EncodedVideoChunk
       // One chunk per frame, which is what a chunk *is* — feeding the whole elementary stream as one
       // produced zero frames on a machine that had been decoding these streams fine (2026-09-28).
-      units.forEach((unit, index) => {
-        decoder.decode(new Chunk({ type: index === 0 ? 'key' : 'delta', timestamp: index * 20_000, data: unit }))
-      })
-      await decoder.flush()
+      try {
+        decoder.configure(config)
+        units.forEach((unit, index) => {
+          decoder.decode(new Chunk({ type: index === 0 ? 'key' : 'delta', timestamp: index * 20_000, data: unit }))
+        })
+        await decoder.flush()
+      } catch (error) {
+        // Measured on Safari 2026-10-01: isConfigSupported says yes, then the decoder answers with a
+        // bare "Decoder failure" — WebKit's generic refusal, most likely its VideoDecoder not taking
+        // Annex-B HEVC with in-band parameter sets (hev1, no description). That is a fact about the
+        // browser, not the stream or the device, and the sentence owes the operator that much.
+        try {
+          decoder.close()
+        } catch {
+          // Already dead.
+        }
+        setStatus(
+          `this browser's decoder refused ${config.codec} after claiming support for it ` +
+            `(${error instanceof Error ? error.message : String(error)}) — a finding about this browser build, ` +
+            'not the stream or the device. The client-side path is built for Chrome, Brave and Edge; ' +
+            'Safari plays these channels natively and does not need it.'
+        )
+        return
+      }
       const seconds = (performance.now() - started) / 1000
       decoder.close()
 
@@ -172,8 +195,9 @@ export function DecoderCheck() {
         Runs the pipeline a client-side player would use: fetch a live segment, demux it to Annex-B
         HEVC, and decode it with WebCodecs. Frames per second is the number that matters — hundreds
         means the GPU is doing the work and a client-side player is worth building; single digits would
-        mean a slideshow. The whole stream is submitted as one chunk, so this measures throughput, not
-        frame pacing.
+        mean a slideshow. One chunk per frame, so this measures real decoding. Built for Chrome, Brave
+        and Edge — Safari plays these channels natively and does not need this path; a refusal here is
+        a finding about Safari&rsquo;s WebCodecs, not about your streams.
       </p>
       <div className="epg-section-actions">
         <input

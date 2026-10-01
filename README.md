@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.63.1 — a Safari refusal gets its sentence)
+
+The decode check, run in Safari, answered with a bare "Decoder failure" — WebKit's decoder refusing
+an HEVC configuration it had just claimed to support (most likely: it does not take Annex-B HEVC
+with in-band parameter sets). The check now says which codec, that this is a finding about the
+browser rather than the stream or the device, and the truth that Safari never needed the
+client-side path — it plays these channels natively. The path runs on Chrome, Brave and Edge. 730
+tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.63.0 — the whole sport catalogue, persisted for seven days)
 
 Every sport the key can reach is now asked for, not only football: basketball (NBA inside it),

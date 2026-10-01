@@ -15,6 +15,19 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.63.1 — a Safari refusal gets its sentence.** The operator ran the decode check in Safari
+(2026-10-01) and got a bare `check failed: Decoder failure` — the check had walked the whole chain
+(fetch, demux, codec negotiation) and then WebKit's decoder answered with its generic refusal, most
+likely its VideoDecoder not taking Annex-B HEVC with in-band parameter sets (`hev1`, no description).
+Two things shipped. **The sentence**: a decoder that refuses a configuration it just claimed to
+support now says which codec, what that means (a finding about the browser build, not the stream or
+the device), and where this path actually runs — Chrome, Brave and Edge; **Safari plays these
+channels natively and never needed the client-side path**, so the failure blocks nothing. And a
+stale sentence in the check's own introduction ("the whole stream is submitted as one chunk") —
+wrong since v0.61.6 split the stream into access units — finally says what the check does. If Safari
+client-decode ever matters, it wants an hvcC-style description rather than Annex-B; recorded here so
+the idea is not re-derived. 730 tests, typecheck, lint and the client build clean.
+
 **v0.63.0 — the whole sport catalogue, and answers that survive the restart that asked for them.**
 The operator's report (2026-09-30): *"checking the API football, i can only see the football api
 calls … AFL baseball basketball formula 1 NBA NFL are all missing api calls"* — and, right: the

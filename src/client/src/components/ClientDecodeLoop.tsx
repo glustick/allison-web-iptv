@@ -345,7 +345,12 @@ export function ClientDecodeLoop(): JSX.Element {
                 failure = 'the platform refused every HEVC configuration this stream offered'
                 break
               }
-              decoderInstance.configure(chosen.config)
+              try {
+                decoderInstance.configure(chosen.config)
+              } catch (error) {
+                failure = `the decoder refused ${chosen.codec} after claiming support for it (${error instanceof Error ? error.message : String(error)}) — a finding about this browser build, not the stream`
+                break
+              }
               codecUsed = chosen.codec
               setStatus(null)
               firstSegment = false
@@ -374,7 +379,8 @@ export function ClientDecodeLoop(): JSX.Element {
         Runs the engine a client-side player would use, continuously: poll the playlist, fetch new
         segments while their signatures are young, decode with WebCodecs, and present on the canvas
         paced by the frames&rsquo; own timestamps. Video only for now — audio stays on the server&rsquo;s
-        path until this engine joins the player. The numbers that matter: presented fps (should sit
+        path until this engine joins the player. Runs on the WebCodecs path — Chrome, Brave or Edge;
+        Safari plays live HEVC natively and does not need this engine. The numbers that matter: presented fps (should sit
         near the stream&rsquo;s own rate), latency behind the edge, and dropped frames (a few under load;
         climbing means the decode cannot keep up).
       </p>
