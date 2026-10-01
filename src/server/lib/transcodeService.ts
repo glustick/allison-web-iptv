@@ -570,7 +570,16 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
      * the provider's playlist↔raw-TS flip, or could not see the real content at all. The retry
      * re-runs the exact same session without those arguments.
      */
-    hlsInputArgsDisabled = false
+    hlsInputArgsDisabled = false,
+    /**
+     * The client-side decode engine's audio half. Video is decoded in the browser (WebCodecs,
+     * the device's own GPU) straight off the provider's segments, but WebCodecs has no Dolby
+     * decoder — this provider's audio is E-AC-3/AC-3 — so the *audio* alone rides a session:
+     * AAC at the copy tier's own settings, video simply not mapped. The cost is an audio-rate
+     * re-encode (trivial next to the 4K decode the client is doing for itself) and one HLS
+     * output the browser plays as a plain audio element — which is also the A/V clock.
+     */
+    audioOnly = false
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }> {
     const ffmpegPath = await deps.resolveFfmpegPath()
     if (!ffmpegPath) {
@@ -697,8 +706,9 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       // switching therefore means stopping this session and starting a new one with a different
       // index (see the caller in useTranscodeFallback.ts's switchSubtitleTrack), not selecting
       // among multiple simultaneously-available renditions.
-      '-map',
-      '0:v:0',
+      // The audio-only tier maps audio alone — video unmapped is video untouched, which is the
+      // point: the client is decoding the provider's own video bits itself.
+      ...(audioOnly ? [] : ['-map', '0:v:0']),
       '-map',
       // Defaults to the first audio stream, same as every call site's previous hardcoded
       // behavior — only a caller that's already probed the source (see probeTracks/
@@ -707,9 +717,12 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       `0:a:${audioStreamIndex}`,
       // subtitleStreamIndex < 0 means "no subtitle at all" — used for the automatic retry below
       // when the requested index turns out to be a bitmap codec ffmpeg can't convert.
-      ...(isVod && subtitleStreamIndex >= 0 ? ['-map', `0:s:${subtitleStreamIndex}?`] : []),
-      '-c:v',
-      videoTranscode ? 'libx264' : 'copy',
+      ...(!audioOnly && isVod && subtitleStreamIndex >= 0 ? ['-map', `0:s:${subtitleStreamIndex}?`] : []),
+      ...(audioOnly
+        ? []
+        : [
+            '-c:v',
+            videoTranscode ? 'libx264' : 'copy',
       // The video re-encode tier (v0.45.0). `copy` is right wherever the browser can genuinely
       // decode the source's video, but the Sky/EPL channels are HEVC (UHD: Main 10 HDR, FHD: Main)
       // and some Chromium builds answer isTypeSupported(hvc1) → true and *then* fail the actual
@@ -755,7 +768,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
             '-sc_threshold',
             '0'
           ]
-        : []),
+        : [])]),
       '-c:a',
       'aac',
       '-b:a',
@@ -1006,7 +1019,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
           startSettled = true
           await rm(dir, { recursive: true, force: true }).catch(() => {})
           return startTranscode(
-            sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex, videoTranscode, inputHeaders, true
+            sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex, videoTranscode, inputHeaders, true, audioOnly
           )
         }
         if (subtitleStreamIndex >= 0 && SUBTITLE_CODEC_INCOMPATIBLE_PATTERN.test(session.stderrTail.join('\n'))) {
@@ -1015,7 +1028,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
           // false (that is why this branch fired), so it is this flow's job to remove it.
           startSettled = true
           await rm(dir, { recursive: true, force: true }).catch(() => {})
-          return startTranscode(sourceUrl, isVod, sessionId, -1, audioStreamIndex, videoTranscode)
+          return startTranscode(sourceUrl, isVod, sessionId, -1, audioStreamIndex, videoTranscode, undefined, false, audioOnly)
         }
         // The exit handler deliberately left the directory in place (the start flow owns it
         // until settled) — a failed start has no use for it, so clean it here.

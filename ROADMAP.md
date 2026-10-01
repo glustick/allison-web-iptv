@@ -15,6 +15,21 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.65.0 — the audio half of the client-side player: a session that carries sound alone.** The
+loop's validation run came in clean first (2026-10-01: presented 37 fps against a 50 fps stream,
+**queue empty, 0.1 s behind the live edge** — presentation keeping pace where it previously starved
+at 13%), so the player integration began. This is its server half, and the pattern is the playlists
+feature's: **built, tested, deliberately unwired** until the engine joins LivePlayer
+(`/api/transcode/start` accepts `audioOnly`, and no client sends it yet). The design it serves:
+WebCodecs decodes the provider's own 4K video bits in the browser, but WebCodecs has no Dolby
+decoder and this provider's audio is E-AC-3/AC-3 — so audio alone rides an ffmpeg session
+(`-c:a aac`, video simply unmapped, every live-input guarantee intact: `-re` pacing, the
+authenticated relay, the window sizing). An audio-rate re-encode is trivial next to the decode the
+client is doing for itself, and the session's HLS output doubles as the A/V clock the canvas will
+sync against — audio arriving *with* the integration, never before it. Pinned by an argv test in
+the tier's own style: no `0:v:0`, no `-c:v`, `0:a:0` mapped, AAC, `-re` still present. 735 tests,
+typecheck, lint and the client build clean.
+
 **v0.64.0 — every sport was asking football's host.** The operator's report (2026-10-01): *"looking
 at the api requests there are only football requests, no AFL Baseball Basketball Formula 1 Handball
 Volleyball rugby nfl nba mma and hockey are all 0."* The evidence trail: the persisted store held

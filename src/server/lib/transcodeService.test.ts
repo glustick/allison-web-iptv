@@ -1425,6 +1425,33 @@ describe('video re-encode tier', () => {
     expect(args).not.toContain('-bufsize')
   })
 
+  it('maps audio alone in the audio-only tier — the client decodes the video itself', async () => {
+    // The client-side engine's audio session (WebCodecs has no Dolby decoder): video unmapped,
+    // no video codec, audio re-encoded to AAC exactly as the copy tier always has.
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-audio-args-'))
+    mkdirSync(join(fixtureDir, 'transcode'), { recursive: true })
+    const argsFile = join(fixtureDir, 'args-audio-only.txt')
+    const service = track(makeService({ resolveFfmpegPath: async () => FAKE_FFMPEG, tmpDir: join(fixtureDir, 'transcode') }))
+    try {
+      await withEnv({ FAKE_FFMPEG_ARGS_FILE: argsFile }, () =>
+        withFakeFfmpegMode('dump_args', async () => {
+          await service.startTranscode('https://upstream.example/live/user/pass/1.m3u8', false, 's-audio', 0, 0, false, undefined, false, true)
+        })
+      )
+      const args = readFileSync(argsFile, 'utf8').split('\n').filter(Boolean)
+      expect(args).not.toContain('0:v:0')
+      expect(args).not.toContain('-c:v')
+      expect(args).toContain('0:a:0')
+      const ca = args.indexOf('-c:a')
+      expect(ca).toBeGreaterThanOrEqual(0)
+      expect(args[ca + 1]).toBe('aac')
+      // Live semantics stay: the input stays paced (-re) and the window stays live-sized.
+      expect(args).toContain('-re')
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  })
+
   it('honours a cap when one is asked for, alongside a bitrate ceiling', async () => {
     const args = await videoArgsFor(true, { maxHeight: 720, maxBitrateKbps: 6000, fps: 25 }, 'capped-720')
     const vf = args.indexOf('-vf')

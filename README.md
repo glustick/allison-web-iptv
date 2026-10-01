@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.65.0 — the audio half of the client-side player)
+
+The client-side engine's validation completed (the live loop presented 37 fps of a 50 fps 4K stream
+with an empty queue, 0.1 s behind the edge), so the player integration began with its server half:
+a transcode session that carries **audio alone** — AAC, video unmapped, live semantics intact —
+because WebCodecs has no Dolby decoder and the browser's video decode needs a sound track it can
+play. Built, tested, deliberately unwired until the engine joins the player. 735 tests, typecheck,
+lint and the client build clean.
+
 ## Current state (v0.64.0 — every sport was asking football's host)
 
 Only football ever reached its own product: since v0.61.5, every non-football request was addressed
