@@ -15,6 +15,15 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.66.5 — sound is attempted, not asked for.** The operator's question, and the right one:
+*"why do we need a button to press? shouldnt this be just activated."* It should — and Chrome
+agrees more often than v0.66.3 assumed: unmuted autoplay is allowed after a recent interaction or
+with media engagement on the site (both true for the person using this app daily). The carrier now
+attempts sound outright; the "Tap for sound" chip appears only on a genuine refusal
+(`NotAllowedError` — activation window closed, no engagement), where it is the honest minimum
+rather than the default. The clock never waited on any of this (v0.66.4). 741 tests, typecheck,
+lint and the client build clean.
+
 **v0.66.4 — the clock listens to buffering, not playback.** Still "no audio clock" on the ".48
 Chrome" retest (both Sky Sports Main Event UHD and Sky Sports F1 UHD) — and this time the chain was
 verified link by link until the broken one had nowhere to hide. Real ffmpeg produces a correct

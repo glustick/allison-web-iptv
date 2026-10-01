@@ -29,12 +29,11 @@ export function WebCodecsPlayer({
   const [stats, setStats] = useState<WebCodecsVideoStats | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  // The carrier starts muted — muted autoplay is always allowed, so the clock engages immediately —
-  // and unmutes on the first interaction. Unmuted play() is rejected because the engine mounts long
-  // after the channel click that earned the activation (the ladder takes seconds), and a paused
-  // element means no sound AND no clock: FRAG_CHANGED only fires for played fragments (the ".48
-  // Chrome" run's silent, unclocked picture, 2026-10-01).
-  const [muted, setMuted] = useState(true)
+  // Sound is attempted outright: Chrome allows unmuted autoplay after a recent interaction or with
+  // media engagement on the site — both true for the person using this app — so the normal case is
+  // sound with no button at all. The chip appears only when the refusal is real (activation window
+  // closed, no engagement), and the clock never waits on any of this (v0.66.4: buffered fragments).
+  const [muted, setMuted] = useState(false)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -134,9 +133,19 @@ export function WebCodecsPlayer({
         })
         hls.loadSource(sessionUrl)
         hls.attachMedia(audioVideo)
-        audioVideo.muted = true
-        void audioVideo.play().catch(() => {
-          // Retried on canplay and on the first interaction; the unmute chip says what to do.
+        audioVideo.muted = false
+        void audioVideo.play().catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === 'NotAllowedError') {
+            // A real refusal: sound waits for a gesture, the clock does not. Muted start (always
+            // allowed), the chip says what to do, and the first interaction unmutes.
+            audioVideo.muted = true
+            setMuted(true)
+            void audioVideo.play().catch(() => {
+              audioVideo.addEventListener('canplay', () => void audioVideo.play().catch(() => {}), { once: true })
+            })
+            return
+          }
+          // Anything else (an AbortError from a load racing the start, say): retry when playable.
           audioVideo.addEventListener('canplay', () => void audioVideo.play().catch(() => {}), { once: true })
         })
       }

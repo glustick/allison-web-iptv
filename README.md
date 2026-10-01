@@ -6,6 +6,12 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.66.5 — sound is attempted, not asked for)
+
+Sound starts with the stream: unmuted autoplay is attempted outright (allowed after a recent
+interaction or with media engagement — both true for daily use), and the "Tap for sound" chip
+appears only when Chrome genuinely refuses it. 741 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.66.4 — the clock listens to buffering, not playback)
 
 The A/V clock is built from the audio session's **buffered** fragments and their wall-clock stamps —
