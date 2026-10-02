@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.67.2 — attach to the session's output)
+
+The v0.67.0 route refactor re-introduced the oldest lesson in this file: after starting a
+conversion session, the player returned instead of attaching to the session's output — a black,
+errorless screen for every channel whose record says "needs converting" (nearly all of them).
+Fixed: the route decides what to start; once started, the player attaches. Verified end to end in
+a real browser against a live synthetic stream. 760 tests, typecheck, lint and the client build
+clean.
+
 ## Current state (v0.67.1 — the decode check eats the flip)
 
 The decode check handles the provider's HLS-or-TS flip now — a channel answering raw MPEG-TS is

@@ -156,34 +156,43 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
       mseCanDecodeAudio: (codec) => canDecodeAudioCodec(codec, mseProbe)
     })
     console.warn(`[player] route: ${route.route} — ${route.reason}`)
-    if (route.route === 'unplayable') {
-      setError(describeUnplayableVideo({
-        videoCodec: rememberedTracks(url)?.videoCodec ?? null,
-        engine: null,
-        nativeFailed: false,
-        verdict: loadVerdict()
-      }))
-      return
-    }
-    if (route.route === 'webcodecs') {
-      engineRef.current = 'webcodecs'
-      setWebCodecs(true)
-      return
-    }
-    if (route.route === 'remux' || route.route === 'video-transcode') {
-      // The session paths: start it (the hook records the plan when playback proves it), then the
-      // reload hands the player its output. The hook refuses a second conversion of the same run.
-      tryFallbackForSilentAudio(
-        url,
-        false,
-        () => setReloadTick((t) => t + 1),
-        (message) => setError(message),
-        route.route === 'video-transcode'
-      )
-      return
+    // A session that is already producing this channel's output changes everything: the route
+    // decided what to START, and it started — the player's job now is to attach to that output.
+    // Returning here regardless is what left a freshly started transcode unfetched and the screen
+    // black (the v0.28-era lesson, re-learned live in the v0.67.0 refactor's first deploy).
+    const hasSessionOutput = getSourceUrl(url) !== url
+    if (!hasSessionOutput) {
+      if (route.route === 'unplayable') {
+        setError(describeUnplayableVideo({
+          videoCodec: rememberedTracks(url)?.videoCodec ?? null,
+          engine: null,
+          nativeFailed: false,
+          verdict: loadVerdict()
+        }))
+        return
+      }
+      if (route.route === 'webcodecs') {
+        engineRef.current = 'webcodecs'
+        setWebCodecs(true)
+        return
+      }
+      if (route.route === 'remux' || route.route === 'video-transcode') {
+        // The session paths: start it (the hook records the plan when playback proves it), then
+        // the reload re-enters this effect with the session's output ready to attach.
+        tryFallbackForSilentAudio(
+          url,
+          false,
+          () => setReloadTick((t) => t + 1),
+          (message) => setError(message),
+          route.route === 'video-transcode'
+        )
+        return
+      }
+    } else if (route.route !== 'direct') {
+      console.warn('[player] a session is already producing this channel — attaching to its output')
     }
     if (engineRef.current === null || engineRef.current === 'webcodecs') {
-      engineRef.current = route.engine
+      engineRef.current = route.route === 'direct' ? route.engine : nativeHls ? 'native' : 'hls'
     }
     const sourceUrl = getSourceUrl(url)
     let hls: Hls | null = null
