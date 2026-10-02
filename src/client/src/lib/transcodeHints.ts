@@ -138,6 +138,11 @@ export function saveHints(hints: readonly TranscodeHint[]): void {
   writeCache([...hints])
 }
 
+/** Whether this channel is recorded as having played directly (the record table's other half). */
+export function streamPlaysDirectly(url: string): boolean {
+  return directPlays.has(url)
+}
+
 /** The calls a player needs: does this stream already need converting (and how deeply), and note it. */
 export function streamNeedsTranscode(url: string, now = Date.now()): boolean {
   return hasHint(readCache(now), url)

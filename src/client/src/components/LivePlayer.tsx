@@ -11,6 +11,8 @@ import {
 } from '../lib/transcodeHints'
 import { prefersNativePlayback } from '../lib/nativePlayback'
 import { loadVerdict, verdictIsUsable } from '../lib/decodeGate'
+import { choosePlaybackRoute } from '../lib/playbackRoute'
+import { rememberedTracks, rememberStreamFacts, streamPlaysDirectly } from '../lib/transcodeHints'
 import { describeUnplayableVideo } from '../lib/playbackDiagnosis'
 import { sniffStreamKind } from '../lib/streamKind'
 import { probeStreamTracks } from '../lib/audioTrackProbe'
@@ -130,32 +132,58 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     if (!video) return
     setError(null)
     beginRun()
-    // The engine has to be known before the hint below is read, since one of those hints is a
-    // statement about MSE rather than about the stream.
-    if (engineRef.current === null) {
-      engineRef.current = prefersNativePlayback((type) => video.canPlayType(type)) ? 'native' : 'hls'
+    // The playback decision, made once and up front (the operator's design, 2026-10-02): reference
+    // the stream (probed codecs, mirrored from the server's record), then the record table (what
+    // last *worked* for this channel), then this device (its saved decode verdict and its
+    // capabilities) — and select the route before anything is attached. The ladder below remains
+    // as the safety net; the first attempt is no longer a guess.
+    const nativeHls = prefersNativePlayback((type) => video.canPlayType(type))
+    const mseProbe = (mimeType: string): boolean =>
+      typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mimeType)
+    const route = choosePlaybackRoute({
+      url,
+      facts: rememberedTracks(url),
+      plan: {
+        needsConvert: streamNeedsTranscode(url),
+        needsVideo: streamNeedsVideoTranscode(url),
+        playsDirect: streamPlaysDirectly(url)
+      },
+      verdict: loadVerdict(),
+      nativeHls,
+      mseCanDecodeVideo: canDecodeVideoCodec(rememberedTracks(url)?.videoCodec ?? null, mseProbe),
+      webCodecsAvailable:
+        typeof VideoDecoder !== 'undefined' && typeof EncodedVideoChunk !== 'undefined',
+      mseCanDecodeAudio: (codec) => canDecodeAudioCodec(codec, mseProbe)
+    })
+    console.warn(`[player] route: ${route.route} — ${route.reason}`)
+    if (route.route === 'unplayable') {
+      setError(describeUnplayableVideo({
+        videoCodec: rememberedTracks(url)?.videoCodec ?? null,
+        engine: null,
+        nativeFailed: false,
+        verdict: loadVerdict()
+      }))
+      return
     }
-    // Known to need converting (lib/transcodeHints.ts): skip the direct attempt rather than playing
-    // nothing first — but only when there is not already a transcoded stream to play. Once the
-    // fallback has produced a URL, this has to fall through and hand *that* to the player; returning
-    // here regardless is what left a freshly started transcode unfetched and the screen black.
-    if (streamNeedsTranscode(url) && getSourceUrl(url) === url) {
-      // A channel that only played once its video was re-encoded goes straight to that tier on the
-      // next play, rather than paying for a copy session this browser will abandon. Only under
-      // hls.js, though: that memory was learned through MSE, and the native pipeline answers a
-      // different question — forcing a re-encode because hls.js once struggled would downscale a
-      // channel the browser can play untouched.
+    if (route.route === 'webcodecs') {
+      engineRef.current = 'webcodecs'
+      setWebCodecs(true)
+      return
+    }
+    if (route.route === 'remux' || route.route === 'video-transcode') {
+      // The session paths: start it (the hook records the plan when playback proves it), then the
+      // reload hands the player its output. The hook refuses a second conversion of the same run.
       tryFallbackForSilentAudio(
         url,
         false,
         () => setReloadTick((t) => t + 1),
         (message) => setError(message),
-        // A remembered "this needed the video re-encode" is deliberately ignored (v0.48.2): live TV
-        // transcodes video or it does not play, and this app chose the second. The container remux
-        // (needsStreamCopyRemux, below) is a different thing and still applies — it changes no pixels.
-        false
+        route.route === 'video-transcode'
       )
       return
+    }
+    if (engineRef.current === null || engineRef.current === 'webcodecs') {
+      engineRef.current = route.engine
     }
     const sourceUrl = getSourceUrl(url)
     let hls: Hls | null = null
@@ -657,6 +685,10 @@ let stallCount = 0
       const { audioTracks, videoCodec } = await probeStreamTracks(url)
       if (cancelled) return
       setProbeInfo({ videoCodec, audioTrackCount: audioTracks.length })
+      // The stream reference the route consults — recorded here and on the server, so the next
+      // play of this channel decides from facts instead of probing again (the operator's design:
+      // reference the stream, then the record, then decide).
+      rememberStreamFacts(url, { videoCodec, audioCodecs: audioTracks.map((track) => track.codec) })
       // this effect is a sibling of the hls one, so it cannot see that effect's local probe
       const decodeProbe = (mimeType: string): boolean =>
         typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mimeType)
@@ -697,7 +729,7 @@ let stallCount = 0
         tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
         return
       }
-      if (engineRef.current === 'native') return
+      if (engineRef.current === 'native' || engineRef.current === 'webcodecs') return
       // Video next, and before playback rather than after it fails: a browser without an HEVC decoder
       // will never play one. Asking up front turns "fails, recovers, converts 4K" into one sentence —
       // and stops the app reaching for the most expensive response it has. See lib/videoCapability.ts

@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.67.0 — the playback decision, made once and up front)
+
+The player now *decides* instead of trying: it references the stream (probed codecs), then the
+record table (the household's last known working config), then the device (its saved decode
+verdict and capabilities) — and selects one route before anything is attached: direct, the
+client-side engine, a remux session, a video re-encode, or an honest "cannot play". The recovery
+ladder remains as the safety net behind an informed first attempt. 760 tests, typecheck, lint and
+the client build clean.
+
 ## Current state (v0.66.7 — the fixtures pane leads with the popular competitions)
 
 The Sports tab's fixtures pane orders competitions by popularity now — Champions League, Premier
