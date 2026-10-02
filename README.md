@@ -6,6 +6,13 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.67.1 — the decode check eats the flip)
+
+The decode check handles the provider's HLS-or-TS flip now — a channel answering raw MPEG-TS is
+measured directly instead of failing — and a playlist with no segments reports its actual shape
+(byte count, first characters) instead of a dead end. 760 tests, typecheck, lint and the client
+build clean.
+
 ## Current state (v0.67.0 — the playback decision, made once and up front)
 
 The player now *decides* instead of trying: it references the stream (probed codecs), then the

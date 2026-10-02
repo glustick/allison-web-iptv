@@ -52,18 +52,44 @@ export function DecoderCheck() {
     }
 
     try {
-      const playlist = await (await fetch(source)).text()
-      const segmentPath = playlist
-        .split('\n')
-        .map((line) => line.trim())
-        .find((line) => line.startsWith('/__fetch/') || line.startsWith('http'))
-      if (!segmentPath) {
-        setStatus('that playlist listed no segment — is the channel up?')
+      const first = await fetch(source)
+      if (!first.ok) {
+        setStatus(`that channel answered HTTP ${first.status} — the check cannot measure a channel the server cannot reach`)
         return
       }
-
-      setStatus('fetching one segment…')
-      const segment = new Uint8Array(await (await fetch(segmentPath)).arrayBuffer())
+      const buffer = new Uint8Array(await first.arrayBuffer())
+      // The provider's documented flip: a channel's .m3u8 URL sometimes answers raw MPEG-TS. That is
+      // not a failure — the bytes are exactly what the demuxer eats, so the check measures them
+      // directly instead of demanding a playlist first.
+      const rawTs = buffer.length > 188 && buffer[0] === 0x47 && buffer[188] === 0x47
+      let segment: Uint8Array
+      if (rawTs) {
+        setStatus('that channel answered raw MPEG-TS (the provider\'s HLS-or-TS flip) — measuring the bytes directly…')
+        segment = buffer
+      } else {
+        const playlist = new TextDecoder().decode(buffer)
+        const segmentPath = playlist
+          .split('\n')
+          .map((line) => line.trim())
+          .find((line) => line.startsWith('/__fetch/') || line.startsWith('http'))
+        if (!segmentPath) {
+          // Self-diagnosing: whatever this body is, show its shape — an error page and a variant
+          // master playlist read very differently, and the difference was previously invisible.
+          const head = playlist.slice(0, 160).replace(/\s+/g, ' ').trim()
+          setStatus(
+            `that playlist listed no segment — the channel answered ${buffer.length} bytes beginning: "${head}" — ` +
+              'the channel may be down, or serving something other than a media playlist'
+          )
+          return
+        }
+        setStatus('fetching one segment…')
+        const seg = await fetch(segmentPath)
+        if (!seg.ok) {
+          setStatus(`the segment answered HTTP ${seg.status} — its signature may have expired; re-run the check`)
+          return
+        }
+        segment = new Uint8Array(await seg.arrayBuffer())
+      }
 
       setStatus(`demuxing ${(segment.length / 1_000_000).toFixed(1)} MB of MPEG-TS…`)
       const extracted = extractHevcAnnexB(segment)
