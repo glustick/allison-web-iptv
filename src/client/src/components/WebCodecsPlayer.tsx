@@ -29,6 +29,10 @@ export function WebCodecsPlayer({
   const [stats, setStats] = useState<WebCodecsVideoStats | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  // Audio-side notices win over the engine's generic "no audio clock" line: the engine speaks
+  // once at startup, while the audio failure arrives later — the specific cause must not be
+  // clobbered by the generic symptom (the 2026-10-02 hunt's lesson).
+  const [audioNotice, setAudioNotice] = useState<string | null>(null)
   // Sound is attempted outright: Chrome allows unmuted autoplay after a recent interaction or with
   // media engagement on the site — both true for the person using this app — so the normal case is
   // sound with no button at all. The chip appears only when the refusal is real (activation window
@@ -79,6 +83,36 @@ export function WebCodecsPlayer({
     // has been allowed to start, and the clock must not wait for it.
     const frags: StampedFragment[] = []
 
+    // Sound persistence (the 2026-10-02 no-audio finding): play() can be refused with an
+    // AbortError when it races the load ('interrupted by a new load request') — not just the
+    // NotAllowedError the chip handles — and a paused element means no sound AND a frozen
+    // playhead, which starves the A/V clock too. Attempt unmuted once (engagement usually allows
+    // it), then muted (always allowed), then keep nudging while paused until it sticks. Every
+    // refusal's name lands in the console and the notice, so the next report is conclusive.
+    function nudgePlay(stage: string): void {
+      const el = audioVideoRef.current
+      if (!el) return
+      void el.play().then(() => {
+        setAudioNotice(null)
+        if (el.muted) setMuted(true) // playing silent: the chip offers sound
+      }).catch((err: unknown) => {
+        const name = err instanceof DOMException ? err.name : String(err)
+        console.warn(`[player] audio play() refused at ${stage}: ${name}`)
+        setAudioNotice(`sound has not started — play() was refused (${name}); retrying`)
+        if (err instanceof DOMException && err.name === 'NotAllowedError' && !el.muted) {
+          el.muted = true
+          setMuted(true)
+          nudgePlay('muted')
+        }
+        // AbortError (a load race) and friends: the periodic nudge below retries.
+      })
+    }
+    const nudgeTimer = setInterval(() => {
+      if (cancelled) return
+      const el = audioVideoRef.current
+      if (el && el.paused) nudgePlay('nudge')
+    }, 2000)
+
     void (async () => {
       // The audio session first: it takes a moment to start, and the engine runs silent until it
       // is ready (then re-anchors to the clock, one notice, no lost picture).
@@ -128,26 +162,13 @@ export function WebCodecsPlayer({
             // valid until the element runs past them.
             hls?.destroy()
             hls = null
-            setNotice('the audio stream failed — the picture continues without it')
+            setAudioNotice('the audio stream failed — the picture continues without it')
           }
         })
         hls.loadSource(sessionUrl)
         hls.attachMedia(audioVideo)
         audioVideo.muted = false
-        void audioVideo.play().catch((err: unknown) => {
-          if (err instanceof DOMException && err.name === 'NotAllowedError') {
-            // A real refusal: sound waits for a gesture, the clock does not. Muted start (always
-            // allowed), the chip says what to do, and the first interaction unmutes.
-            audioVideo.muted = true
-            setMuted(true)
-            void audioVideo.play().catch(() => {
-              audioVideo.addEventListener('canplay', () => void audioVideo.play().catch(() => {}), { once: true })
-            })
-            return
-          }
-          // Anything else (an AbortError from a load racing the start, say): retry when playable.
-          audioVideo.addEventListener('canplay', () => void audioVideo.play().catch(() => {}), { once: true })
-        })
+        nudgePlay('initial')
       }
 
       engine = runWebCodecsVideo({
@@ -165,6 +186,7 @@ export function WebCodecsPlayer({
 
     return () => {
       cancelled = true
+      clearInterval(nudgeTimer)
       document.removeEventListener('pointerdown', unmute)
       document.removeEventListener('keydown', unmute)
       audioVideo.removeEventListener('fullscreenchange', onFullscreenChange)
@@ -207,9 +229,15 @@ export function WebCodecsPlayer({
         ref={canvasRef}
         style={{
           position: 'absolute',
-          inset: 0,
+          // The bottom strip stays uncovered so the audio carrier's own controls (play, volume)
+          // are VISIBLE — a canvas painted black over them left a paused stream with invisible
+          // controls and no way to start the sound by hand (found 2026-10-02).
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 44,
           width: '100%',
-          height: '100%',
+          height: 'calc(100% - 44px)',
           objectFit: 'contain',
           pointerEvents: 'none',
           background: '#000'
@@ -229,9 +257,9 @@ export function WebCodecsPlayer({
           🔊 Tap for sound
         </button>
       )}
-      {notice && (
+      {(audioNotice ?? notice) && (
         <div className="player-error" role="status" style={{ position: 'absolute', top: 8, left: 8 }}>
-          <span>{notice}</span>
+          <span>{audioNotice ?? notice}</span>
         </div>
       )}
       {error && (

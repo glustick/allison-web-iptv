@@ -6,6 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.69.0 — sound that refuses to stay refused)
+
+The audio element is nudged every two seconds while paused — play() refused with a load-race
+AbortError was never retried, and a paused element is both no sound and a frozen playhead (which
+starves the A/V clock): one refusal, both symptoms. Refusals are named in the console and a notice
+that can no longer be clobbered by the generic no-clock line, and the canvas no longer paints black
+over the play/volume controls. 762 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.68.1 — the relay's own hop stops pooling)
 
 A request arriving on a stale pooled keep-alive socket between the relay and the internal proxy
