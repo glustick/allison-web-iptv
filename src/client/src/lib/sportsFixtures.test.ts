@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   channelsMentioningTeams,
+  compareCompetitionsByPopularity,
+  competitionPopularityRank,
   fixtureMatchKey,
   indexFixturesByMatch,
   isPlanDateLimit,
@@ -180,5 +182,35 @@ describe('channelsMentioningTeams', () => {
     const streams = [channel('Manchester United TV', 1), channel('Hull City Channel', 2)]
     // "United" and "City" are stopwords; "Manchester"/"Hull" are not the teams asked about…
     expect(channelsMentioningTeams(streams, 'Liverpool', 'Everton')).toHaveLength(0)
+  })
+})
+
+describe('compareCompetitionsByPopularity', () => {
+  it('leads with the household competitions in the table order, whatever the feed names them', () => {
+    const leagues = ['Allsvenskan', 'Premier League', 'NBA', 'La Liga', 'UEFA Champions League', 'AFL', 'Formula 1', 'Bundesliga']
+    const sorted = [...leagues].sort(compareCompetitionsByPopularity)
+    expect(sorted).toEqual([
+      'UEFA Champions League',
+      'Premier League',
+      'La Liga',
+      'Bundesliga',
+      'NBA',
+      'AFL',
+      'Formula 1',
+      'Allsvenskan'
+    ])
+  })
+
+  it('keeps the unmatched competitions alphabetical after every listed one', () => {
+    const sorted = ['Vodafone Premier League', 'Zambia Super League', 'Allsvenskan', 'Championship'].sort(compareCompetitionsByPopularity)
+    // 'Vodafone Premier League' contains 'premier league' → the Premier League tier (the substring
+    // matching working as designed); 'Zambia Super League' contains 'super league'; Allsvenskan is
+    // unmatched and lands last, alphabetically after the matched tiers.
+    expect(sorted).toEqual(['Vodafone Premier League', 'Championship', 'Zambia Super League', 'Allsvenskan'])
+  })
+
+  it('matches substrings case-insensitively, so the feed\'s own casing never matters', () => {
+    expect(competitionPopularityRank('english premier league')).toBeLessThan(competitionPopularityRank('Allsvenskan'))
+    expect(competitionPopularityRank('nba summer league')).toBeLessThan(100)
   })
 })

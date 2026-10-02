@@ -6,6 +6,13 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.66.7 — the fixtures pane leads with the popular competitions)
+
+The Sports tab's fixtures pane orders competitions by popularity now — Champions League, Premier
+League, La Liga, Serie A, Bundesliga, the american and australian majors, Formula 1 first — with
+everything else after, alphabetical within tiers. 747 tests, typecheck, lint and the client build
+clean.
+
 ## Current state (v0.66.6 — the relay forwarded hop-by-hop headers)
 
 The missing audio clock's true root cause: the public→internal relay forwarded the client's

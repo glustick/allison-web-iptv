@@ -127,6 +127,65 @@ export async function fetchFixtures(dateIso: string): Promise<FixturesResponse> 
 }
 
 /**
+ * The competitions the fixtures pane leads with, in the order a sports fan expects to see them —
+ * the operator's ask (2026-10-02): "make sure that the most popular leagues are listed first, now
+ * they are done via country." Alphabetical ordering scattered the Premier League among every
+ * country's competitions; this table ranks the household names, matched as substrings so the feed's
+ * own league names ("Premier League", "NBA", "Formula 1") land on their tier wherever they appear.
+ * Everything unmatched shares one tier after these, alphabetical within each tier so the rest of
+ * the list stays stable and findable.
+ */
+const POPULAR_COMPETITIONS = [
+  'champions league',
+  'premier league',
+  'la liga',
+  'serie a',
+  'bundesliga',
+  'ligue 1',
+  'nba',
+  'nfl',
+  'mlb',
+  'nhl',
+  'afl',
+  'formula 1',
+  'mls',
+  'championship',
+  'eredivisie',
+  'primeira liga',
+  'liga mx',
+  'brasileir',
+  'saudi pro league',
+  'super league',
+  'europa league',
+  'conference league',
+  'world cup',
+  'euros',
+  'copa america',
+  'ncaa'
+]
+
+/** Lower rank = more popular; unmatched competitions rank after every listed one. */
+export function competitionPopularityRank(leagueName: string): number {
+  const name = leagueName.toLowerCase()
+  for (let i = 0; i < POPULAR_COMPETITIONS.length; i++) {
+    if (name.includes(POPULAR_COMPETITIONS[i])) return i
+  }
+  return POPULAR_COMPETITIONS.length
+}
+
+/**
+ * The fixtures pane's competition ordering: popular tiers first (in the table's order), then
+ * everything else, alphabetical within each tier — stable between days, and a competition whose
+ * feed name varies never jumps tiers because the matching is on substrings.
+ */
+export function compareCompetitionsByPopularity(a: string, b: string): number {
+  const rankA = competitionPopularityRank(a)
+  const rankB = competitionPopularityRank(b)
+  if (rankA !== rankB) return rankA - rankB
+  return a.localeCompare(b)
+}
+
+/**
  * The key a fixture and a provider game share when they are the same match: both sides normalized
  * through the provider parser's own team rules, then sorted — so "Newcastle United vs Sunderland"
  * and "Sunderland vs Newcastle" agree, and club suffixes ("Hull City AFC" / "Hull City") do too.

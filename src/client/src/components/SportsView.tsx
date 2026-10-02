@@ -21,7 +21,8 @@ import {
   fetchSportsConfig,
   isPlanDateLimit,
   matchFixturesToGames,
-  type ApiFootballFixture
+  type ApiFootballFixture,
+  compareCompetitionsByPopularity
 } from '../lib/sportsFixtures'
 import { fetchSportsCatalogue } from '../lib/sportsCatalogue'
 import { parseCollapsedGroups, serializeCollapsedGroups, toggleCollapsedGroup } from '../lib/sportsGroups'
@@ -464,7 +465,8 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
         return (a.kickoffMs ?? Number.POSITIVE_INFINITY) - (b.kickoffMs ?? Number.POSITIVE_INFINITY)
       })
     }
-    return groups.sort((a, b) => a.league.localeCompare(b.league))
+    // Popular competitions lead (see compareCompetitionsByPopularity); the rest follow alphabetically.
+    return groups.sort((a, b) => compareCompetitionsByPopularity(a.league, b.league))
   }, [sportFixturesForDay])
 
   const selectedGameKey = selection?.kind === 'game' ? selection.key : null
