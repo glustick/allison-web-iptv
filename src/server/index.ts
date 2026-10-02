@@ -328,6 +328,12 @@ const channelPlans = createChannelPlansStore({ dataDir: DATA_DIR })
 // One-time migration: guide sources and the api-football key used to live on each account. If the
 // system-wide settings have never been written, adopt whatever an account already had (an admin's
 // first) so nobody has to re-enter what they had already configured.
+// The api-football key is a SYSTEM setting like the guide sources: one key for the household, set by
+// an admin, never returned to anyone — and encrypted at rest, because it is a credential. Declared
+// HERE, above the boot-time migration that reads it: the migration is called from the boot sequence
+// while this const used to initialize 380 lines later, and the migration's read hit the temporal
+// dead zone — "could not migrate account settings" on every boot, silently skipping the adoption.
+const SPORTS_KEY_SETTING = 'sports_api_key'
 seedSystemSettingsFromAccounts()
 // The nightly warm: guides and the sports catalogue are loaded once a day, at 01:00.
 scheduleNightlyWarm()
@@ -705,10 +711,6 @@ function orderedAccountsWithCredentials(): Array<{ username: string; credentials
 function primaryAccountCredentials(): SessionCredentials | null {
   return orderedAccountsWithCredentials()[0]?.credentials ?? null
 }
-
-// The api-football key is a SYSTEM setting like the guide sources: one key for the household, set by
-// an admin, never returned to anyone — and encrypted at rest, because it is a credential.
-const SPORTS_KEY_SETTING = 'sports_api_key'
 
 function readSportsKey(): string | null {
   const stored = systemSettings.read<{ keyEnc?: unknown }>(SPORTS_KEY_SETTING)

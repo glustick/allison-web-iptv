@@ -6,6 +6,12 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.67.3 — the settings migration un-dead-zoned)
+
+The boot-time settings migration no longer crashes against a const declared 380 lines below its
+call — the one-time adoption of legacy account settings actually runs now. 760 tests, typecheck,
+lint and the client build clean.
+
 ## Current state (v0.67.2 — attach to the session's output)
 
 The v0.67.0 route refactor re-introduced the oldest lesson in this file: after starting a
