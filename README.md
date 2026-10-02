@@ -6,6 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.68.1 — the relay's own hop stops pooling)
+
+A request arriving on a stale pooled keep-alive socket between the relay and the internal proxy
+died with ECONNRESET — which is what killed the audio session's start 27 seconds after the previous
+relayed request (the ladder's handover to the engine creates exactly such gaps). The relay's own
+hop speaks Connection: close now: one request, one connection, no pool, no race. 762 tests,
+typecheck, lint and the client build clean.
+
 ## Current state (v0.68.0 — the signature-expiry rescue, alive at last)
 
 The refused-segment rescue (refresh the playlist, remap by absolute sequence, retry once) has been

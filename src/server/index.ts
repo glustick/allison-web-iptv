@@ -2337,6 +2337,12 @@ function relayToProxy(req: IncomingMessage, res: ServerResponse): void {
   // failure (the audio session's ffmpeg poisoning the relay's socket with a forwarded
   // `Connection: close`) and the rule's full account.
   const relayHeaders = stripHopByHopHeaders(req.headers)
+  // This hop speaks Connection: close itself: one request, one connection, no pooling. Node's
+  // client pools keep-alive sockets by default and the internal proxy closes them after 5s idle —
+  // a request arriving on a stale pooled socket dies with ECONNRESET ("socket hang up", measured
+  // 2026-10-02: the audio session's start, 27s after the previous relayed request, riding a socket
+  // the proxy had already closed). The player's ladder creates exactly such gaps.
+  relayHeaders.connection = 'close'
   const relay = httpRequest(
     {
       host: '127.0.0.1',
