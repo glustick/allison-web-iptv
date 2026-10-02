@@ -185,6 +185,106 @@ describe('rewriteM3u8ForProxy', () => {
   })
 })
 
+describe('the playlist window and the refused-segment retry', () => {
+  // The failure this pins, measured live 2026-10-02: the audio session's ffmpeg died of expired
+  // provider signatures (HTTP 400 on every segment past ~25s) because the window was remembered
+  // under the *internal* rewritten URL (/live/<user>/<pass>/668.m3u8) while the retry looked it up
+  // by the *app-side* Referer pathname (/api/stream/live/668.m3u8). The key never matched, so the
+  // rescue that exists for exactly this never engaged. The relaying route now carries the app-side
+  // key in x-app-playlist-key, and the retry works for sessions (whose ffmpeg is taught the
+  // Referer) and browsers alike.
+
+  async function signingOrigin(hitLog: string[]): Promise<string> {
+    // Time-based signing, like the real provider's ~25s URLs: a new generation of signatures is
+    // minted at most every SIGN_ROTATION_MS, so a segment from a playlist is valid for a short
+    // while after — and the rescue's own refresh (milliseconds after the refusal) re-signs a
+    // segment that is then fetchable. A per-fetch rotation would make the remapped segment born
+    // stale, which is not what real providers do.
+    const SIGN_ROTATION_MS = 300
+    let generation = 0
+    let signedAt = 0
+    const { url, server } = await startMockOrigin((req, res) => {
+      const urlObj = new URL(req.url ?? '/', 'http://x')
+      if (urlObj.pathname.endsWith('.m3u8')) {
+        if (Date.now() - signedAt >= SIGN_ROTATION_MS) {
+          generation += 1
+          signedAt = Date.now()
+        }
+        hitLog.push(`playlist-gen${generation}`)
+        const seg = `http://${req.headers.host}/seg-gen${generation}.ts`
+        res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' })
+        res.end(
+          [
+            '#EXTM3U',
+            '#EXT-X-VERSION:3',
+            '#EXT-X-TARGETDURATION:4',
+            '#EXT-X-MEDIA-SEQUENCE:100',
+            '#EXTINF:4.0,',
+            seg
+          ].join('\n')
+        )
+        return
+      }
+      hitLog.push(urlObj.pathname)
+      if (urlObj.pathname.includes(`gen${generation}`)) {
+        res.writeHead(200, { 'content-type': 'video/mp2t' })
+        res.end(Buffer.from([0x47]))
+        return
+      }
+      res.writeHead(400)
+      res.end('expired signature')
+    })
+    openServers.push(server)
+    return url
+  }
+
+  it('retries a refused segment through the app-side playlist key a session\'s Referer names', async () => {
+    const hits: string[] = []
+    const originUrl = await signingOrigin(hits)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => originUrl }))
+
+    // The session's playlist fetch, relayed with the app-side key header (as /api/stream does).
+    const playlist = await fetchViaProxy(proxy, '/live/u/p/668.m3u8', {
+      headers: { 'x-app-playlist-key': '/api/stream/live/668.m3u8' }
+    })
+    expect(playlist.statusCode).toBe(200)
+    const segPath = playlist.body
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => l.startsWith('/__fetch/'))
+    expect(segPath).toBeTruthy()
+
+    // The signature expires: after a rotation interval the origin signs generation 2, so the
+    // generation-1 segment the session is about to fetch answers 400.
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    await fetchViaProxy(proxy, '/live/u/p/668.m3u8', { headers: { 'x-app-playlist-key': '/api/stream/live/668.m3u8' } })
+    hits.length = 0
+    const refused = await fetchViaProxy(proxy, segPath!, {
+      headers: { referer: 'http://127.0.0.1:8085/api/stream/live/668.m3u8' }
+    })
+    expect(refused.statusCode).toBe(200)
+    // The retry refreshed the playlist (a new generation) and fetched the fresh segment.
+    expect(hits.some((h) => h.includes('playlist-gen'))).toBe(true)
+    expect(hits.some((h) => h.includes('.ts'))).toBe(true)
+  })
+
+  it('answers the refusal when no window matches the Referer — the old silent death, made visible', async () => {
+    const hits: string[] = []
+    const originUrl = await signingOrigin(hits)
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => originUrl }))
+    // Playlist fetched WITHOUT the app-side key: remembered under the internal URL, where the
+    // app-side Referer can never find it.
+    await fetchViaProxy(proxy, '/live/u/p/668.m3u8')
+    // A segment no generation ever signed — the origin refuses it, and with no window under the
+    // Referer's key there is nothing to remap against: the refusal must pass through.
+    const encoded = '/__fetch/' + encodeURIComponent(`${originUrl}/seg-never-signed.ts`)
+    const res = await fetchViaProxy(proxy, encoded, {
+      headers: { referer: 'http://127.0.0.1:8085/api/stream/live/668.m3u8' }
+    })
+    expect(res.statusCode).toBe(400)
+  })
+})
+
 describe('createProxyServer', () => {
   it('proxies a request to the configured origin and stamps permissive CORS headers', async () => {
     const { url: originUrl, server: origin } = await startMockOrigin((_req, res) => {

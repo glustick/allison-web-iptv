@@ -961,6 +961,12 @@ app.get('/api/stream/:kind/:file', requireAuth, (req, res) => {
     return
   }
   const rewritten = req as unknown as IncomingMessage & { url?: string }
+  // The playlist window inside the proxy is keyed by the app-side URL — the same pathname the
+  // players' segment requests carry as their Referer, which is what the refused-segment retry
+  // looks the window up by. Without this the window was remembered under the rewritten
+  // /live/<user>/<pass>/… path and the retry could never find it (measured 2026-10-02: the audio
+  // session's ffmpeg died of expired provider signatures the browser path would have survived).
+  rewritten.headers['x-app-playlist-key'] = req.path
   rewritten.url = `/${kind}/${encodeURIComponent(credentials.username)}/${encodeURIComponent(credentials.password)}/${file}`
   relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
 })
@@ -2243,7 +2249,13 @@ app.post('/api/transcode/start', requireAuth, (req, res) => {
   // keeps a session working rather than turning a missing cookie into a dead channel.
   const cookie = typeof req.headers.cookie === 'string' && req.headers.cookie.length > 0 ? req.headers.cookie : null
   const inputUrl = cookie ? `http://127.0.0.1:${PUBLIC_PORT}${sourceUrl}` : upstreamUrl
-  const inputHeaders = cookie ? `Cookie: ${cookie}` : undefined
+  // The Referer is not decoration: the relay's refused-segment rescue looks the playlist window up
+  // by the segment request's Referer. Browsers send it for free; ffmpeg does not — and without it
+  // the session died of expired provider signatures (HTTP 400 on every segment past ~25s) while
+  // the browser path would have survived. Measured on the audio-only session, 2026-10-02.
+  const inputHeaders = cookie
+    ? `Cookie: ${cookie}\r\nReferer: http://127.0.0.1:${PUBLIC_PORT}${sourceUrl}\r\n`
+    : undefined
   transcodeService
     .startTranscode(
       inputUrl,

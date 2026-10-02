@@ -667,7 +667,17 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
             // later refused segment needs to be remapped against.
             const window = parsePlaylistWindow(body, target)
             if (window) {
-              rememberPlaylistWindow(req.url ?? '', { ...window, upstreamHref: target.href })
+              // Key the window by the app-side playlist URL when the relaying route supplies it —
+              // that is the pathname the players' segment requests carry as their Referer, which is
+              // what the refused-segment retry looks the window up by. The internal req.url (the
+              // credentials-rewritten /live/<user>/<pass>/… path) never matches it, and a window
+              // remembered under that key was unreachable: sessions died of expired provider
+              // signatures the retry existed to survive (measured 2026-10-02).
+              const appSideKey =
+                typeof req.headers['x-app-playlist-key'] === 'string' && req.headers['x-app-playlist-key'].length > 0
+                  ? req.headers['x-app-playlist-key']
+                  : (req.url ?? '')
+              rememberPlaylistWindow(appSideKey, { ...window, upstreamHref: target.href })
             }
             res.end(rewriteM3u8ForProxy(body, target))
           })

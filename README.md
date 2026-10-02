@@ -6,6 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.68.0 — the signature-expiry rescue, alive at last)
+
+The refused-segment rescue (refresh the playlist, remap by absolute sequence, retry once) has been
+silently dead on the live path since v0.44.0: its window was remembered under the internal
+credentials-rewritten URL while the retry looked it up by the app-side Referer pathname — keys that
+could never match — and sessions' ffmpeg sent no Referer at all. Both fixed: the relay carries the
+app-side key through, and the transcode route teaches ffmpeg the Referer. Sessions and browsers now
+survive the provider's ~25s expiring signatures — which is what killed the UHD audio and blanked
+INULTRA. 762 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.67.3 — the settings migration un-dead-zoned)
 
 The boot-time settings migration no longer crashes against a const declared 380 lines below its
