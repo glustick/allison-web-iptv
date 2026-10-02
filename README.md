@@ -6,6 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.66.6 — the relay forwarded hop-by-hop headers)
+
+The missing audio clock's true root cause: the public→internal relay forwarded the client's
+hop-by-hop headers (`Connection` above all), so the audio session's ffmpeg — which sends explicit
+connection headers that browsers never do — poisoned the relay's socket and its segment fetch died
+at the internal proxy's parser with a bare 400. Headers are now stripped per RFC 7230 §6.1
+(`lib/relayHeaders.ts`, unit-tested), the reproduced failure passes every hop, and the audio
+session starts. 744 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.66.5 — sound is attempted, not asked for)
 
 Sound starts with the stream: unmuted autoplay is attempted outright (allowed after a recent

@@ -63,6 +63,7 @@ import { createAuthAudit } from './lib/authAudit.js'
 import { createAuthAuditStore } from './lib/authAuditStore.js'
 import { createAuthSessionStore } from './lib/authSessionStore.js'
 import { revocableSessionTokens } from './lib/singleSession.js'
+import { stripHopByHopHeaders } from './lib/relayHeaders.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
 import {
   applyPendingRestore,
@@ -2318,13 +2319,17 @@ app.use((req, res, next) => {
 })
 
 function relayToProxy(req: IncomingMessage, res: ServerResponse): void {
+  // Hop-by-hop headers stripped per RFC 7230 §6.1 — see lib/relayHeaders.ts for the measured
+  // failure (the audio session's ffmpeg poisoning the relay's socket with a forwarded
+  // `Connection: close`) and the rule's full account.
+  const relayHeaders = stripHopByHopHeaders(req.headers)
   const relay = httpRequest(
     {
       host: '127.0.0.1',
       port: PROXY_INTERNAL_PORT,
       path: req.url,
       method: req.method,
-      headers: req.headers
+      headers: relayHeaders
     },
     (relayRes) => {
       // Ask an upstream nginx-family reverse proxy not to buffer this response.

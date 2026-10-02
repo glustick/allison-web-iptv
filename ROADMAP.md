@@ -15,6 +15,25 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.66.6 — the relayed request that was never forwarded whole: hop-by-hop headers.** The ".48
+Chrome" retest still read *no audio clock*, and this time the whole chain was interrogated at every
+hop until the fault had nowhere to sit. Reproduced end to end on this machine: the real app, a fake
+provider, real ffmpeg — the audio session's start died exactly as on the NAS, with the playlist
+relayed fine and the **segment fetch answered 400 before the internal proxy's own handler ever
+ran**. Root cause: `relayToProxy` forwarded the client's headers verbatim — including **hop-by-hop
+headers** (`Connection` above all), which RFC 7230 §6.1 says a proxy must never forward, because
+they describe the *client's* connection, not the next one. ffmpeg's playlist fetch said
+`Connection: close`, poisoning the relay's pooled socket to the internal proxy; the segment fetch
+that followed was answered by the proxy's HTTP parser with a bare 400 before any handler ran; the
+session start failed; the player swallowed it; no sound and no clock. Browsers never set
+`Connection` on fetch()es — which is why years of browser-driven playback never tripped this, and
+only ffmpeg-driven traffic did. The fix strips hop-by-hop headers (`lib/relayHeaders.ts`, pure,
+unit-tested; `host` too) and the repro now passes every hop: the ffmpeg-shaped sequence answers
+200 throughout, and **the exact `audioOnly` session that could never start starts**. The fix also
+explains the fix's own history: every earlier attempt (autoplay, muted start, buffered fragments)
+treated symptoms downstream of a transport that was dead on arrival. 744 tests (3 new), typecheck,
+lint and the client build clean.
+
 **v0.66.5 — sound is attempted, not asked for.** The operator's question, and the right one:
 *"why do we need a button to press? shouldnt this be just activated."* It should — and Chrome
 agrees more often than v0.66.3 assumed: unmuted autoplay is allowed after a recent interaction or
