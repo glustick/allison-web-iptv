@@ -91,27 +91,30 @@ export function WebCodecsPlayer({
     // refusal's name lands in the console and the notice, so the next report is conclusive.
     function nudgePlay(stage: string): void {
       const el = audioVideoRef.current
-      if (!el) return
+      if (!el || el.paused !== true || el.ended) return
       void el.play().then(() => {
         setAudioNotice(null)
         if (el.muted) setMuted(true) // playing silent: the chip offers sound
       }).catch((err: unknown) => {
         const name = err instanceof DOMException ? err.name : String(err)
         console.warn(`[player] audio play() refused at ${stage}: ${name}`)
-        setAudioNotice(`sound has not started — play() was refused (${name}); retrying`)
+        setAudioNotice(`sound has not started — play() was refused (${name}); retrying when ready`)
         if (err instanceof DOMException && err.name === 'NotAllowedError' && !el.muted) {
           el.muted = true
+          el.autoplay = true // the browser starts it the moment media is ready — no promise race
           setMuted(true)
-          nudgePlay('muted')
         }
-        // AbortError (a load race) and friends: the periodic nudge below retries.
+        // AbortError is a load interrupting the promise — the element's own autoplay (set below)
+        // or the readiness nudge starts playback once media exists; play() promises are the wrong
+        // tool for racing a load, and the operator's report (AbortError, retrying, forever) is
+        // what proved it.
       })
     }
-    const nudgeTimer = setInterval(() => {
-      if (cancelled) return
-      const el = audioVideoRef.current
-      if (el && el.paused) nudgePlay('nudge')
-    }, 2000)
+    // The readiness nudges: fire when media actually exists, which is the only moment play()
+    // can succeed. canplay/playing cover the normal path; a slow-buffering day gets playing.
+    for (const event of ['canplay', 'loadeddata', 'playing'] as const) {
+      audioVideo.addEventListener(event, () => nudgePlay(event))
+    }
 
     void (async () => {
       // The audio session first: it takes a moment to start, and the engine runs silent until it
@@ -186,7 +189,6 @@ export function WebCodecsPlayer({
 
     return () => {
       cancelled = true
-      clearInterval(nudgeTimer)
       document.removeEventListener('pointerdown', unmute)
       document.removeEventListener('keydown', unmute)
       audioVideo.removeEventListener('fullscreenchange', onFullscreenChange)
@@ -223,6 +225,7 @@ export function WebCodecsPlayer({
         ref={audioVideoRef}
         controls
         playsInline
+        autoPlay
         style={{ width: '100%', aspectRatio: '16 / 9', background: '#000' }}
       />
       <canvas

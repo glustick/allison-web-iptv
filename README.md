@@ -6,6 +6,12 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.69.1 — autoplay is the answer to a load race)
+
+The audio carrier carries autoplay now — the browser starts it the moment media is ready, immune to
+the load race that kept AbortErroring every play() promise — with nudges moved to readiness events
+and the muted fallback preserved. 762 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.69.0 — sound that refuses to stay refused)
 
 The audio element is nudged every two seconds while paused — play() refused with a load-race
