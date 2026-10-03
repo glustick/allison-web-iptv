@@ -291,6 +291,30 @@ function getProxyTargetBase(req?: IncomingMessage): string | null {
   }
 }
 
+/**
+ * The account's backup portal for a request addressed to `primaryTarget` — see
+ * lib/proxyFailover.ts for the failover itself. Deliberately strict about WHEN a backup
+ * applies: only when the request is genuinely addressed to this account's own saved server.
+ * An x-proxy-target-base override (a deliberate per-session choice of some other base) gets
+ * no failover, because the account's backup describes the account's portal, not whatever
+ * else the override names.
+ */
+function getProxyBackupBase(req: IncomingMessage | undefined, primaryTarget: string): string | null {
+  if (!req) return null
+  const session = getAuthSession(req)
+  if (!session) return null
+  const stored = usersStore.getIptvCredentials(session.username)
+  if (!stored) return null
+  try {
+    const credentials = credentialsFromStored(stored)
+    if (!credentials?.backupServer) return null
+    if (normalizeProxyTargetBase(primaryTarget) !== normalizeProxyTargetBase(credentials.server)) return null
+    return normalizeProxyTargetBase(credentials.backupServer)
+  } catch {
+    return null
+  }
+}
+
 // --- ffmpeg / transcode service ------------------------------------------------------------
 // Routed through ffmpegResolver (a real, already-tested resolution path reused rather than
 // re-invented). The preferred system ffmpeg is not optional decoration here: the bundled
@@ -358,6 +382,7 @@ function sanitizeEpgUrls(value: unknown): string[] | undefined {
 // --- Ported proxy server, running on its own internal-only port ---------------------------
 const proxyDeps: ProxyServerDeps = {
   getProxyTargetBase: (req?: IncomingMessage) => getProxyTargetBase(req),
+  getProxyBackupBase: (req, primaryTarget) => getProxyBackupBase(req, primaryTarget),
   createUpstreamRequest: createNodeUpstreamRequest,
   // Node has no persistent, clearable DNS cache the way Chromium does (a plain http/https
   // request re-resolves via the OS resolver each time) — nothing to clear.
@@ -881,7 +906,9 @@ app.get('/api/session', requireAuth, (req, res) => {
     // say "a password is stored" without being able to display it.
         // The webhook never travels to the browser — only whether one is saved, exactly like the
         // provider password. The settings screen shows a blank field that means "keep the stored one".
-        res.json({ ok: true, configured: true, server: credentials.server, username: credentials.username, passwordSet: true, epgUrls: systemEpgStore.read().urls, alertWebhookSet: Boolean(credentials.alertWebhook) })
+        // The backup portal is different: it is not a secret (a URL, no credential), so it reads
+        // back in full and the field is prefilled — blank then genuinely means "no backup".
+        res.json({ ok: true, configured: true, server: credentials.server, backupServer: credentials.backupServer ?? null, username: credentials.username, passwordSet: true, epgUrls: systemEpgStore.read().urls, alertWebhookSet: Boolean(credentials.alertWebhook) })
   } catch (err) {
     // A stored config that no longer decrypts (SESSION_SECRET changed) or an unreadable
     // store is treated as "not configured" so the user can re-enter it — but the reason is
@@ -1084,7 +1111,7 @@ for (const user of usersStore.listUsers()) {
 
 app.post('/api/session/save', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
-    const { server, username, password, epgUrls, alertWebhook } = req.body ?? {}
+    const { server, username, password, epgUrls, alertWebhook, backupServer } = req.body ?? {}
   // A blank password means "leave the stored one alone". The settings screen can no longer read
   // the password back (see /api/session), so requiring it on every save would force a retype
   // just to change the server URL or the guide sources. Only a *first* save must supply one.
@@ -1098,6 +1125,20 @@ app.post('/api/session/save', requireAuth, (req, res) => {
     return
   }
   try {
+    // The backup portal is optional and, unlike the password, not secret — so its rules can be
+    // simple: absent/blank keeps nothing (an empty string clears it), a string must look like
+    // a base URL the way the primary has to. Validating the shape here (rather than letting
+    // the proxy discover it per-request) turns a typo into an immediate, visible 400 instead
+    // of a silent "no failover when you needed it".
+    let effectiveBackupServer: string | undefined
+    if (typeof backupServer === 'string' && backupServer.trim().length > 0) {
+      const candidate = backupServer.trim()
+      if (!/^https?:\/\//i.test(candidate)) {
+        res.status(400).json({ error: 'Backup portal URL must start with http:// or https://' })
+        return
+      }
+      effectiveBackupServer = candidate.replace(/\/+$/, '')
+    }
     const credentials: SessionCredentials = {
       server: server.trim(),
       username: username.trim(),
@@ -1109,7 +1150,8 @@ app.post('/api/session/save', requireAuth, (req, res) => {
                 ? undefined
                 : typeof alertWebhook === 'string' && alertWebhook.trim().length > 0
                   ? alertWebhook.trim()
-                  : existing?.alertWebhook
+                  : existing?.alertWebhook,
+            backupServer: effectiveBackupServer
     }
     saveAccountCredentials(session.username, credentials as unknown as Record<string, unknown>)
 

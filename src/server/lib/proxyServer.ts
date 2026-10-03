@@ -1,6 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { URL } from 'url'
 import { Writable } from 'stream'
+import {
+  backupPreferredUntil,
+  createFailoverState,
+  notePrimaryFailure,
+  notePrimarySuccess
+} from './proxyFailover.js'
 
 /**
  * The subset of Electron's net.ClientRequest this module actually uses — kept as a local
@@ -93,6 +99,11 @@ export interface ProxyServerDeps {
   // can serve multiple browser sessions without a single global target being shared across all
   // users.
   getProxyTargetBase: (req?: IncomingMessage) => string | null
+  // The account's backup portal for THIS request's primary target, or null when there is none
+  // (no backup configured, or the request is deliberately addressed somewhere the account's
+  // own backup doesn't describe — see index.ts's implementation). Optional so existing
+  // test wirings compile untouched; without it there is simply no failover.
+  getProxyBackupBase?: (req: IncomingMessage | undefined, primaryTarget: string) => string | null
   // Electron's net.request in production (Chromium's network stack — see the comment on
   // createUpstreamRequest's call site in index.ts for why, not Node's http/https). Anything
   // satisfying UpstreamClientRequest works, which is what makes this testable without Electron.
@@ -138,6 +149,10 @@ export interface ProxyServerDeps {
  */
 export function createProxyServer(deps: ProxyServerDeps): Server {
   const upstreamTimeoutMs = deps.upstreamTimeoutMs ?? 45000
+
+  // The failover memory: which primary bases are currently being failed over from (see
+  // lib/proxyFailover.ts). Scoped to this server instance, so tests get a clean slate.
+  const failoverState = createFailoverState()
 
   // --- Refused-segment retry with a fresh playlist (the signature-expiry fix) ----------------
   //
@@ -363,6 +378,13 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
     // any destination directly, bypassing getProxyTargetBase() entirely, while still getting
     // the same CORS/retry/timeout/redirect handling as the Xtream path below.
     let target: URL
+    // The account's backup portal for this request, resolved once — null when none applies
+    // (no backup configured, a /__fetch/ request whose destination is not the account's
+    // portal, or a deliberately overridden target the account's backup doesn't describe).
+    let backupUrl: URL | null = null
+    // The base the primary target resolved to (null on /__fetch/, whose destination is the
+    // encoded URL itself) — the key the failover cooldown is remembered under.
+    let primaryBase: string | null = null
     if (req.url?.startsWith('/__fetch/')) {
       try {
         target = new URL(decodeURIComponent(req.url.slice('/__fetch/'.length)))
@@ -389,6 +411,19 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
         res.writeHead(502)
         res.end(`Invalid Xtream server address: ${defaultTarget}`)
         return
+      }
+
+      // The backup portal (lib/proxyFailover.ts carries the why of the cooldown). A malformed
+      // stored backup must not kill the request the way a malformed primary would — it just
+      // means no failover this time.
+      primaryBase = defaultTarget
+      const backupBase = deps.getProxyBackupBase?.(req, defaultTarget) ?? null
+      if (backupBase) {
+        try {
+          backupUrl = new URL(req.url ?? '/', backupBase)
+        } catch {
+          backupUrl = null
+        }
       }
     }
 
@@ -430,6 +465,19 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
     // timeout/error retry above, so a segment that needed a fresh-signature retry keeps its
     // full error-retry budget for genuine connection failures.
     let retriedWithFreshSegment = false
+    // The backup-portal failover is its own one-shot too: after the same-target retry is
+    // spent, one attempt against the other portal before the failure is surfaced. Whichever
+    // base the CURRENT attempt addresses is tracked here, so the same-target retry re-tries
+    // the right portal and the response handler knows whose answer it is looking at.
+    let attemptOnBackup = false
+    let failedOver = false
+    // Cooldown: after a failover, later requests skip the dead primary entirely for a short
+    // window (lib/proxyFailover.ts) — without it every request would pay the primary's
+    // connect-timeout before reaching the backup.
+    const backupFirst =
+      backupUrl !== null &&
+      primaryBase !== null &&
+      backupPreferredUntil(failoverState, primaryBase, Date.now()) !== null
 
     function attemptUpstream(urlOverride?: URL): void {
       let upstreamReq: UpstreamClientRequest
@@ -508,7 +556,27 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
                 .catch(() => {})
             }
           }
-          attemptUpstream()
+          // Re-try the portal this attempt was already addressing — not blindly the primary:
+          // when the cooldown sent this request to the backup first, its retry belongs there.
+          attemptUpstream(attemptOnBackup && backupUrl ? backupUrl : undefined)
+          return
+        }
+        // The same-target retry is spent. One attempt against the OTHER portal before the
+        // failure is surfaced — this is the failover itself, and the only place it fires for
+        // transport errors. Bounded (one attempt), and remembered: once the primary has sent
+        // a request to its backup, the cooldown keeps later requests off the dead portal.
+        if (!failedOver && backupUrl && primaryBase !== null) {
+          failedOver = true
+          if (!attemptOnBackup) {
+            attemptOnBackup = true
+            notePrimaryFailure(failoverState, primaryBase, Date.now())
+            console.warn(`[proxy] primary ${target.host} failed (${err.message}) — failing over to the backup portal`)
+            attemptUpstream(backupUrl)
+          } else {
+            attemptOnBackup = false
+            console.warn(`[proxy] backup ${backupUrl.host} failed (${err.message}) — trying the primary portal`)
+            attemptUpstream()
+          }
           return
         }
         console.error('[proxy] upstream request error:', err)
@@ -552,6 +620,37 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
         // uses. Computed up here because the refused-segment branch below needs it.
         const isM3u8Fetch = target.pathname.toLowerCase().endsWith('.m3u8')
 
+        // Failover bookkeeping on the answer itself. A portal that answered below 500 is
+        // alive: a primary answer clears any cooldown (traffic returns to it at once), a
+        // backup answer leaves the cooldown alone (it expires on its own). A 5xx is the
+        // provider down in its most common clothing (a dying portal answers, badly): one
+        // attempt at the OTHER portal before letting the status through, in either
+        // direction. 4xx is deliberately NOT a failover trigger — a 400/403 segment refusal
+        // is the signature-expiry rescue's business (below), and an auth problem would fail
+        // identically on both portals.
+        if (primaryBase !== null && backupUrl && !failedOver && upstreamRes.statusCode >= 500) {
+          upstreamRes.on('data', () => {}) // Drain the failed body — the other portal's answer is the one being waited for.
+          failedOver = true
+          if (!attemptOnBackup) {
+            attemptOnBackup = true
+            notePrimaryFailure(failoverState, primaryBase, Date.now())
+            console.warn(
+              `[proxy] primary ${target.host} answered ${upstreamRes.statusCode} — failing over to the backup portal`
+            )
+            attemptUpstream(backupUrl)
+          } else {
+            attemptOnBackup = false
+            console.warn(
+              `[proxy] backup ${backupUrl.host} answered ${upstreamRes.statusCode} — failing over to the primary portal`
+            )
+            attemptUpstream()
+          }
+          return
+        }
+        if (!attemptOnBackup && primaryBase !== null && upstreamRes.statusCode < 500) {
+          notePrimarySuccess(failoverState, primaryBase)
+        }
+
         // A refused segment (400/403) is, on providers with ~25s signed URLs, a signature that
         // expired mid-playlist — see the refused-segment retry block near the top of this
         // server. Try one refresh-retry before letting the refusal through: the player-side
@@ -577,7 +676,7 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
               if (!res.headersSent) res.writeHead(refusedStatus)
               res.end()
             }
-            freshSegmentUrlFor(playlistKey, target.href)
+            freshSegmentUrlFor(playlistKey, attemptOnBackup && backupUrl ? backupUrl.href : target.href)
               .then((freshUrl) => {
                 if (!freshUrl) {
                   refusedThrough()
@@ -723,6 +822,14 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
     }
 
     req.on('error', (err) => console.error('[proxy] client request error:', err))
+    if (backupFirst && backupUrl) {
+      console.warn(
+        `[proxy] ${primaryBase} is in failover cooldown — trying the backup portal ${backupUrl.host} first`
+      )
+      attemptOnBackup = true
+      attemptUpstream(backupUrl)
+      return
+    }
     attemptUpstream()
   }
 

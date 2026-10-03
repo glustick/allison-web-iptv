@@ -20,6 +20,7 @@ export function IptvConfigScreen({
   onConnected: (session: Session) => void
 }): JSX.Element {
   const [server, setServer] = useState(initialConfig?.server ?? '')
+  const [backupServer, setBackupServer] = useState(initialConfig?.backupServer ?? '')
   const [username, setUsername] = useState(initialConfig?.username ?? '')
   const [password, setPassword] = useState(initialConfig?.password ?? '')
   const [epgUrlsText, setEpgUrlsText] = useState((initialConfig?.epgUrls ?? []).join('\n'))
@@ -48,6 +49,7 @@ export function IptvConfigScreen({
     setError(null)
     const config: IptvConfig = {
       server: server.trim(),
+      backupServer: backupServer.trim(),
       username: username.trim(),
       password,
       epgUrls: epgUrlsText.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
@@ -74,6 +76,14 @@ export function IptvConfigScreen({
         <label>
           IPTV server URL
           <input value={server} onChange={(e) => setServer(e.target.value)} placeholder="https://example.com:8080" required />
+        </label>
+        <label>
+          Backup portal URL — optional
+          <input
+            value={backupServer}
+            onChange={(e) => setBackupServer(e.target.value)}
+            placeholder="https://backup.example.com:8080 — used automatically when the main server is down"
+          />
         </label>
         <label>
           IPTV username

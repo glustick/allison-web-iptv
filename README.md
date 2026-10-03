@@ -6,6 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.72.0 — the backup portal, failed over to automatically)
+
+An optional **Backup portal URL** on the IPTV setup screen (stored encrypted with the account's
+credentials) — and the proxy fails over to it by itself: connection refused, a timeout or a 5xx
+from the primary gets one attempt against the backup before surfacing, then a 60-second cooldown
+during which requests skip the sick primary entirely; a primary answer below 500 clears the
+cooldown immediately. 4xx never fails over (auth problems are identical on both portals, and
+segment-refusal 400/403 belong to the signature rescue); deliberately overridden targets and
+per-channel M3U hosts get no failover. 779 tests, typecheck, lint and the build clean.
+
 ## Current state (v0.71.0 — the audio was dying at the init segment, twice over)
 
 The UHD channels' missing sound had two independent causes, both now fixed and reproduced end to

@@ -20,6 +20,10 @@ export interface AuthState {
 
 export interface IptvConfig {
   server: string
+  /** The provider's reserve portal (optional). Tried automatically when the primary stops
+   *  answering — unlike the password this is not a secret, so it reads back in full and an
+   *  empty submission genuinely clears it. */
+  backupServer?: string
   username: string
   /** Only ever set by the settings form. Empty means "keep the stored one" — the client is no
    *  longer told the password once it has been saved (see fetchIptvConfig). */
@@ -84,6 +88,7 @@ export async function fetchIptvConfig(): Promise<IptvConfig | null> {
   const data = (await res.json()) as {
     configured: boolean
     server: string | null
+    backupServer?: string | null
     username: string | null
     passwordSet?: boolean
     epgUrls?: string[]
@@ -91,7 +96,14 @@ export async function fetchIptvConfig(): Promise<IptvConfig | null> {
   // No password comes back any more — a stored config is identified by server + username, and
   // `passwordSet` is what the form uses to say "one is saved".
   if (!data.configured || !data.server || !data.username) return null
-  return { server: data.server, username: data.username, password: '', passwordSet: data.passwordSet ?? false, epgUrls: data.epgUrls ?? [] }
+  return {
+    server: data.server,
+    backupServer: data.backupServer ?? '',
+    username: data.username,
+    password: '',
+    passwordSet: data.passwordSet ?? false,
+    epgUrls: data.epgUrls ?? []
+  }
 }
 
 export async function saveIptvConfig(config: IptvConfig): Promise<void> {

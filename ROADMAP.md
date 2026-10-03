@@ -15,6 +15,30 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.72.0 — the backup portal: a reserve URL the app fails over to by itself.** The operator
+asked for *"a new backup URL for the playlist … as an options configuration"*, naming the
+provider's reserve portal (`reserve.primeprox.store` in their case — the same panel and
+credentials behind a second host, the shape most providers publish). The lightweight sibling of
+the "multiple playlists" feature below: one optional **Backup portal URL** field on the IPTV
+setup screen, stored encrypted with the rest of the account's credentials, and — the part that
+makes it worth configuring rather than a note on the fridge — **the proxy fails over
+automatically**. When a request to the primary dies at the transport level (connection refused,
+timeout) or the portal answers 5xx, the proxy tries the backup once before surfacing the
+failure, then remembers for a 60-second cooldown during which requests skip the sick primary
+entirely (lib/proxyFailover.ts, pure and unit-tested — a per-request failover would pay the
+primary's connect timeout on every single request, and returning on the first success would
+flap on a portal that is dying slowly). A primary answer below 500 clears the cooldown at once,
+so a quick recovery costs one request. Deliberately out of scope: 4xx never fails over (an
+auth failure fails identically on both portals, and 400/403 segment refusals belong to the
+signature-expiry rescue), an overridden proxy target gets no failover (the backup describes
+the account's own portal), /__fetch/ destinations (per-channel hosts from M3U files) are not
+the account's portal, and the backup applies to proxied traffic only — EPG/sports/watchdog
+fetches that bypass the proxy keep their own paths. Verified three ways: 12 new tests (the
+pure cooldown logic; wire-level failover on a refused primary, on 5xx, the cooldown skipping
+the dead primary, the recovery path when the backup fails in its turn, the override and
+no-backup cases), and on the live rig — primary killed, first request fails over with the
+warning naming both hosts, second request rides the cooldown. 779 tests.
+
 **v0.71.0 — the audio was dying at the init segment, twice over.** The operator's report — the
 error had *changed*: "the audio stream failed — the picture continues without it" — was the
 thread. The notice came from the audio carrier's own hls.js fatal handler, which (until this

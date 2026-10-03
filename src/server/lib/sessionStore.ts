@@ -7,6 +7,10 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypt
 
 export interface SessionCredentials {
   server: string
+  // Optional reserve portal (most providers publish one — the same panel and credentials
+  // behind a second host). proxyServer.ts + lib/proxyFailover.ts fail over to it when the
+  // primary stops answering. Same trust class as `server`: a base URL only.
+  backupServer?: string
   username: string
   password: string
   // Optional extra XMLTV guide sources (see epgService.ts) — carried with the credentials so
