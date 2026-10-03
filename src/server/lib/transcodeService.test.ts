@@ -7,6 +7,7 @@ import type { AddressInfo } from 'net'
 import { spawn } from 'child_process'
 import { createRequire } from 'module'
 import {
+  AUDIO_CHANNEL_LAYOUT_FILTER,
   averageBytesPerSecond,
   createTranscodeService,
   describeFfmpegFailure,
@@ -70,6 +71,43 @@ afterEach(() => {
 function track(service: TranscodeService): TranscodeService {
   activeServices.push(service)
   return service
+}
+
+/**
+ * Reads the AudioSpecificConfig out of an fMP4 init segment's esds box, walking the descriptor
+ * nesting ES_Descriptor (03) → DecoderConfigDescriptor (04) → DecoderSpecificInfo (05).
+ * Descriptor lengths in the wild (and in everything ffmpeg writes) expand the two high bits of
+ * each length byte into 0x80 continuation markers, so the walk has to accept both the expanded
+ * and the compact forms. Returns the DecoderSpecificInfo payload (the ASC itself) or null when
+ * the shape isn't what this app's ffmpeg produces.
+ */
+function audioSpecificConfigFrom(init: Buffer, esdsTypeOffset: number): Buffer | null {
+  // esdsTypeOffset points at the 'esds' ASCII itself; the box is size(4) + type(4) + the
+  // FullBox version/flags(4), so the first descriptor tag sits eight bytes past the type.
+  const readDescriptorAt = (at: number): { tag: number; payload: Buffer; payloadOffset: number } | null => {
+    if (at >= init.length - 1) return null
+    const tag = init[at]
+    let cursor = at + 1
+    let length = 0
+    for (let i = 0; i < 4; i++) {
+      const byte = init[cursor]
+      cursor += 1
+      length = (length << 7) | (byte & 0x7f)
+      if ((byte & 0x80) === 0) break
+    }
+    return { tag, payload: init.subarray(cursor, cursor + length), payloadOffset: cursor }
+  }
+  const es = readDescriptorAt(esdsTypeOffset + 8)
+  if (!es || es.tag !== 0x03) return null
+  // The ES_Descriptor's payload opens with ES_ID (2 bytes) + stream-priority/flags (1 byte)
+  // before its first nested descriptor.
+  const dec = readDescriptorAt(es.payloadOffset + 3)
+  if (!dec || dec.tag !== 0x04) return null
+  // The DecoderConfigDescriptor's payload opens with objectTypeIndication (1) + streamType (1)
+  // + bufferSizeDB (3) + maxBitrate (4) + avgBitrate (4) before the DecoderSpecificInfo.
+  const dsi = readDescriptorAt(dec.payloadOffset + 13)
+  if (!dsi || dsi.tag !== 0x05) return null
+  return dsi.payload
 }
 
 describe('startTranscode', () => {
@@ -627,6 +665,97 @@ describe('real ffmpeg integration', () => {
       expect(segment.byteLength).toBeGreaterThan(0)
 
       await service.stopTranscode('real-1')
+    } finally {
+      server.close()
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 20000)
+
+  // The pinned shape of the channel-layout pin. A comma in place of a pipe would split the
+  // filtergraph (a second filter where a layout list belongs) and fail every audio encode; a
+  // renamed layout would make aformat convert a stream that should pass through untouched.
+  // The named layouts are exactly the ones MPEG AAC gives standard channel configurations to
+  // (mono=1, stereo=2, 5.1=6, 7.1=7) — see AUDIO_CHANNEL_LAYOUT_FILTER for the Chromium MSE
+  // failure that makes this pin necessary.
+  it('pins the AAC channel-layout filter to standard MPEG channel configurations', () => {
+    expect(AUDIO_CHANNEL_LAYOUT_FILTER).toBe('aformat=channel_layouts=mono|stereo|5.1|7.1')
+    // `|` separates the layout list; a `,` would start a second filter in the graph.
+    expect(AUDIO_CHANNEL_LAYOUT_FILTER).not.toContain(',')
+    expect(AUDIO_CHANNEL_LAYOUT_FILTER.endsWith('mono|stereo|5.1|7.1')).toBe(true)
+  })
+
+  // Regression for the 2026-10-03 "the audio stream failed — the picture continues without it"
+  // report on every UHD channel (Chrome/Windows): ffmpeg's aac encoder received the channels'
+  // E-AC-3 5.1(side) audio and wrote an AudioSpecificConfig with channelConfiguration=0 (the
+  // channel map stated as an in-band PCE). Chromium's MSE cannot derive a channel count from
+  // that form — it rejected the session's fMP4 init segment outright, every append failed, and
+  // hls.js burned its retry ladder to a fatal mediaSourceRequiresReset before a single fragment
+  // buffered. Isolated on this project's own rig first (a 5.1(side)-PCE init ends the
+  // MediaSource in Chrome; the byte-identical box tree re-encoded as 5.1/back appends cleanly),
+  // and asserted here at the same level: the session's init segment must carry an explicit
+  // channel configuration, never the PCE form.
+  it('re-encodes a 5.1(side) E-AC-3 source to AAC with an explicit channel configuration, not a PCE', async () => {
+    if (!ffmpegStaticPath) throw new Error('ffmpeg-static did not resolve a binary for this platform')
+
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-pce-fixture-'))
+    const inputPath = join(fixtureDir, 'synthetic-eac3-51side-input.mkv')
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpegStaticPath as string, [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=8:size=320x240:rate=10',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8',
+        '-af', 'aformat=channel_layouts=5.1(side)',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '10', '-keyint_min', '10',
+        '-c:a', 'eac3',
+        inputPath
+      ])
+      proc.on('error', reject)
+      proc.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`fixture build exited ${code}`))))
+    })
+
+    // Prove the fixture itself is the 5.1(side) shape this regression exists for — if a future
+    // ffmpeg stops honoring the layout filter above, the test below would pass vacuously.
+    {
+      let stderr = ''
+      await new Promise<void>((resolve) => {
+        const proc = spawn(ffmpegStaticPath as string, ['-i', inputPath])
+        proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+        proc.on('close', () => resolve())
+      })
+      expect(stderr).toMatch(/Audio: eac3/)
+      expect(stderr).toMatch(/5\.1\(side\)/)
+    }
+
+    const { url: originUrl, server } = await startSyntheticOrigin(inputPath)
+    try {
+      const service = track(
+        createTranscodeService({
+          resolveFfmpegPath: resolverFor(ffmpegStaticPath as string),
+          vodDeadlineMs: 30000,
+          pollIntervalMs: 200
+        })
+      )
+
+      // The audio-only tier: the client-side engine's audio companion, the session the failing
+      // UHD channels actually run. audioOnly is the ninth argument.
+      const result = await service.startTranscode(originUrl, true, 'real-audio-pce', 0, 0, false, undefined, false, true)
+      const init = readFileSync(join(dirname(result.playlistPath), 'init.mp4'))
+
+      // The init segment's esds → DecoderSpecificInfo (tag 05) is the AudioSpecificConfig; its
+      // first 13 bits are audioObjectType(5) + samplingFrequencyIndex(4) + channelConfiguration(4).
+      const esds = init.indexOf(Buffer.from('esds'))
+      expect(esds).toBeGreaterThan(0)
+      const asc = audioSpecificConfigFrom(init, esds)
+      expect(asc).not.toBeNull()
+      const first = asc![0]
+      const second = asc![1]
+      const audioObjectType = first >> 3
+      const channelConfiguration = (second >> 3) & 0x0f
+      expect(audioObjectType).toBe(2) // AAC-LC
+      expect(channelConfiguration).not.toBe(0) // 0 = in-band PCE — the shape Chromium's MSE rejects
+      expect(channelConfiguration).toBe(6) // 5.1 — the standard configuration for this source
+
+      await service.stopTranscode('real-audio-pce')
     } finally {
       server.close()
       rmSync(fixtureDir, { recursive: true, force: true })

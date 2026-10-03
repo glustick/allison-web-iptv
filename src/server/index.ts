@@ -2342,6 +2342,15 @@ function relayToProxy(req: IncomingMessage, res: ServerResponse): void {
   // a request arriving on a stale pooled socket dies with ECONNRESET ("socket hang up", measured
   // 2026-10-02: the audio session's start, 27s after the previous relayed request, riding a socket
   // the proxy had already closed). The player's ladder creates exactly such gaps.
+  //
+  // `agent: false` is what actually delivers the "one connection" promise. The `Connection: close`
+  // header governs the wire, not the agent: Node ≥19's global agent (keepAlive on by default)
+  // still hands the next request the just-used socket, and because the proxy honoured the close
+  // and ended its side, that parser answers the reused socket with a raw, body-less 400 —
+  // "Parse Error: Data after `Connection: close`" (HPE_CLOSED_CONNECTION, measured 2026-10-03:
+  // every *second* relayed playlist request failed that way, alternating 200/400 — the shape of
+  // the audio session's 400 storms). agent:false gives each request a dedicated one-shot agent,
+  // so a socket is never revisited once its conversation is over.
   relayHeaders.connection = 'close'
   const relay = httpRequest(
     {
@@ -2349,7 +2358,8 @@ function relayToProxy(req: IncomingMessage, res: ServerResponse): void {
       port: PROXY_INTERNAL_PORT,
       path: req.url,
       method: req.method,
-      headers: relayHeaders
+      headers: relayHeaders,
+      agent: false
     },
     (relayRes) => {
       // Ask an upstream nginx-family reverse proxy not to buffer this response.

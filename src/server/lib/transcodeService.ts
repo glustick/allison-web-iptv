@@ -92,6 +92,23 @@ export function describeFfmpegFailure(tail: string[]): string {
 // language tag at all — without it there'd be no way to tell two same-language, same-codec
 // tracks apart in a picker, or to explain *why* a provider's own "5.1 + Stereo" labeling means
 // two tracks, not one.
+//
+// The layouts this app's own AAC output is pinned to. Every tier re-encodes audio to AAC, and
+// the aac encoder writes whatever channel layout its input frames carry — including layouts
+// with **no standard MPEG channel configuration** (5.1(side) is the one this provider actually
+// carries), for which it emits an AudioSpecificConfig with channelConfiguration=0 and the
+// channel map stated as an in-band PCE instead. Chromium's MSE cannot derive a channel count
+// from that form: it rejects the fMP4 init segment outright, every append fails, and hls.js
+// burns through its retry ladder to a fatal `mediaSourceRequiresReset` before a single fragment
+// buffers — the whole shape of the 2026-10-03 "the audio stream failed" report on the UHD
+// channels (isolated on this project's own rig: a 5.1(side)-PCE init appends and ends the
+// MediaSource in Chrome, the byte-identical box tree re-encoded as 5.1/back appends cleanly,
+// stereo never had a problem). aformat passes through every layout the list names and converts
+// the rest to the nearest one it does — so a 5.1(side) source lands on 5.1 (config 6; the
+// side/back distinction names speaker positions the encoder re-states regardless) and a
+// genuine stereo source is untouched. Exported pure so the value the argv carries is testable
+// without spawning ffmpeg.
+export const AUDIO_CHANNEL_LAYOUT_FILTER = 'aformat=channel_layouts=mono|stereo|5.1|7.1'
 /**
  * The same source line again, for video. Every channel this provider serves is HEVC (the UHD tier is
  * Main 10), and whether a *browser* can decode that is knowable before playback rather than only
@@ -722,6 +739,12 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       // useTranscodeFallback.ts's switchLiveAudioTrack) and knows a specific non-default index
       // exists ever passes anything else.
       `0:a:${audioStreamIndex}`,
+      // Pin the AAC output's channel layout to shapes Chromium's MSE can actually name — see
+      // AUDIO_CHANNEL_LAYOUT_FILTER for the measured 5.1(side)/PCE failure this prevents.
+      // Audio is re-encoded to AAC on every tier regardless, so this filter costs the copy
+      // tiers nothing: a layout the list names is a passthrough.
+      '-af',
+      AUDIO_CHANNEL_LAYOUT_FILTER,
       // subtitleStreamIndex < 0 means "no subtitle at all" — used for the automatic retry below
       // when the requested index turns out to be a bitmap codec ffmpeg can't convert.
       ...(!audioOnly && isVod && subtitleStreamIndex >= 0 ? ['-map', `0:s:${subtitleStreamIndex}?`] : []),

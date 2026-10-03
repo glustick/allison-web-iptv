@@ -6,6 +6,27 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.71.0 — the audio was dying at the init segment, twice over)
+
+The UHD channels' missing sound had two independent causes, both now fixed and reproduced end to
+end on the local rig. First, the relay's own hop: `Connection: close` (v0.68.1) governed the wire
+but not Node's keep-alive agent, which kept handing the next relayed request the socket the proxy
+had just ended — every second request answered with a raw parser 400 (`Data after Connection:
+close`), the same bug behind the earlier ECONNRESETs and the 400 storms. The relay now passes
+`agent: false` — one dedicated connection per request, twelve in a row verified clean. Second,
+the audio content: ffmpeg's AAC encode of the UHD channels' E-AC-3 **5.1(side)** sources wrote an
+AudioSpecificConfig with channelConfiguration=0 (an in-band PCE), a form Chromium's MSE cannot
+turn into a channel count — it rejected the fMP4 init segment outright, every append failed, and
+hls.js burned its retry ladder to a fatal `mediaSourceRequiresReset` before a single fragment
+buffered. That is the whole "the audio stream failed — the picture continues without it" report,
+and, retroactively, every no-audio-clock report before it: the notice only started telling the
+truth once v0.69.0 stopped clobbering it. Every tier now pins the AAC output through
+`aformat=channel_layouts=mono|stereo|5.1|7.1` — a 5.1(side) source lands on standard
+configuration 6, stereo is untouched — proven by a new real-ffmpeg test that parses the session's
+init segment and refuses the PCE form, and by the rig: the session that never buffered now plays
+in realtime with the clock in sync. The audio carrier's fatal handler also names its failure
+(type / detail / status) instead of a bare "fatal". 767 tests, typecheck, lint, build clean.
+
 ## Current state (v0.70.0 — the fixtures pane filters by country and league)
 
 A Country → League filter row on the Sports tab's fixtures pane — countries by fixture count, the

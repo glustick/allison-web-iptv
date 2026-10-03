@@ -15,6 +15,30 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.71.0 — the audio was dying at the init segment, twice over.** The operator's report — the
+error had *changed*: "the audio stream failed — the picture continues without it" — was the
+thread. The notice came from the audio carrier's own hls.js fatal handler, which (until this
+release) discarded the error's detail; the first fix was making it name what it saw. Then the rig
+(fake provider, real app, real ffmpeg, CDP-driven headless Chrome) reproduced the exact symptom
+and named it: `mediaError / mediaSourceRequiresReset`, raised because **the MediaSource was
+already ended** when the first audio fragment appended. A raw-MSE experiment — no hls.js at all —
+pinned it to the content: ffmpeg's AAC encode of a **5.1(side)** source (the UHD channels' E-AC-3
+shape) emits an AudioSpecificConfig with **channelConfiguration=0**, the channel map stated as an
+in-band PCE; Chromium's MSE cannot derive a channel count from that form, rejects the fMP4 init
+segment outright, and ends the MediaSource. The byte-identical box tree re-encoded as 5.1(back)
+(standard configuration 6) appends cleanly; stereo never had a problem. Every tier now pins the
+AAC output through `aformat=channel_layouts=mono|stereo|5.1|7.1` (`AUDIO_CHANNEL_LAYOUT_FILTER`),
+a new real-ffmpeg integration test parses the session's init segment and refuses the PCE form,
+and the rig that could never buffer now plays in realtime. The reproduction also caught a second,
+independent bug on the same path: v0.68.1's `Connection: close` header governs the wire but not
+Node's keep-alive **agent**, which kept re-handing the relay the socket the proxy had just ended
+— the proxy's parser answered every second request with a raw 400 (`HPE_CLOSED_CONNECTION: Data
+after Connection: close`), the true root of both the earlier ECONNRESETs and the 400 storms.
+`agent: false` on the relay's hop makes "one request, one connection" actually true: twelve
+consecutive playlist fetches, all 200. Both fixes verified together end to end: the channel that
+produced weeks of no-audio-clock and audio-failed reports now plays sound-carrying, clock-locked
+video.
+
 **v0.66.6 — the relayed request that was never forwarded whole: hop-by-hop headers.** The ".48
 Chrome" retest still read *no audio clock*, and this time the whole chain was interrogated at every
 hop until the fault had nowhere to sit. Reproduced end to end on this machine: the real app, a fake

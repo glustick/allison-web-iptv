@@ -162,10 +162,23 @@ export function WebCodecsPlayer({
           if (data.fatal) {
             // The audio died; the picture keeps going on wall time and says so. Not fatal to the
             // engine — a silent picture beats a dead channel. The buffered fragments' stamps stay
-            // valid until the element runs past them.
+            // valid until the element runs past them. The notice NAMES the failure (type, detail,
+            // status): a bare "fatal" told the operator the stream died and nothing more, and both
+            // the 2026-10-02 and 2026-10-03 hunts had to be driven from a rig before the real
+            // causes (an append-killing PCE AudioSpecificConfig; the relay's pooled-socket 400s)
+            // were reachable at all. The specific cause must also not be clobbered by the
+            // engine's generic "no audio clock" line.
+            const detail = [
+              data.type,
+              data.details,
+              data.response?.code ? `HTTP ${data.response.code}` : data.reason ?? ''
+            ]
+              .filter(Boolean)
+              .join(' / ')
+            console.warn(`[player] audio stream fatal: ${detail}`)
             hls?.destroy()
             hls = null
-            setAudioNotice('the audio stream failed — the picture continues without it')
+            setAudioNotice(`the audio stream failed (${detail}) — the picture continues without it`)
           }
         })
         hls.loadSource(sessionUrl)
