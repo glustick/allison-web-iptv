@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   channelsMentioningTeams,
+  filterGroupsBy,
+  leaguesInCountry,
+  uniqueGroupCountries,
   compareCompetitionsByPopularity,
   competitionPopularityRank,
   fixtureMatchKey,
@@ -212,5 +215,32 @@ describe('compareCompetitionsByPopularity', () => {
   it('matches substrings case-insensitively, so the feed\'s own casing never matters', () => {
     expect(competitionPopularityRank('english premier league')).toBeLessThan(competitionPopularityRank('Allsvenskan'))
     expect(competitionPopularityRank('nba summer league')).toBeLessThan(100)
+  })
+})
+
+describe('fixture group filters', () => {
+  const groups = [
+    { league: 'Premier League', country: 'England', fixtures: [{} as never, {} as never, {} as never] },
+    { league: 'Championship', country: 'England', fixtures: [{} as never] },
+    { league: 'La Liga', country: 'Spain', fixtures: [{} as never, {} as never] },
+    { league: 'Serie A', country: '', fixtures: [{} as never] }
+  ]
+
+  it('lists countries most-populated first, with the countryless filed under Other', () => {
+    expect(uniqueGroupCountries(groups)).toEqual(['England', 'Spain', 'Other'])
+  })
+
+  it('narrows the league list to the chosen country, most fixtures first', () => {
+    expect(leaguesInCountry(groups, 'England')).toEqual(['Premier League', 'Championship'])
+    expect(leaguesInCountry(groups, '')).toEqual(['Premier League', 'La Liga', 'Championship', 'Serie A'])
+  })
+
+  it('filters by country, by league, and by both together', () => {
+    expect(filterGroupsBy(groups, { country: 'England', league: '' }).map((g) => g.league)).toEqual(['Premier League', 'Championship'])
+    expect(filterGroupsBy(groups, { country: '', league: 'La Liga' }).map((g) => g.league)).toEqual(['La Liga'])
+    expect(filterGroupsBy(groups, { country: 'England', league: 'Championship' }).map((g) => g.league)).toEqual(['Championship'])
+    expect(filterGroupsBy(groups, { country: 'Spain', league: 'Championship' })).toEqual([])
+    // The countryless group is reachable through the Other bucket.
+    expect(filterGroupsBy(groups, { country: 'Other', league: '' }).map((g) => g.league)).toEqual(['Serie A'])
   })
 })

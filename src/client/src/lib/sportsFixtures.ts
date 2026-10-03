@@ -173,6 +173,42 @@ export function competitionPopularityRank(leagueName: string): number {
   return POPULAR_COMPETITIONS.length
 }
 
+/** A group as the fixtures pane builds them: one competition, its country, its fixtures. */
+export interface FixtureGroup {
+  league: string
+  country: string
+  fixtures: ApiFootballFixture[]
+}
+
+/** The distinct countries across the day's groups, most-populated first (the busy countries rise). */
+export function uniqueGroupCountries(groups: FixtureGroup[]): string[] {
+  const counts = new Map<string, number>()
+  for (const group of groups) {
+    const key = group.country || 'Other'
+    counts.set(key, (counts.get(key) ?? 0) + group.fixtures.length)
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([c]) => c)
+}
+
+/** The leagues within one country, most-fixtures first — picking a country narrows the league list. */
+export function leaguesInCountry(groups: FixtureGroup[], country: string | ''): string[] {
+  const counts = new Map<string, number>()
+  for (const group of groups) {
+    if (country && (group.country || 'Other') !== country) continue
+    counts.set(group.league, (counts.get(group.league) ?? 0) + group.fixtures.length)
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([l]) => l)
+}
+
+/** The operator's ask (2026-10-03): "filter by country/league, there are too many rows." */
+export function filterGroupsBy(groups: FixtureGroup[], filter: { country: string | ''; league: string | '' }): FixtureGroup[] {
+  return groups.filter((group) => {
+    if (filter.country && (group.country || 'Other') !== filter.country) return false
+    if (filter.league && group.league !== filter.league) return false
+    return true
+  })
+}
+
 /**
  * The fixtures pane's competition ordering: popular tiers first (in the table's order), then
  * everything else, alphabetical within each tier — stable between days, and a competition whose

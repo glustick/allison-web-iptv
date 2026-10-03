@@ -6,6 +6,12 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.70.0 — the fixtures pane filters by country and league)
+
+A Country → League filter row on the Sports tab's fixtures pane — countries by fixture count, the
+league list narrowed to the chosen country, remembered per device, with Clear and an honest
+no-match message. 765 tests, typecheck, lint and the client build clean.
+
 ## Current state (v0.69.1 — autoplay is the answer to a load race)
 
 The audio carrier carries autoplay now — the browser starts it the moment media is ready, immune to

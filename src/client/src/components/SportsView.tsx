@@ -23,7 +23,7 @@ import {
   matchFixturesToGames,
   type ApiFootballFixture,
   compareCompetitionsByPopularity
-} from '../lib/sportsFixtures'
+, filterGroupsBy, leaguesInCountry, uniqueGroupCountries } from '../lib/sportsFixtures'
 import { fetchSportsCatalogue } from '../lib/sportsCatalogue'
 import { parseCollapsedGroups, serializeCollapsedGroups, toggleCollapsedGroup } from '../lib/sportsGroups'
 import type { Category, LiveStream } from '../lib/types'
@@ -348,6 +348,24 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
 
   // A day's fixtures, for the scores. Five minutes matches the feed's own refetch cadence, which is
   // what keeps a live score honest without spending a free-tier quota on every render.
+  // The pane's country/league filter (the operator's ask, 2026-10-03: "there are too many rows to
+  // look through"). Remembered per device alongside the collapsed-group choice.
+  const FILTERS_KEY = 'allison-web-iptv:sports-fixture-filters'
+  const [countryFilter, setCountryFilter] = useState<string>('')
+  const [leagueFilter, setLeagueFilter] = useState<string>('')
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(FILTERS_KEY) ?? '{}') as { country?: unknown; league?: unknown }
+      if (typeof saved.country === 'string') setCountryFilter(saved.country)
+      if (typeof saved.league === 'string') setLeagueFilter(saved.league)
+    } catch { /* a filter is never worth failing a render over */ }
+  }, [])
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FILTERS_KEY, JSON.stringify({ country: countryFilter, league: leagueFilter }))
+    } catch { /* see above */ }
+  }, [countryFilter, leagueFilter])
+
   useEffect(() => {
     if (!keySet) return
     let cancelled = false
@@ -468,6 +486,10 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
     // Popular competitions lead (see compareCompetitionsByPopularity); the rest follow alphabetically.
     return groups.sort((a, b) => compareCompetitionsByPopularity(a.league, b.league))
   }, [sportFixturesForDay])
+  const displayedApiGroups = useMemo(
+    () => filterGroupsBy(apiGroups, { country: countryFilter, league: leagueFilter }),
+    [apiGroups, countryFilter, leagueFilter]
+  )
 
   const selectedGameKey = selection?.kind === 'game' ? selection.key : null
   const selectedFixtureId = selection?.kind === 'fixture' ? selection.id : null
@@ -624,12 +646,57 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                 </span>
               </div>
 
+              {apiMode && uniqueGroupCountries(apiGroups).length > 1 && (
+                <div className="sports-col-head" style={{ gap: 8, padding: '0 8px' }}>
+                  <select
+                    className="prefs-select"
+                    value={countryFilter}
+                    onChange={(e) => {
+                      setCountryFilter(e.target.value)
+                      setLeagueFilter('')
+                    }}
+                    aria-label="Filter by country"
+                    style={{ maxWidth: 140 }}
+                  >
+                    <option value="">All countries</option>
+                    {uniqueGroupCountries(apiGroups).map((country) => (
+                      <option key={country} value={country}>{country}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="prefs-select"
+                    value={leagueFilter}
+                    onChange={(e) => setLeagueFilter(e.target.value)}
+                    aria-label="Filter by league"
+                    style={{ maxWidth: 200 }}
+                  >
+                    <option value="">All leagues</option>
+                    {leaguesInCountry(apiGroups, countryFilter).map((league) => (
+                      <option key={league} value={league}>{league}</option>
+                    ))}
+                  </select>
+                  {(countryFilter || leagueFilter) && (
+                    <button
+                      type="button"
+                      className="admin-small-btn"
+                      onClick={() => {
+                        setCountryFilter('')
+                        setLeagueFilter('')
+                      }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              )}
+
               <div className="sports-list">
                 {apiMode
-                  ? apiGroups.length === 0 && (
+                  ? displayedApiGroups.length === 0 && (
                       <div className="sports-empty">
-                        No {selectedSport?.label.toLowerCase() ?? 'sporting'} fixtures on{' '}
-                        {formatDayLabel(dayKey).toLowerCase()}.
+                        {(countryFilter || leagueFilter)
+                          ? `No fixtures match ${[countryFilter, leagueFilter].filter(Boolean).join(' / ')}.`
+                          : `No ${selectedSport?.label.toLowerCase() ?? 'sporting'} fixtures on ${formatDayLabel(dayKey).toLowerCase()}.`}
                       </div>
                     )
                   : dayGames.length === 0 &&
@@ -644,7 +711,7 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
                     channel buckets. Each fixture pairs to the provider row carrying it, so
                     selecting one leads to its channels. */}
                 {apiMode &&
-                  apiGroups.map((group, index) => (
+                  displayedApiGroups.map((group, index) => (
                     <LeagueGroup
                       key={group.league}
                       id={`api-league-${group.league}`}
