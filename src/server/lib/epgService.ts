@@ -1,3 +1,5 @@
+import { createReadStream } from 'fs'
+import { StringDecoder } from 'string_decoder'
 import { fetchTextViaUpstream } from './upstreamText.js'
 import type { ServerResponse } from 'http'
 import { createNodeUpstreamRequest } from './nodeUpstreamRequest.js'
@@ -9,8 +11,9 @@ import {
   type MatchStrategy,
   type StreamForMatching
 } from './epgMatching.js'
-import { parseXmltv, type XmltvGuide, type XmltvProgramme } from './xmltv.js'
-import { dropCachedGuide, loadCachedGuide, saveCachedGuide } from './epgCache.js'
+import type { XmltvGuide, XmltvProgramme } from './xmltv.js'
+import { createXmltvStreamParser } from './xmltvStream.js'
+import { dropCachedGuide, saveCachedGuide, statCachedGuide } from './epgCache.js'
 
 // Server-side EPG aggregation. The EPG used to be assembled entirely in the browser: one bulk
 // ~98MB xmltv.php download per session (repeated per tab remount), joined to channels by exact
@@ -217,12 +220,63 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     url: string,
     onProgress?: (receivedBytes: number, totalBytes: number | null) => void
   ): Promise<{ guide: XmltvGuide; text: string }> {
-    return fetchTextViaUpstream(createUpstreamRequest, url, guideStallTimeoutMs, guideStallCheckIntervalMs, undefined, onProgress).then((xml) => ({
-      guide: parseXmltv(xml, { now: now() }),
+    return fetchTextViaUpstream(createUpstreamRequest, url, guideStallTimeoutMs, guideStallCheckIntervalMs, undefined, onProgress).then(async (xml) => ({
+      // Queued with hydration: the nightly warm fetches every source at once, and even a
+      // streaming parse holds one guide's retained data — one at a time is the peak.
+      guide: await queueParse(() => parseXmltvText(xml)),
       // The bytes are kept so the guide can be cached on disk as well as in memory — see
       // epgCache.ts for why a restart must not re-download a 168 MB guide.
       text: xml
     }))
+  }
+
+  /**
+   * The streaming parser over text that is already fully in memory (the fetch path), fed in
+   * slices so the parser's working buffer stays small. Replaces the DOM parse, whose footprint
+   * for a single ~170MB guide measured ~1.3GB on this repo's rig — the deployment's guide set
+   * grew past that, and every parse was an OOM (see xmltvStream.ts).
+   */
+  function parseXmltvText(xml: string): XmltvGuide {
+    const parser = createXmltvStreamParser({ now: now() })
+    const SLICE = 4 * 1024 * 1024
+    for (let i = 0; i < xml.length; i += SLICE) parser.write(xml.slice(i, i + SLICE))
+    return parser.end()
+  }
+
+  /** One parse at a time across all sources: the peak is one guide's retained data plus a
+   *  small scanner buffer, never three concurrent builds. */
+  let parseChain: Promise<unknown> = Promise.resolve()
+  function queueParse<T>(job: () => T | Promise<T>): Promise<T> {
+    const run = parseChain.then(async () => await job(), async () => await job())
+    parseChain = run.catch(() => {})
+    return run
+  }
+
+  /** Streams the cached guide file through the parser — no point in the document's life is it
+   *  held in memory whole. Returns the guide, or rethrows whatever the parser threw. */
+  function parseGuideFile(path: string): Promise<XmltvGuide> {
+    const parser = createXmltvStreamParser({ now: now() })
+    const decoder = new StringDecoder('utf8')
+    return new Promise<XmltvGuide>((resolve, reject) => {
+      const stream = createReadStream(path, { highWaterMark: 1 << 20 })
+      stream.on('data', (chunk: Buffer | string) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        try {
+          parser.write(decoder.write(buf))
+        } catch (err) {
+          stream.destroy()
+          reject(err instanceof Error ? err : new Error(String(err)))
+        }
+      })
+      stream.on('end', () => {
+        try {
+          resolve(parser.end())
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)))
+        }
+      })
+      stream.on('error', reject)
+    })
   }
 
   /**
@@ -232,11 +286,17 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
    */
   async function hydrateGuideFromDisk(url: string): Promise<GuideCacheEntry | null> {
     if (!dataDir || hydrationBlocked.has(url)) return null
-    const cached = await loadCachedGuide(dataDir, url, guideTtlMs)
+    const cached = await statCachedGuide(dataDir, url, guideTtlMs)
     if (!cached) return null
     try {
+      // Queued + streamed: the old shape read the file to a string and DOM-parsed it, whose
+      // ~1.3GB-per-guide spike (measured on this repo's rig for a 195MB guide) is what OOM'd
+      // the deployment once its guide set grew to ~400MB — every restart re-hydrated on first
+      // need and died. The stream parser holds a small buffer; queueParse keeps concurrent
+      // source hydrations from stacking their retained guides during the parse phase.
+      const guide = await queueParse(() => parseGuideFile(cached.path))
       const entry: GuideCacheEntry = {
-        guide: parseXmltv(cached.text, { now: now() }),
+        guide,
         status: 'ok',
         fetchedAt: cached.fetchedAt,
         fetchPromise: null,

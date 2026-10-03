@@ -6,6 +6,20 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.73.0 — the guide parse that OOM'd the server, streamed instead)
+
+The deployment's container crash-looped with V8's "Ineffective mark-compacts near heap limit …
+JavaScript out of memory": the guide set had grown to ~400MB of XMLTV across three sources, and
+the DOM parse fast-xml-parser performs costs ~1.3GB of heap **per 195MB guide** (measured on this
+repo's rig) — every restart, the first EPG request re-hydrated the cached guides, the concurrent
+parses stacked past the heap limit, and the retry backoff turned one death into a loop. A new
+streaming parser (`lib/xmltvStream.ts`) produces byte-identical guides (a parity corpus and an
+every-byte-offset chunk-split torture test pin it) while holding only a small scanner buffer plus
+the retained — already pruned — guide; hydration now streams the cache file rather than reading
+it whole, and parses are serialized across sources so peaks cannot stack. The rig hydrates the
+same 195MB guide at **566MB flat** where the DOM spiked 1,271MB. 796 tests, typecheck, lint and
+the build clean.
+
 ## Current state (v0.72.1 — the backup portal, reachable from the running app)
 
 The operator asked *where* the backup portal is configured — and the honest answer exposed a

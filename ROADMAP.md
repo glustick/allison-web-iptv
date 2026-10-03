@@ -15,6 +15,28 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.73.0 — the guide parse that OOM'd the server.** The operator's container crash-looped with
+V8's `Ineffective mark-compacts near heap limit allocation failed - JavaScript out of memory`.
+Diagnosis from the NAS: the app process 7 minutes old at 1.6GB RSS climbing ~1.3MB/s, and 417MB
+of EPG XML across three cached sources (they had grown past the ~168MB the code comments still
+assumed). The mechanism, confirmed by direct measurement on this repo's rig: `parseXmltv` runs
+fast-xml-parser's DOM build over the whole document — a 195MB guide costs **1,271MB of heap**
+thrown away the moment the slim pruned guide is built — and hydration parses every cached source
+on the first EPG request after a restart, concurrently. Three grown guides stacked past the heap
+limit; the fetch-retry backoff re-armed the death after every restart: a crash loop with no user
+in the room. The fix is a hand-rolled **streaming XMLTV parser** (`lib/xmltvStream.ts`): the same
+output as the DOM path (a parity corpus across nine guide shapes, plus a torture test splitting
+the document at **every byte offset** — which caught a real bug, a close tag arriving across a
+chunk boundary being eaten as body text), a small constant scanner buffer, and two deliberate
+improvements (multi-`<title>`/multi-`<icon>` now keep the first instead of falling to
+Untitled/undefined). `epgService` streams the cache file through it instead of reading the text
+whole (`statCachedGuide` added to `epgCache.ts` for the freshness check without the read), and a
+cross-source parse queue keeps concurrent hydrations from stacking their peaks. Rig proof: the
+195MB cached guide hydrates to `ok — 1200 channels, 187,200 programmes` at **566MB flat RSS**
+against the DOM's 1,271MB spike. This was a pre-existing limit crossed by guide growth, not a
+regression — but the streaming parser also makes the nightly warm and every restart cheaper.
+796 tests (17 new).
+
 **v0.72.0 — the backup portal: a reserve URL the app fails over to by itself.** The operator
 asked for *"a new backup URL for the playlist … as an options configuration"*, naming the
 provider's reserve portal (`reserve.primeprox.store` in their case — the same panel and

@@ -43,7 +43,7 @@ const MAX_DESCRIPTION_CHARS = 600
  * and whitespace collapsed, and the result is capped — a 3-hour grid window shouldn't ship
  * hundreds of kilobytes of someone's HTML.
  */
-function cleanText(raw: string, limit: number): string {
+export function cleanText(raw: string, limit: number): string {
   const stripped = raw
     // CDATA wrappers first (raw stop-node content is not unwrapped by the parser), then tags.
     .replace(/<!\[CDATA\[/g, ' ')
@@ -95,8 +95,8 @@ export function parseXmltvDate(value: string): number {
 // guide is ~98MB of XML whose parsed form would otherwise sit in server memory by the hundreds
 // of megabytes on a NAS. 24h back / 72h forward comfortably covers grid navigation while
 // typically discarding most of the payload.
-const PRUNE_PAST_MS = 24 * 3_600_000
-const PRUNE_FUTURE_MS = 72 * 3_600_000
+export const PRUNE_PAST_MS = 24 * 3_600_000
+export const PRUNE_FUTURE_MS = 72 * 3_600_000
 
 // A guide's free-text leaves are kept raw rather than parsed: external sources routinely embed
 // raw, unCDATA'd HTML there, which is what produced "Maximum nested tags exceeded" on real

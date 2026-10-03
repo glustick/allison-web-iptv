@@ -38,6 +38,36 @@ function isFresh(fetchedAt: number, maxAgeMs: number, now: number): boolean {
   return Number.isFinite(fetchedAt) && now - fetchedAt < maxAgeMs
 }
 
+export interface CachedGuideStat {
+  path: string
+  /** When it was fetched (the file's mtime). */
+  fetchedAt: number
+}
+
+/**
+ * The cached guide's location and age, WITHOUT reading its bytes — what makes a streaming
+ * hydration possible (xmltvStream.ts) on a guide too large to hold in memory even transiently.
+ * Same freshness rule and same silence about a missing file as loadCachedGuide.
+ */
+export async function statCachedGuide(
+  dataDir: string,
+  url: string,
+  maxAgeMs: number,
+  now: number = Date.now()
+): Promise<CachedGuideStat | null> {
+  const path = cachePath(dataDir, url)
+  try {
+    const stats = await stat(path)
+    if (!isFresh(stats.mtimeMs, maxAgeMs, now)) return null
+    return { path, fetchedAt: stats.mtimeMs }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.error('[epg] could not stat the cached guide:', err instanceof Error ? err.message : err)
+    }
+    return null
+  }
+}
+
 /** The cached guide for a URL, or null when there is none or it is older than `maxAgeMs`. */
 export async function loadCachedGuide(
   dataDir: string,
