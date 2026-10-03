@@ -28,6 +28,7 @@ function formatBytesShort(bytes: number): string {
 }
 
 import { sourceLabel } from '../lib/sourceLabel'
+import { fetchIptvConfig, saveIptvConfig } from '../lib/appAuth'
 import { DecoderCheck } from './DecoderCheck'
 import { ClientDecodeLoop } from './ClientDecodeLoop'
 export function SystemPanel(): JSX.Element {
@@ -36,6 +37,12 @@ export function SystemPanel(): JSX.Element {
   const [note, setNote] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [presetId, setPresetId] = useState(EPG_PRESETS[0]?.id ?? '')
+  // The provider connection editor: the only place a WORKING account can change its provider
+  // config without waiting for a connect failure to surface the setup screen. The backup
+  // portal lives here (v0.72.0) — unreachable anywhere else while the primary is healthy,
+  // which the operator found by asking where it was configured.
+  const [config, setConfig] = useState<{ server: string; backupServer: string; username: string } | null>(null)
+  const [savingConnection, setSavingConnection] = useState(false)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -51,6 +58,36 @@ export function SystemPanel(): JSX.Element {
     const timer = window.setInterval(() => void refresh(), 15000)
     return () => window.clearInterval(timer)
   }, [refresh])
+
+  // The saved provider config, read once for the editor's prefill. Null (no config) means the
+  // editor renders nothing — the Reachable row above already says why.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const saved = await fetchIptvConfig()
+        if (saved) setConfig({ server: saved.server, backupServer: saved.backupServer ?? '', username: saved.username })
+      } catch {
+        // The editor just stays hidden — the health table already reports the config state.
+      }
+    })()
+  }, [])
+
+  async function handleConnectionSave(e: React.FormEvent): Promise<void> {
+    e.preventDefault()
+    if (!config) return
+    setSavingConnection(true)
+    setNote(null)
+    try {
+      // Password is deliberately not editable here: blank means "keep the stored one", so the
+      // form never needs the provider password to arm the backup portal.
+      await saveIptvConfig({ server: config.server.trim(), backupServer: config.backupServer.trim(), username: config.username.trim(), password: '' })
+      setNote(config.backupServer.trim() ? 'Connection saved — the backup portal is armed.' : 'Connection saved.')
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : 'Could not save the connection')
+    } finally {
+      setSavingConnection(false)
+    }
+  }
 
   async function handleReindex(): Promise<void> {
     setBusy(true)
@@ -205,6 +242,29 @@ export function SystemPanel(): JSX.Element {
             </tbody>
           </table>
         </div>
+        {config && (
+          <form className="epg-form" onSubmit={(e) => void handleConnectionSave(e)}>
+            <label>
+              Provider server URL
+              <input value={config.server} onChange={(e) => setConfig({ ...config, server: e.target.value })} required />
+            </label>
+            <label>
+              Backup portal URL — optional
+              <input
+                value={config.backupServer}
+                onChange={(e) => setConfig({ ...config, backupServer: e.target.value })}
+                placeholder="https://reserve.example.com — used automatically when the primary is down; blank clears it"
+              />
+            </label>
+            <label>
+              Provider username
+              <input value={config.username} onChange={(e) => setConfig({ ...config, username: e.target.value })} required />
+            </label>
+            <button type="submit" className="admin-small-btn" disabled={savingConnection}>
+              {savingConnection ? 'Saving…' : 'Save connection'}
+            </button>
+          </form>
+        )}
       </section>
 
       <section className="admin-section">

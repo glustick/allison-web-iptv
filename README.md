@@ -6,6 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.72.1 — the backup portal, reachable from the running app)
+
+The operator asked *where* the backup portal is configured — and the honest answer exposed a
+gap: the field only lived on the IPTV setup screen, which a working account never sees (it
+appears when no provider is configured or auto-connect fails). System → Provider now carries an
+editable connection form — server URL, **backup portal URL**, username — that saves through the
+same encrypted credentials store, with the provider password deliberately left out (blank means
+"keep the stored one", so arming the backup never needs it). 779 tests, typecheck, lint and the
+build clean.
+
 ## Current state (v0.72.0 — the backup portal, failed over to automatically)
 
 An optional **Backup portal URL** on the IPTV setup screen (stored encrypted with the account's

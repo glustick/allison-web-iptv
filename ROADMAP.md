@@ -37,7 +37,12 @@ fetches that bypass the proxy keep their own paths. Verified three ways: 12 new 
 pure cooldown logic; wire-level failover on a refused primary, on 5xx, the cooldown skipping
 the dead primary, the recovery path when the backup fails in its turn, the override and
 no-backup cases), and on the live rig — primary killed, first request fails over with the
-warning naming both hosts, second request rides the cooldown. 779 tests.
+warning naming both hosts, second request rides the cooldown. 779 tests. **Follow-up (v0.72.1), found by the
+operator's own first question — "where is the backup configured?": the field was unreachable for
+a working account** (the setup screen only renders when no provider is configured or auto-connect
+fails), so System → Provider now carries an editable connection form (server, backup portal,
+username; the provider password is never needed — blank keeps the stored one) reading and writing
+the same endpoints.
 
 **v0.71.0 — the audio was dying at the init segment, twice over.** The operator's report — the
 error had *changed*: "the audio stream failed — the picture continues without it" — was the
