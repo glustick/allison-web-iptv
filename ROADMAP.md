@@ -15,6 +15,33 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.74.0 — "this channel isn't broadcasting", said honestly.** Two open items from the
+reliability theme, both carried since 2026-09-22, both closed with rig proofs. **(1) The
+non-advancing-playlist detector.** The provider's placeholder channels answer every reload
+with 200 and the same media window forever; hls.js never errors, the buffer drains flat, and
+the ladder burned reloads and one of the account's two provider connections per attempt before
+ending on a misleading "stopped responding". `lib/playlistStall.ts` (pure, clock-injected,
+7 tests) classifies a window by identity: the same (startSN, endSN) on four consecutive *live*
+reload events spanning 30s is frozen — slow providers are tolerated by the span, VOD never
+qualifies, and any window movement resets the count. LivePlayer feeds it on LEVEL_UPDATED and
+declares only when the playhead has drained to the buffer's end while unpaused: one sentence
+("This channel does not appear to be broadcasting right now — its playlist has not advanced
+for 30 seconds. Automatic retries are paused to spare the provider connection"), the ladder
+stood down (`gaveUp`), the element paused, and a producing session stopped outright — the
+provider connection is the scarce resource the message exists to protect. Rig-proven
+end-to-end: playback ran clean, the source playlist froze at t=50s, the buffer drained, and
+the declaration fired at t=85s with zero ladder action after. **(2) The dead session, named
+and capped.** The existing session replacement on network-retry exhaustion (killing ffmpeg
+produces exactly five levelLoadErrors — the measured shape) was silent: `setError(null)` and a
+swap, so the viewer saw an unexplained freeze, and a provider dropping a channel looped it
+forever. The replacement now shows a transient status line ("The stream session ended —
+restarting it…", a new `statusNotice` state distinct from `error`, self-clearing on the next
+FRAG_BUFFERED) and counts replacements per run: the third is terminal — "The stream session
+keeps ending — the provider appears to be dropping this channel." Rig-proven: the session
+ffmpeg killed mid-play → five levelLoadErrors → the notice → playback resumed five seconds
+later. The WebCodecs engine already carried its own stagnation detection (v0.62.0) and is
+untouched. 803 tests (7 new).
+
 **v0.73.0 — the guide parse that OOM'd the server.** The operator's container crash-looped with
 V8's `Ineffective mark-compacts near heap limit allocation failed - JavaScript out of memory`.
 Diagnosis from the NAS: the app process 7 minutes old at 1.6GB RSS climbing ~1.3MB/s, and 417MB

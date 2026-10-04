@@ -19,6 +19,7 @@ import { probeStreamTracks } from '../lib/audioTrackProbe'
 import { canDecodeVideoCodec, needsStreamCopyRemux } from '../lib/videoCapability'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
+import { createPlaylistStallTracker } from '../lib/playlistStall'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
 import { MediaStats } from './MediaStats'
@@ -80,6 +81,10 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // A transient, self-clearing line for events the player handles on its own (a dead session
+  // being replaced mid-view) — distinct from `error`, which always wants a Retry. Cleared the
+  // moment fragments flow again.
+  const [statusNotice, setStatusNotice] = useState<string | null>(null)
   // The media stats panel (operator's request, 2026-09-22): what engine is running, what the stream
   // is, and what this browser can do. Closed by default; it needs nothing the probe has not already
   // learned about the stream.
@@ -233,6 +238,13 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     let kicksSinceLastFragment = 0
     let gaveUp = false
     const runStartedAt = Date.now()
+    // "This channel isn't broadcasting": a live playlist whose window never changes across
+    // reloads (the provider's placeholder/off-air shape — measured 2026-09-22) answers 200
+    // forever while the buffer drains. Declared once per run; see lib/playlistStall.ts.
+    const playlistStall = createPlaylistStallTracker()
+    // How many dead sessions this run has already replaced silently — three is a provider
+    // dropping the channel, not a blip, and deserves the terminal sentence instead of a loop.
+    let sessionReplacements = 0
     // The effect closure would otherwise keep the `error` state from this render forever — the
     // watchdog needs to see fatal give-ups that happen later in this same effect's lifetime.
     let fatalErrorShown = false
@@ -414,11 +426,40 @@ let stallCount = 0
       instance.attachMedia(video)
       instance.on(Hls.Events.FRAG_BUFFERED, () => {
         noteFragmentActivity()
+        setStatusNotice(null)
         // Fragments are arriving and the session is still on the direct source, so this is the last
         // known *working* config for the channel — the other half of what the plan records
         // (lib/transcodeHints.ts, 2026-09-28). A later fallback reports its own outcome, which replaces
         // this, so an over-eager note here is corrected rather than left standing.
         if (getSourceUrl(url) === url) noteStreamPlaysDirectly(url)
+      })
+      // The not-broadcasting detector (see playlistStall above). Only a *starved* frozen window
+      // counts: a window can sit still while the viewer still has buffer to play through, and
+      // only when the playhead has drained to the buffer's end does a frozen window mean "no
+      // signal". Declaring pauses the ladder and frees the provider connection instead of
+      // spending reloads and connections on a channel with nothing to deliver.
+      instance.on(Hls.Events.LEVEL_UPDATED, (_event, data) => {
+        const details = data.details
+        if (!details || gaveUp || fatalErrorShown) return
+        const stalled = playlistStall.sample({
+          at: Date.now(),
+          live: details.live,
+          startSN: details.startSN,
+          endSN: details.endSN
+        })
+        if (!stalled) return
+        if (video.paused || !isPlayheadAtBufferEnd(video)) return
+        gaveUp = true
+        console.warn(
+          `[player] playlist window frozen at ${details.startSN}-${details.endSN} — declaring the channel not broadcasting`
+        )
+        if (hasSession()) reset()
+        instance.destroy()
+        video.pause()
+        setError(
+          'This channel does not appear to be broadcasting right now — its playlist has not advanced for 30 seconds. ' +
+            'Automatic retries are paused to spare the provider connection; press Retry to check again.'
+        )
       })
       instance.on(Hls.Events.MANIFEST_PARSED, () => {
         // Proactive rather than waiting for an error that may never come: if the stream's audio
@@ -541,8 +582,24 @@ let stallCount = 0
               // erroring — the same move the recovery ladder makes, taken at the moment of
               // failure rather than three watchdog cycles later.
               if (hasSession()) {
-                console.warn('[player] transcode session failed its network retries; replacing the session')
+                sessionReplacements += 1
+                console.warn(
+                  `[player] transcode session failed its network retries; replacing the session (${sessionReplacements} this run)`
+                )
+                if (sessionReplacements > 2) {
+                  // Three dead sessions inside one run of one channel is the provider dropping
+                  // the channel, not a blip each time — say so instead of looping restarts
+                  // (each restart spends a provider connection and a viewer-visible freeze).
+                  fatalErrorShown = true
+                  instance.destroy()
+                  reset()
+                  setError(
+                    'The stream session keeps ending — the provider appears to be dropping this channel. Press Retry to try again.'
+                  )
+                  break
+                }
                 setError(null)
+                setStatusNotice('The stream session ended — restarting it…')
                 instance.destroy()
                 restartFallback(
                   url,
@@ -873,6 +930,11 @@ let stallCount = 0
           <button type="button" className="admin-small-btn" onClick={() => void retryPlayback()}>
             Retry
           </button>
+        </div>
+      )}
+      {!sessionExpired && !error && statusNotice && (
+        <div className="player-error" role="status">
+          <span>{statusNotice}</span>
         </div>
       )}
     </div>

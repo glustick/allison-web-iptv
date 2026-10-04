@@ -6,6 +6,23 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.74.0 — "this channel isn't broadcasting", said honestly)
+
+Two open roadmap items closed, both proven end-to-end on the rig. **The not-broadcasting
+detector** (`lib/playlistStall.ts`, pure): the provider's placeholder/off-air shape serves a
+live playlist whose window never changes — every reload answers 200 while the buffer drains,
+and the recovery ladder used to spend its whole budget (source reloads, engine switches, a
+provider connection per attempt) on a channel with no signal. A frozen window (same sequence
+numbers on 4 consecutive live reloads spanning 30s) with the playhead drained now declares
+once per run: one honest sentence, retries paused, the transcode session stopped to free the
+connection. Rig-proven: playback → freeze → message 35s later, ladder silent. **The dead
+session, named**: a session whose ffmpeg dies (playlist 404s → five levelLoadErrors, the
+measured shape) is replaced as before — but now with a visible "The stream session ended —
+restarting it…" line that clears itself when fragments flow again, and a cap: three
+replacements in one run of one channel is the provider dropping it, and says so instead of
+looping. Rig-proven: ffmpeg killed mid-play → notice at the retries' exhaustion → playback
+resumed 5s later. 803 tests, typecheck, lint and the build clean.
+
 ## Current state (v0.73.0 — the guide parse that OOM'd the server, streamed instead)
 
 The deployment's container crash-looped with V8's "Ineffective mark-compacts near heap limit …
