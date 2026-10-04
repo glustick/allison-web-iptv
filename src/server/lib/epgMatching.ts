@@ -44,7 +44,9 @@ export interface GuideIndexes {
   signatures: Map<string, { tokens: string[]; first: string }>
 }
 
-export type MatchStrategy = 'exact-id' | 'normalized-id' | 'exact-name' | 'fuzzy-name'
+export type MatchStrategy = 'exact-id' | 'normalized-id' | 'exact-name' | 'fuzzy-name' | 'manual'
+// 'manual' is produced by epgService's override layer (v0.76.0), not by the matcher itself —
+// declared here so every consumer's strategy accounting stays one type.
 
 export interface MatchResult {
   channelId: string | null

@@ -44,6 +44,7 @@ import { readSuppliedSportsKey } from './lib/sportsKeySource.js'
 import { createChannelPlansStore } from './lib/channelPlans.js'
 import { dropCachedGuide } from './lib/epgCache.js'
 import { createPrefsStore, PrefsError } from './lib/prefsStore.js'
+import { createGuideMappingsStore } from './lib/guideMappings.js'
 import { createSearchService } from './lib/searchService.js'
 import { captureErrors, recentErrors, fileStats, formatBytes } from './lib/diagnostics.js'
 import { createRateLimiter } from './lib/rateLimit.js'
@@ -346,7 +347,8 @@ const transcodeService = createTranscodeService({
 // missed.
 const systemSettings = createSystemSettingsStore({ dataDir: DATA_DIR })
 const systemEpgStore = createSystemEpgStore({ dataDir: DATA_DIR, settings: systemSettings })
-const epgService = createEpgService({ dataDir: DATA_DIR })
+const guideMappingsStore = createGuideMappingsStore({ dataDir: DATA_DIR })
+const epgService = createEpgService({ dataDir: DATA_DIR, manualMappings: guideMappingsStore })
 const sportsCatalogue = createSportsCatalogueService({ dataDir: DATA_DIR })
 const channelPlans = createChannelPlansStore({ dataDir: DATA_DIR })
 // One-time migration: guide sources and the api-football key used to live on each account. If the
@@ -2189,6 +2191,95 @@ app.get('/api/epg/status', requireAuth, (req, res) => {
       res.status(502).json({ error: err instanceof Error ? err.message : 'EPG status failed' })
     }
   })()
+})
+
+// -- Manual channel→guide mappings (v0.76.0) ----------------------------------------------
+// The operator's override for channels the conservative matcher cannot resolve ("BBC One HD
+// London" against a guide that lists "BBC One HD"). Manual mappings win over every automatic
+// tier inside epgService; these three endpoints are the UI's whole surface for them.
+
+app.get('/api/epg/mappings/:streamId', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
+    const streamId = Number(req.params.streamId)
+    if (!Number.isInteger(streamId) || streamId < 0) {
+      res.status(400).json({ error: 'Invalid stream id' })
+      return
+    }
+    try {
+      const credentials = resolveEpgCredentials(req)
+      if (!credentials) {
+        res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+        return
+      }
+      // mappingPickerData is async (it may hydrate guides from disk) — awaiting it matters:
+      // spreading an unawaited Promise into res.json() silently yields an empty object.
+      const picker = await epgService.mappingPickerData({
+        credentials,
+        epgUrls: credentials.epgUrls ?? [],
+        streamId
+      })
+      res.json({ ok: true, ...picker, mappingsInUse: guideMappingsStore.list(credentials.username).length })
+    } catch (err) {
+      console.error('[epg] mapping picker failed:', err)
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Could not load the mapping picker' })
+    }
+  })()
+})
+
+app.post('/api/epg/mappings/:streamId', requireAuth, (req, res) => {
+  const streamId = Number(req.params.streamId)
+  if (!Number.isInteger(streamId) || streamId < 0) {
+    res.status(400).json({ error: 'Invalid stream id' })
+    return
+  }
+  const guideChannelId = typeof req.body?.guideChannelId === 'string' ? req.body.guideChannelId.trim() : ''
+  const guideChannelName = typeof req.body?.guideChannelName === 'string' ? req.body.guideChannelName.trim() : ''
+  if (guideChannelId.length === 0 || guideChannelId.length > 300 || guideChannelName.length > 300) {
+    res.status(400).json({ error: 'guideChannelId is required (max 300 chars); guideChannelName is optional' })
+    return
+  }
+  try {
+    // The owner is the PROVIDER username, not the app account: stream ids are provider-scoped,
+    // and epgService's matcher (and its cache) resolve mappings by the same identity — the
+    // household's app account and its provider account are deliberately kept apart here.
+    const credentials = resolveEpgCredentials(req)
+    if (!credentials) {
+      res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+      return
+    }
+    const mapping = guideMappingsStore.set(credentials.username, {
+      streamId,
+      // The channel's own name is denormalised for display; the client supplies it because the
+      // server's channel list may not carry this stream at mapping time. A missing name falls
+      // back to the id — the row stays legible either way.
+      channelName: typeof req.body?.channelName === 'string' && req.body.channelName.trim() ? req.body.channelName.trim().slice(0, 200) : guideChannelId,
+      guideChannelId,
+      guideChannelName: guideChannelName || guideChannelId
+    })
+    res.json({ ok: true, mapping })
+  } catch (err) {
+    console.error('[epg] mapping set failed:', err)
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Could not save the mapping' })
+  }
+})
+
+app.delete('/api/epg/mappings/:streamId', requireAuth, (req, res) => {
+  const streamId = Number(req.params.streamId)
+  if (!Number.isInteger(streamId) || streamId < 0) {
+    res.status(400).json({ error: 'Invalid stream id' })
+    return
+  }
+  try {
+    const credentials = resolveEpgCredentials(req)
+    if (!credentials) {
+      res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+      return
+    }
+    res.json({ ok: true, removed: guideMappingsStore.clear(credentials.username, streamId) })
+  } catch (err) {
+    console.error('[epg] mapping clear failed:', err)
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Could not clear the mapping' })
+  }
 })
 
 // Points the proxy at a (possibly different) Xtream server — the web equivalent of the

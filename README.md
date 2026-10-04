@@ -6,6 +6,19 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.76.0 — map a channel to its guide, by hand)
+
+The matching layer's conservatism has a release valve: a channel the matcher cannot resolve
+("BBC One HD London" against a guide that lists "BBC One HD") shows a **Map…** button on its
+guide-less EPG row. The picker loads everything in one request — the automatic verdict (if any),
+top fuzzy suggestions (the same Dice scoring the matcher uses, offered rather than applied), and
+the full guide-channel list with search — and a click pins the channel to a guide entry. Manual
+mappings win over every automatic tier inside epgService, are account-provider-scoped in SQLite
+(`guide_mappings`, surviving restarts and provider renumbering by keying on stream id), and the
+matching cache keys on them so a set/clear takes effect on the very next grid load. Clear hands
+the decision back. Rig-verified end to end: set → the mapped programme appears in /api/epg →
+clear → gone. 814 tests, typecheck, lint and the build clean.
+
 ## Current state (v0.75.0 — the quality choice, in the viewer's hands)
 
 A **Quality** control beside the player's stats toggle: Source / 1080p / 720p, remembered per

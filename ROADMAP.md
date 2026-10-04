@@ -15,6 +15,27 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.76.0 — map a channel to its guide, by hand.** The roadmap's "manual channel→guide mapping
++ optional fuzzy joins" item, open since the matching layer shipped deliberately conservative
+(exact id → normalized id → exact name → unambiguous fuzzy only): a channel whose name differs
+from every guide entry stayed unmapped, and the grid showed it with no programmes. The release
+valve is now real. **Server:** a `guide_mappings` SQLite store (account-provider-scoped, keyed
+on stream id, one mapping per channel, capped at 2000, surviving restarts), three routes
+(GET picker data / POST set / DELETE clear), and epgService consulting manual overrides BEFORE
+every automatic tier — a mapping resolves against whichever loaded guide source carries the
+target channel id, and one whose guide channel has vanished falls through to the automatic
+tiers rather than ever feeding another channel's programmes. The mapping cache keys on the
+override set, so a set/clear invalidates immediately instead of waiting for the next guide
+refresh. **Picker data in one request** (`mappingPickerData`): the automatic verdict (hidden
+while overridden), top fuzzy suggestions from the matcher's own token scoring — suggestions,
+never applied silently — and the full guide-channel list for search. **Client:** a **Map…**
+button on guide-less EPG rows opens the picker (search + one-click suggestions + Clear);
+`useAggregatedEpg` takes a reload nonce so the grid re-asks the server past its window cache
+after a mapping changes. One identity decision made and documented: mappings are owned by the
+PROVIDER username (stream ids are provider-scoped; the matching cache keys on the same), not
+the app account. Rig-verified end to end: set → "Placed programme for the mapping test" appears
+in /api/epg for the mapped stream → clear → gone. 814 tests (6+1 new).
+
 **v0.75.0 — the quality choice, in the viewer's hands.** The roadmap's own framing for this
 item was that the re-encode tier's cap lived in an environment variable, so a viewer on a
 device whose host could not keep up had no lever — and v0.46.3 had already decided the app

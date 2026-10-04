@@ -35,7 +35,10 @@ export interface AggregatedEpgData {
 export function useAggregatedEpg(
   session: Session,
   windowStart: number,
-  windowEnd: number
+  windowEnd: number,
+  /** Bumped by a caller to force a refetch past the window cache — a manual mapping just
+   *  changed server-side, and the grid must re-ask rather than replay a cached answer. */
+  reloadNonce = 0
 ): { data: AggregatedEpgData | null; status: 'loading' | 'ready' | 'error' } {
   const [data, setData] = useState<AggregatedEpgData | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -43,11 +46,11 @@ export function useAggregatedEpg(
   const latestKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
-    const key = `${session.server}|${session.username}|${windowStart}|${windowEnd}`
+    const key = `${session.server}|${session.username}|${windowStart}|${windowEnd}|${reloadNonce}`
     if (latestKeyRef.current === key) return
     latestKeyRef.current = key
 
-    const cached = windowCacheRef.current.get(key)
+    const cached = reloadNonce === 0 ? windowCacheRef.current.get(`${session.server}|${session.username}|${windowStart}|${windowEnd}`) : undefined
     if (cached) {
       setData(cached)
       setStatus('ready')
@@ -80,7 +83,7 @@ export function useAggregatedEpg(
     return () => {
       active = false
     }
-  }, [session, windowStart, windowEnd])
+  }, [session, windowStart, windowEnd, reloadNonce])
 
   return { data, status }
 }

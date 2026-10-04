@@ -15,6 +15,7 @@ import { catchupForProgramme, restartRequestForProgramme } from '../lib/catchup'
 import type { Session } from '../lib/appAuth'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
 import { useAggregatedEpg, type AggregatedEpgData } from '../lib/useAggregatedEpg'
+import { GuideMappingPicker } from './GuideMappingPicker'
 import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
 import type { LiveStream, ShortEpgProgram } from '../lib/types'
 
@@ -114,6 +115,9 @@ interface RowProps {
   onPlayCatchup?: (channel: LiveStream, programme: { startMs: number; stopMs: number; title: string }) => void
   /// Restarting a programme that is still on air: the same archive, from its beginning.
   onRestartProgramme?: (channel: LiveStream, programme: { startMs: number; stopMs: number; title: string }) => void
+  /** Opens the manual mapping picker for this channel (v0.76.0) — offered on guide-less rows,
+   *  where "no data" is most often a match the conservative matcher refused. */
+  onMapChannel?: (channel: LiveStream) => void
   didPan: () => boolean
 }
 
@@ -134,6 +138,7 @@ function EpgRow({
   onTimelinePointerUp,
   onPlayCatchup,
     onRestartProgramme,
+  onMapChannel,
   didPan
 }: { index: number; style: CSSProperties } & RowProps): JSX.Element {
   const channel = channels[index]
@@ -169,7 +174,23 @@ function EpgRow({
       >
         {listings === undefined && <div className="epg-row-loading" />}
         {listings !== undefined && listings.length === 0 && (
-          <span className="epg-row-empty">No guide data</span>
+          <span className="epg-row-empty">
+            No guide data
+            {onMapChannel && (
+              <button
+                type="button"
+                className="admin-small-btn"
+                style={{ marginLeft: 8, padding: '2px 8px' }}
+                title="Pin this channel to a guide entry manually — the matcher refuses to guess"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onMapChannel(channel)
+                }}
+              >
+                Map…
+              </button>
+            )}
+          </span>
         )}
         {visible.map((p) => {
           const left = pct(p.startMs, windowStart, windowEnd)
@@ -294,7 +315,11 @@ export function EpgGrid({
   const windowStart = baseHour + windowOffsetMs
   const windowEnd = windowStart + WINDOW_HOURS * HOUR_MS
 
-  const aggregated = useAggregatedEpg(session, windowStart, windowEnd)
+  // v0.76.0: the manual mapping picker. The nonce forces the aggregated guide to re-ask the
+  // server after a mapping changes — the cached windows predate the operator's fix.
+  const [mappingChannel, setMappingChannel] = useState<LiveStream | null>(null)
+  const [mappingNonce, setMappingNonce] = useState(0)
+  const aggregated = useAggregatedEpg(session, windowStart, windowEnd, mappingNonce)
   const { shortEpgByStream, request } = useShortEpgCache(session)
 
   useEffect(() => {
@@ -479,6 +504,7 @@ export function EpgGrid({
               onSelectChannel,
               onPlayCatchup,
                             onRestartProgramme,
+              onMapChannel: (channel: LiveStream) => setMappingChannel(channel),
               onTimelinePointerDown: startPan,
               onTimelinePointerMove: movePan,
               onTimelinePointerUp: endPan,
@@ -489,6 +515,14 @@ export function EpgGrid({
           />
         )}
       </div>
+      {mappingChannel && (
+        <GuideMappingPicker
+          session={session}
+          streamId={mappingChannel.stream_id}
+          onClose={() => setMappingChannel(null)}
+          onMappingChanged={() => setMappingNonce((n) => n + 1)}
+        />
+      )}
     </div>
   )
 }

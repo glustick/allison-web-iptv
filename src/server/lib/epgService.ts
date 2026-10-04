@@ -6,7 +6,9 @@ import { createNodeUpstreamRequest } from './nodeUpstreamRequest.js'
 import type { UpstreamClientRequest } from './proxyServer.js'
 import {
   buildGuideIndexes,
+  channelTokens,
   matchStreamToGuideChannelDetailed,
+  tokenSetScore,
   type GuideIndexes,
   type MatchStrategy,
   type StreamForMatching
@@ -158,6 +160,14 @@ export interface EpgServiceDeps {
   /** Overridable for tests; production uses nodeUpstreamRequest's own check interval. */
   guideStallCheckIntervalMs?: number
   now?: () => number
+  /**
+   * The account's manual channel→guide overrides (guideMappings.ts), consulted before every
+   * automatic tier (v0.76.0). Optional so existing wirings compile untouched — without it the
+   * service behaves exactly as before, automatic matching only.
+   */
+  manualMappings?: {
+    get(owner: string, streamId: number): { guideChannelId: string; guideChannelName: string; setAt: number } | null
+  }
 }
 
 /** Programmes overlapping [startMs, endMs) from a list the parser already sorted by startMs. */
@@ -183,6 +193,7 @@ function programmesInWindow(sorted: XmltvProgramme[], startMs?: number, endMs?: 
 
 export function createEpgService(deps: EpgServiceDeps = {}) {
   const createUpstreamRequest = deps.createUpstreamRequest ?? createNodeUpstreamRequest
+  const manualMappings = deps.manualMappings
   const guideTtlMs = deps.guideTtlMs ?? GUIDE_TTL_MS
   const channelListTtlMs = deps.channelListTtlMs ?? CHANNEL_LIST_TTL_MS
   const guideStallTimeoutMs = deps.guideStallTimeoutMs ?? GUIDE_STALL_TIMEOUT_MS
@@ -503,10 +514,16 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
   function mappingCacheKey(
     credentials: EpgServiceCredentials,
     sources: string[],
-    entries: GuideCacheEntry[]
+    entries: GuideCacheEntry[],
+    manual?: Map<number, string>
   ): string {
     const versions = entries.map((entry) => `${entry.fetchedAt}:${entry.status}`).join(',')
-    return `${credentials.server}|${credentials.username}|${sources.join('\u0000')}|${versions}`
+    // The overrides are part of the mapping's identity: set/clear must invalidate the cache,
+    // or the operator's fix would not appear until the next guide refresh.
+    const overrides = manual
+      ? [...manual.entries()].sort((a, b) => a[0] - b[0]).map(([id, gid]) => `${id}=${gid}`).join(',')
+      : ''
+    return `${credentials.server}|${credentials.username}|${sources.join('\u0000')}|${versions}|${overrides}`
   }
 
   /** Stream → guide-channel mapping, memoised per (account, source set, guide versions): this is
@@ -518,7 +535,14 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     entries: GuideCacheEntry[],
     streams: StreamForMatching[]
   ): MappingCacheEntry {
-    const key = mappingCacheKey(credentials, sources, entries)
+    const manual = new Map<number, string>()
+    if (manualMappings) {
+      for (const stream of streams) {
+        const override = manualMappings.get(credentials.username, stream.stream_id)
+        if (override) manual.set(stream.stream_id, override.guideChannelId)
+      }
+    }
+    const key = mappingCacheKey(credentials, sources, entries, manual)
     const cached = mappingCache.get(key)
     if (cached) return cached
 
@@ -534,11 +558,31 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       'exact-id': 0,
       'normalized-id': 0,
       'exact-name': 0,
-      'fuzzy-name': 0
+      'fuzzy-name': 0,
+      // Counted like the automatic strategies so the coverage stats stay one shape.
+      'manual': 0
     }
     // Which source answered, per source: the same matches, attributed to the guide they came from.
     const matchesBySource = new Map<string, number>()
     for (const stream of streams) {
+      // The operator's override first (v0.76.0): a manual mapping wins over every automatic
+      // tier, and it resolves against whichever guide source actually carries the target
+      // channel id. A mapping whose guide channel no longer exists simply falls through to
+      // the automatic tiers — never to another channel's row.
+      const override = manual.get(stream.stream_id)
+      if (override) {
+        const source = candidates.find((candidate) => candidate.index.exactIds.has(override))
+        if (source) {
+          mapping.set(stream.stream_id, {
+            guideUrl: source.url,
+            channelId: override,
+            strategy: 'manual'
+          })
+          byStrategy.manual++
+          matchesBySource.set(source.url, (matchesBySource.get(source.url) ?? 0) + 1)
+          continue
+        }
+      }
       for (const candidate of candidates) {
         const result = matchStreamToGuideChannelDetailed(stream, candidate.index)
         if (!result.channelId || !result.strategy) continue
@@ -654,6 +698,74 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
      * background. Pass `url` to refresh a single source — the point of the per-source button: a
      * 168 MB provider guide should not have to come down again to retry one small XMLTV feed.
      */
+    /**
+     * The picker's data for one stream (v0.76.0): every guide channel the loaded sources carry,
+     * the stream's automatic match (what the matcher already decided), the manual override if
+     * one is set, and top fuzzy suggestions for a stream the matcher missed. One request feeds
+     * the whole mapping UI.
+     */
+    async mappingPickerData(params: {
+      credentials: EpgServiceCredentials
+      epgUrls: string[]
+      streamId: number
+    }): Promise<{
+      streamName: string
+      automatic: { channelId: string; strategy: MatchStrategy; score?: number } | null
+      manual: { guideChannelId: string; guideChannelName: string; setAt: number } | null
+      suggestions: Array<{ guideChannelId: string; guideChannelName: string; score: number }>
+      guideChannels: Array<{ id: string; name: string }>
+    }> {
+      const { sources, entries, streams } = await resolveEverything(params)
+      const stream = streams.find((s) => s.stream_id === params.streamId)
+      const streamName = stream?.name ?? ''
+
+      let automatic: { channelId: string; strategy: MatchStrategy; score?: number } | null = null
+      const suggestions = new Map<string, { name: string; score: number }>()
+      const guideChannels: Array<{ id: string; name: string }> = []
+      const seen = new Set<string>()
+      entries.forEach((entry, i) => {
+        const index = ensureIndex(entry)
+        if (!entry.guide || !index) return
+        if (stream) {
+          const result = matchStreamToGuideChannelDetailed(stream, index)
+          if (result.channelId && result.strategy) {
+            if (!automatic || (result.score ?? 1) > (automatic.score ?? 1)) {
+              automatic = { channelId: result.channelId, strategy: result.strategy, score: result.score }
+            }
+          } else {
+            // Nothing qualified: offer the same scoring as suggestions, never applied silently.
+            for (const [gid, sig] of index.signatures) {
+              const score = tokenSetScore(channelTokens(stream.name), sig.tokens)
+              const best = suggestions.get(gid)
+              if (!best || score > best.score) {
+                suggestions.set(gid, { name: entry.guide.channels.get(gid)?.displayName ?? gid, score })
+              }
+            }
+          }
+        }
+        for (const [id, channel] of entry.guide.channels) {
+          if (seen.has(id)) continue
+          seen.add(id)
+          guideChannels.push({ id, name: channel.displayName })
+        }
+      })
+
+      const manual = manualMappings?.get(params.credentials.username, params.streamId) ?? null
+      return {
+        streamName,
+        automatic: manual ? null : automatic,
+        manual: manual
+          ? { guideChannelId: manual.guideChannelId, guideChannelName: manual.guideChannelName, setAt: manual.setAt }
+          : null,
+        suggestions: [...suggestions.entries()]
+          .map(([guideChannelId, s]) => ({ guideChannelId, guideChannelName: s.name, score: s.score }))
+          .filter((s) => s.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 5),
+        guideChannels
+      }
+    },
+
     refresh(params: { credentials: EpgServiceCredentials; epgUrls: string[]; url?: string }): void {
       const all = [providerGuideUrl(params.credentials), ...params.epgUrls]
       const sources = params.url ? all.filter((url) => url === params.url) : all
