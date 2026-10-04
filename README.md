@@ -6,6 +6,20 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.75.0 — the quality choice, in the viewer's hands)
+
+A **Quality** control beside the player's stats toggle: Source / 1080p / 720p, remembered per
+device. It applies exactly where reshaping is real — the video re-encode tier, the path a
+channel takes when this browser cannot decode its codec — so a host that cannot keep up at the
+provider's resolution gets a smaller picture the viewer chose deliberately, never one the app
+chose for them (v0.46.3's rule stands: the default is Source). The choice rides the session
+request as a per-session cap that overrides the deployment's TRANSCODE_VIDEO_MAX_HEIGHT; copy
+tiers and native playback are untouched (a copy cannot reshape), the client-side engine shows
+exactly what it decodes, and changing it while a re-encode session plays restarts that session
+at the new height immediately. Malformed values are refused at the route (240–2160), and
+rig-verified end to end: a 480p source with the 240 cap produces 320×240 output; a garbage value
+produces Source. 808 tests, typecheck, lint and the build clean.
+
 ## Current state (v0.74.0 — "this channel isn't broadcasting", said honestly)
 
 Two open roadmap items closed, both proven end-to-end on the rig. **The not-broadcasting

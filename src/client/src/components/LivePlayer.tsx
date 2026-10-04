@@ -89,6 +89,10 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   // is, and what this browser can do. Closed by default; it needs nothing the probe has not already
   // learned about the stream.
   const [showStats, setShowStats] = useState(false)
+  // The viewer's quality ceiling (v0.75.0): Source keeps what the provider sent; 1080p/720p
+  // caps the re-encode tier when this browser can only play a channel through it. Read once at
+  // mount — the choice is persisted, so it survives reloads and applies to every later session.
+  const [qualityMaxHeight, setQualityMaxHeight] = useState<number | null>(() => loadPlayerPrefs().maxHeight)
   const [probeInfo, setProbeInfo] = useState<{ videoCodec: string | null; audioTrackCount: number } | null>(null)
   const [audioTracks, setAudioTracks] = useState<PlayerTrack[]>([])
   const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
@@ -867,6 +871,33 @@ let stallCount = 0
           gap: 6
         }}
       >
+        {/* Quality applies to the re-encode tier only — the one path where the server reshapes
+            the picture. A channel playing natively or through a copy session is untouched, and
+            so is the client-side engine (its canvas shows exactly what it decodes). Changing it
+            while a re-encode session is playing restarts that session at the new height; on any
+            other channel it is armed for whenever that tier engages. */}
+        <select
+          className="admin-small-btn"
+          style={{ padding: '4px 8px' }}
+          value={qualityMaxHeight ?? ''}
+          title="Caps the picture only on channels this browser plays through the server's video re-encode — Source keeps the provider's own resolution."
+          onChange={(e) => {
+            const value = e.target.value === '' ? null : Number(e.target.value)
+            setQualityMaxHeight(value)
+            savePlayerPrefs({ ...loadPlayerPrefs(), maxHeight: value })
+            if (hasSession() && hasTriedVideoTranscode()) {
+              restartFallback(
+                url,
+                () => setReloadTick((t) => t + 1),
+                (message) => setError(message)
+              )
+            }
+          }}
+        >
+          <option value="">Quality: Source</option>
+          <option value="1080">Quality: 1080p</option>
+          <option value="720">Quality: 720p</option>
+        </select>
         <button
           type="button"
           className="admin-small-btn"

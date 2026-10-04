@@ -1391,6 +1391,48 @@ describe('real ffmpeg integration', () => {
       rmSync(fixtureDir, { recursive: true, force: true })
     }
   }, 30000)
+
+  // v0.75.0: the viewer's quality choice, end to end — the per-session override caps the
+  // re-encode with NO deployment profile set (the honest default is Source, so this is the
+  // shape every real request arrives in).
+  it('caps a re-encode at the per-session maxHeight with no deployment profile configured', async () => {
+    if (!ffmpegStaticPath) throw new Error('ffmpeg-static did not resolve a binary for this platform')
+
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-session-cap-'))
+    const inputPath = join(fixtureDir, 'tall-input.mkv')
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpegStaticPath as string, [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=20:size=640x480:rate=25',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=20',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '25', '-keyint_min', '25',
+        '-c:a', 'aac', '-b:a', '96k',
+        inputPath
+      ])
+      proc.on('error', reject)
+      proc.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`fixture build exited ${code}`))))
+    })
+
+    const { url: originUrl, server } = await startSyntheticOrigin(inputPath, 300)
+    try {
+      const service = track(
+        createTranscodeService({
+          resolveFfmpegPath: resolverFor(ffmpegStaticPath as string),
+          vodDeadlineMs: 30000,
+          pollIntervalMs: 200
+        })
+      )
+
+      const result = await service.startTranscode(originUrl, true, 'real-session-cap', 0, 0, true, undefined, false, false, 240)
+      const segment = join(dirname(result.playlistPath), 'seg_00000.m4s')
+      await waitForStableFileSize(segment)
+      expect(await probeVideoDimensions(segment)).toEqual({ width: 320, height: 240 })
+      await service.stopTranscode('real-session-cap')
+    } finally {
+      server.close()
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 30000)
 })
 
 describe('live input resilience', () => {
@@ -1480,7 +1522,12 @@ describe('video re-encode tier', () => {
   // The HEVC escape hatch. `-c:v copy` cannot help a browser that claims hvc1 support and then
   // fails the actual decode, so the video has to be genuinely re-encoded to H.264 — and, just as
   // important, the default path must keep copying it for free. These pin both, fast and exactly.
-  async function videoArgsFor(videoTranscode: boolean, profile?: VideoEncodeProfile, label?: string): Promise<string[]> {
+  async function videoArgsFor(
+    videoTranscode: boolean,
+    profile?: VideoEncodeProfile,
+    label?: string,
+    maxHeightOverride?: number | null
+  ): Promise<string[]> {
     const key = label ?? (videoTranscode ? 'video' : 'copy')
     const fixtureDir = mkdtempSync(join(tmpdir(), 'allisoniptv-video-args-'))
     mkdirSync(join(fixtureDir, 'transcode'), { recursive: true })
@@ -1501,7 +1548,11 @@ describe('video re-encode tier', () => {
             `s-${key}`,
             0,
             0,
-            videoTranscode
+            videoTranscode,
+            undefined,
+            false,
+            false,
+            maxHeightOverride
           )
         })
       )
@@ -1595,6 +1646,27 @@ describe('video re-encode tier', () => {
     expect(args[maxrate + 1]).toBe('6000k')
     // 2x maxrate, the usual HLS-friendly buffer shape.
     expect(args[args.indexOf('-bufsize') + 1]).toBe('12000k')
+  })
+
+  // v0.75.0: the viewer's per-session quality choice. It wins over the deployment profile on
+  // the re-encode tier, and never applies to a copy (a copy cannot reshape — and a cap arriving
+  // on a copy session must not manufacture a filter that would force an encode).
+  it('a per-session maxHeight override wins over the deployment profile on the re-encode tier', async () => {
+    const args = await videoArgsFor(true, { maxHeight: 1080, maxBitrateKbps: null, fps: 25 }, 'override-720', 720)
+    expect(args[args.indexOf('-vf') + 1]).toContain("scale=-2:'min(720,ih)'")
+  })
+
+  it('an absent override leaves the deployment profile exactly as it was', async () => {
+    const args = await videoArgsFor(true, { maxHeight: 1080, maxBitrateKbps: null, fps: 25 }, 'override-absent')
+    expect(args[args.indexOf('-vf') + 1]).toContain("scale=-2:'min(1080,ih)'")
+    const sourceDefault = await videoArgsFor(true, { maxHeight: null, maxBitrateKbps: null, fps: 25 }, 'override-none')
+    expect(sourceDefault[args.indexOf('-vf') + 1]).not.toContain('scale')
+  })
+
+  it('a maxHeight override on a copy session changes nothing — a copy cannot reshape', async () => {
+    const args = await videoArgsFor(false, { maxHeight: 1080, maxBitrateKbps: null, fps: 25 }, 'override-copy', 720)
+    expect(args).not.toContain('-vf')
+    expect(args).toContain('copy')
   })
 })
 

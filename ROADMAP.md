@@ -15,6 +15,25 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.75.0 — the quality choice, in the viewer's hands.** The roadmap's own framing for this
+item was that the re-encode tier's cap lived in an environment variable, so a viewer on a
+device whose host could not keep up had no lever — and v0.46.3 had already decided the app
+itself must never silently downscale. The lever now exists: a **Quality** select beside the
+stats toggle (Source / 1080p / 720p), persisted per device in `playerPrefs.maxHeight` (per
+device for the same reason the track choices are: it is a statement about this machine's
+playback). It applies only where a reshape is possible — `/api/transcode/start` accepts
+`maxHeight` (validated to 240–2160; anything else reads as Source), the re-encode session uses
+it as a per-session cap that overrides the deployment's TRANSCODE_VIDEO_MAX_HEIGHT, and copy
+tiers, native playback and the client-side engine are untouched. Changing it while a re-encode
+session is playing restarts that session at the new height on the spot
+(`restartFallback`→`startFallback` re-reads the pref at post time, so the choice made moments
+ago is the one that applies); on any other channel it is armed for whenever that tier engages.
+Proven three ways: argv pins (the override wins over the deployment profile on the re-encode
+tier, an absent override leaves it untouched, a cap on a copy session changes nothing — a copy
+cannot reshape), a real-ffmpeg integration test (a 480p source, no deployment profile, the
+per-session 240 cap → 320×240 output), and the rig (API level: the same cap → 320×240; a
+garbage `"720p"` → Source 640×480, refused rather than corrupted). 808 tests (5 new).
+
 **v0.74.0 — "this channel isn't broadcasting", said honestly.** Two open items from the
 reliability theme, both carried since 2026-09-22, both closed with rig proofs. **(1) The
 non-advancing-playlist detector.** The provider's placeholder channels answer every reload

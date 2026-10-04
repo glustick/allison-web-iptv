@@ -24,14 +24,25 @@ function fakeStorage(initial: Record<string, string> = {}) {
 describe('player preferences', () => {
   it('round-trips a choice', () => {
     const storage = fakeStorage()
-    savePlayerPrefs({ audioTrack: 'eng', subtitleTrack: 'swe', subtitlesOff: false }, storage)
-    expect(loadPlayerPrefs(storage)).toEqual({ audioTrack: 'eng', subtitleTrack: 'swe', subtitlesOff: false })
+    savePlayerPrefs({ audioTrack: 'eng', subtitleTrack: 'swe', subtitlesOff: false, maxHeight: null }, storage)
+    expect(loadPlayerPrefs(storage)).toEqual({ audioTrack: 'eng', subtitleTrack: 'swe', subtitlesOff: false, maxHeight: null })
   })
 
   it('remembers that subtitles were switched off — that is a choice too', () => {
     const storage = fakeStorage()
-    savePlayerPrefs({ audioTrack: 'eng', subtitleTrack: null, subtitlesOff: true }, storage)
+    savePlayerPrefs({ audioTrack: 'eng', subtitleTrack: null, subtitlesOff: true, maxHeight: null }, storage)
     expect(loadPlayerPrefs(storage).subtitlesOff).toBe(true)
+  })
+
+  it('round-trips the quality ceiling, and refuses out-of-range values', () => {
+    const storage = fakeStorage()
+    savePlayerPrefs({ audioTrack: null, subtitleTrack: null, subtitlesOff: false, maxHeight: 720 }, storage)
+    expect(loadPlayerPrefs(storage).maxHeight).toBe(720)
+    // A hand-edited or stale out-of-range value reads as Source, never as a broken encode.
+    savePlayerPrefs({ audioTrack: null, subtitleTrack: null, subtitlesOff: false, maxHeight: 99999 }, storage)
+    expect(loadPlayerPrefs(storage).maxHeight).toBeNull()
+    savePlayerPrefs({ audioTrack: null, subtitleTrack: null, subtitlesOff: false, maxHeight: '720' as unknown as number }, storage)
+    expect(loadPlayerPrefs(storage).maxHeight).toBeNull()
   })
 
   it('falls back to the defaults when storage is empty, rubbish, or unavailable', () => {

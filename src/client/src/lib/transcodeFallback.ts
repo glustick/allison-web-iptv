@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { noteStreamNeedsTranscode } from './transcodeHints'
 import { newSessionId } from './sessionId'
 import type { ErrorData } from 'hls.js'
+import { loadPlayerPrefs } from './playerPrefs'
 
 export interface TrackSelectionRequest {
   audioIndex?: number
@@ -242,6 +243,10 @@ export function useTranscodeFallback(): {
       triedRef.current = true
       awaitingRef.current = true
       videoModeRef.current = videoTranscode
+      // The viewer's quality ceiling rides along on the re-encode tier only (v0.75.0): read at
+      // post time so a choice made moments ago is the one that applies; the copy tier ignores
+      // it — a copy cannot reshape — and the server rejects anything malformed anyway.
+      const maxHeight = videoTranscode ? loadPlayerPrefs().maxHeight : null
       if (videoTranscode) videoTriedRef.current = true
       // This stream needed converting once, so it will again — the next play skips straight to it.
       // Only ever *upgrades* the hint to "needs the video re-encode too": an ordinary audio-only
@@ -253,7 +258,7 @@ export function useTranscodeFallback(): {
       fetch('/api/transcode/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceUrl: originalUrl, isVod, sessionId, videoTranscode })
+        body: JSON.stringify({ sourceUrl: originalUrl, isVod, sessionId, videoTranscode, ...(maxHeight !== null ? { maxHeight } : {}) })
       })
         .then(async (res) => {
           if (!res.ok) throw new Error((await res.text()) || `transcode start failed: ${res.status}`)

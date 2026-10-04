@@ -456,7 +456,15 @@ export interface TranscodeService {
      * The client-side engine's audio companion: map audio alone (AAC, video unmapped) — see the
      * implementation's own doc for why the browser's decode needs a server-side sound track.
      */
-    audioOnly?: boolean
+    audioOnly?: boolean,
+    /**
+     * The viewer's quality choice for the video re-encode tier: a per-session height cap that
+     * overrides the deployment's TRANSCODE_VIDEO_MAX_HEIGHT when the session actually
+     * re-encodes (the copy tiers ignore it — a copy cannot reshape). Null/absent = the
+     * deployment default. Validated by the route to a positive integer in sane bounds; here,
+     * anything not finite-and-positive reads as "not set" rather than corrupting the filter.
+     */
+    maxHeightOverride?: number | null
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }>
   stopTranscode(sessionId: string): Promise<void>
   serveTranscodeFile(url: string, res: ServerResponse): Promise<void>
@@ -603,8 +611,15 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
      * re-encode (trivial next to the 4K decode the client is doing for itself) and one HLS
      * output the browser plays as a plain audio element — which is also the A/V clock.
      */
-    audioOnly = false
+    audioOnly = false,
+    maxHeightOverride?: number | null
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }> {
+    // The viewer's cap only applies where a reshape is even possible (see the interface's own
+    // doc); everywhere else the deployment profile stands exactly as before.
+    const sessionVideoProfile: VideoEncodeProfile =
+      videoTranscode && typeof maxHeightOverride === 'number' && Number.isFinite(maxHeightOverride) && maxHeightOverride > 0
+        ? { ...videoEncodeProfile, maxHeight: Math.round(maxHeightOverride) }
+        : videoEncodeProfile
     const ffmpegPath = await deps.resolveFfmpegPath()
     if (!ffmpegPath) {
       throw new Error('ffmpeg binary not available on this platform')
@@ -775,14 +790,14 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
             '-crf',
             '23',
             '-vf',
-            videoFilterChain(videoEncodeProfile),
+            videoFilterChain(sessionVideoProfile),
             '-pix_fmt',
             'yuv420p',
             // Optional capped-CRF ceiling, off unless TRANSCODE_VIDEO_MAXRATE_KBPS asks for it:
             // the resolution cap is what buys real time, and a bitrate ceiling changes the picture
             // in a way nobody asked for. bufsize is 2x maxrate, the usual hls-friendly shape.
-            ...(videoEncodeProfile.maxBitrateKbps !== null
-              ? ['-maxrate', `${videoEncodeProfile.maxBitrateKbps}k`, '-bufsize', `${videoEncodeProfile.maxBitrateKbps * 2}k`]
+            ...(sessionVideoProfile.maxBitrateKbps !== null
+              ? ['-maxrate', `${sessionVideoProfile.maxBitrateKbps}k`, '-bufsize', `${sessionVideoProfile.maxBitrateKbps * 2}k`]
               : []),
             // A fixed 4s GOP, matching -hls_time below. This is not cosmetic: the HLS muxer only
             // splits a segment at a keyframe, and libx264's default keyframe interval is ~10s at
@@ -1054,7 +1069,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
           startSettled = true
           await rm(dir, { recursive: true, force: true }).catch(() => {})
           return startTranscode(
-            sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex, videoTranscode, inputHeaders, true, audioOnly
+            sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex, videoTranscode, inputHeaders, true, audioOnly,
+            maxHeightOverride
           )
         }
         if (subtitleStreamIndex >= 0 && SUBTITLE_CODEC_INCOMPATIBLE_PATTERN.test(session.stderrTail.join('\n'))) {
@@ -1063,7 +1079,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
           // false (that is why this branch fired), so it is this flow's job to remove it.
           startSettled = true
           await rm(dir, { recursive: true, force: true }).catch(() => {})
-          return startTranscode(sourceUrl, isVod, sessionId, -1, audioStreamIndex, videoTranscode, undefined, false, audioOnly)
+          return startTranscode(sourceUrl, isVod, sessionId, -1, audioStreamIndex, videoTranscode, undefined, false, audioOnly, maxHeightOverride)
         }
         // The exit handler deliberately left the directory in place (the start flow owns it
         // until settled) — a failed start has no use for it, so clean it here.

@@ -2267,7 +2267,13 @@ function resolveUpstreamUrl(relativeOrAbsolute: string, req: Request): string {
 }
 
 app.post('/api/transcode/start', requireAuth, (req, res) => {
-  const { sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex, videoTranscode, audioOnly } = req.body ?? {}
+  const { sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex, videoTranscode, audioOnly, maxHeight } = req.body ?? {}
+  // The viewer's quality choice (v0.75.0): only a sane positive integer is a cap — anything
+  // else reads as "not set", so a malformed value can never reach the encoder's filter chain.
+  const maxHeightOverride =
+    typeof maxHeight === 'number' && Number.isFinite(maxHeight) && maxHeight >= 240 && maxHeight <= 2160
+      ? Math.round(maxHeight)
+      : null
   if (typeof sourceUrl !== 'string' || typeof sessionId !== 'string') {
     res.status(400).json({ error: 'Missing sourceUrl/sessionId' })
     return
@@ -2308,7 +2314,8 @@ app.post('/api/transcode/start', requireAuth, (req, res) => {
       Boolean(videoTranscode),
       inputHeaders,
       false,
-      Boolean(audioOnly)
+      Boolean(audioOnly),
+      maxHeightOverride
     )
     .then(({ playlistPath, subtitleTracks }) => {
       // Same reasoning as the desktop app's own transcode:start handler: the filename varies

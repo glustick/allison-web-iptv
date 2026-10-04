@@ -20,9 +20,24 @@ export interface PlayerPrefs {
   subtitleTrack: string | null
   /** Subtitles explicitly turned off, which is a choice and must survive too. */
   subtitlesOff: boolean
+  /**
+   * The viewer's quality ceiling for channels this browser can only play through the server's
+   * video re-encode (v0.75.0): null means Source — the picture the provider sent — and a number
+   * (1080, 720) caps the re-encode's height so a host that cannot keep up at full resolution
+   * gets one the viewer chose deliberately. Per device, like the track choices: it is a
+   * statement about *this* machine's playback, and the re-encode a channel needs is itself
+   * per browser. Applies only to the re-encode tier — native playback and the copy tier are
+   * untouched, and a copy cannot reshape anything anyway.
+   */
+  maxHeight: number | null
 }
 
-export const DEFAULT_PLAYER_PREFS: PlayerPrefs = { audioTrack: null, subtitleTrack: null, subtitlesOff: false }
+export const DEFAULT_PLAYER_PREFS: PlayerPrefs = {
+  audioTrack: null,
+  subtitleTrack: null,
+  subtitlesOff: false,
+  maxHeight: null
+}
 
 export function loadPlayerPrefs(storage: Pick<Storage, 'getItem'> | null = safeStorage()): PlayerPrefs {
   if (!storage) return DEFAULT_PLAYER_PREFS
@@ -33,7 +48,11 @@ export function loadPlayerPrefs(storage: Pick<Storage, 'getItem'> | null = safeS
     return {
       audioTrack: typeof parsed.audioTrack === 'string' ? parsed.audioTrack : null,
       subtitleTrack: typeof parsed.subtitleTrack === 'string' ? parsed.subtitleTrack : null,
-      subtitlesOff: parsed.subtitlesOff === true
+      subtitlesOff: parsed.subtitlesOff === true,
+      maxHeight:
+        typeof parsed.maxHeight === 'number' && Number.isFinite(parsed.maxHeight) && parsed.maxHeight >= 240 && parsed.maxHeight <= 2160
+          ? parsed.maxHeight
+          : null
     }
   } catch {
     return DEFAULT_PLAYER_PREFS
