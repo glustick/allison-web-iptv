@@ -26,6 +26,7 @@ import {
   type MediaKind,
   type PrefsState
 } from '../lib/prefs'
+import { XtreamClient } from '../lib/xtreamClient'
 import type { Category, LiveStream } from '../lib/types'
 
 // The player's height cap is drag-resizable (see useResizableDimension.ts) via the row-resize
@@ -84,6 +85,11 @@ export function LiveTv({
   // empty one explains itself (see the grid's emptyMessage) rather than showing nothing useful.
   const [selection, setSelection] = useState<Selection>({ type: 'favourites' })
   const [providerChannels, setProviderChannels] = useState<LiveStream[]>([])
+  // Additional saved playlists (v0.77.0): the account's extra Xtream lines, each fetched in
+  // parallel and merged into the channel list with its own provenance. A playlist whose fetch
+  // fails contributes nothing rather than blocking the others — a flaky provider is the reason
+  // this feature exists.
+  const [additional, setAdditional] = useState<Array<{ id: string; label: string; channels: LiveStream[]; error: string | null }>>([])
   const [nowPlaying, setNowPlaying] = useState<LiveStream | null>(null)
   // Set when what is playing is a past programme rather than the live channel.
   const [catchup, setCatchup] = useState<{ startMs: number; stopMs: number; title: string } | null>(null)
@@ -137,6 +143,63 @@ export function LiveTv({
       .catch((err) => handlePrefsError(err, 'Failed to load your favourites and categories'))
   }, [applyPrefs, handlePrefsError])
 
+  // Additional saved playlists (v0.77.0): one fetch per playlist, in parallel, each independent —
+  // a playlist that fails contributes nothing (its chip shows the error) instead of blocking the
+  // others, which is the redundancy point of the whole feature.
+  useEffect(() => {
+    let active = true
+    fetch('/api/iptv/playlists')
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return (await res.json()) as { playlists?: Array<{ id: string; label: string }> }
+      })
+      .then(async (body) => {
+        const saved = (body.playlists ?? []).filter((p) => p.id !== 'primary')
+        if (!active) return
+        setAdditional(saved.map((p) => ({ id: p.id, label: p.label, channels: [], error: null })))
+        await Promise.all(
+          saved.map(async (p) => {
+            const client = new XtreamClient(p.id)
+            try {
+              const channels = await client.getLiveStreams()
+              if (!active) return
+              setAdditional((prev) =>
+                prev.map((entry) =>
+                  entry.id === p.id
+                    ? {
+                        ...entry,
+                        channels: channels.map((channel) => ({
+                          ...channel,
+                          playlistId: p.id,
+                          playlistLabel: p.label
+                        })),
+                        error: null
+                      }
+                    : entry
+                )
+              )
+            } catch (err) {
+              if (!active) return
+              setAdditional((prev) =>
+                prev.map((entry) =>
+                  entry.id === p.id
+                    ? { ...entry, channels: [], error: err instanceof Error ? err.message : String(err) }
+                    : entry
+                )
+              )
+            }
+          })
+        )
+      })
+      .catch(() => {
+        // No playlists configured (the common case) or the endpoint failed: the primary-only
+        // experience is exactly what existed before this feature.
+      })
+    return () => {
+      active = false
+    }
+  }, [session])
+
   // The provider's channel list is only fetched for the views that show it; library views render
   // from the stored entries instead, which is what makes them work even if a category is slow.
   useEffect(() => {
@@ -172,6 +235,38 @@ export function LiveTv({
   }, [playRequest?.nonce])
 
   const liveFavourites = useMemo(() => prefs.favourites.filter((f) => f.kind === 'live'), [prefs.favourites])
+
+  // --- playlist chips (v0.77.0) -------------------------------------------------------------
+  // Selection and per-playlist hide, persisted per device. The primary is always visible and
+  // cannot be hidden — it is what favourites, history and catch-up are keyed against.
+  const [playlistView, setPlaylistView] = useState<{ selected: string; hidden: string[] }>(() => {
+    try {
+      const raw = localStorage.getItem('iptv:playlist-view')
+      if (raw) {
+        const parsed = JSON.parse(raw) as { selected?: string; hidden?: string[] }
+        return {
+          selected: typeof parsed.selected === 'string' ? parsed.selected : 'all',
+          hidden: Array.isArray(parsed.hidden) ? parsed.hidden : []
+        }
+      }
+    } catch {
+      // Unavailable storage is not worth failing the view over.
+    }
+    return { selected: 'all', hidden: [] }
+  })
+  const setPlaylistViewPersisted = useCallback((next: { selected: string; hidden: string[] }): void => {
+    setPlaylistView(next)
+    try {
+      localStorage.setItem('iptv:playlist-view', JSON.stringify(next))
+    } catch {
+      // See above.
+    }
+  }, [])
+  // The visible additional channels: hidden playlists drop out of the merge entirely.
+  const additionalChannels = useMemo(
+    () => additional.filter((entry) => !playlistView.hidden.includes(entry.id)).flatMap((entry) => entry.channels),
+    [additional, playlistView.hidden]
+  )
 
   // History is a list of visits; the sidebar view is the distinct channels, most recent first.
   const historyChannels = useMemo(() => {
@@ -275,8 +370,18 @@ export function LiveTv({
             ) ?? synthesizeStream(channel.streamId, channel.name, channel.sourceCategory)
         )
     }
-    return providerChannels
-  }, [selection, liveFavourites, historyChannels, selectedCustom, providerChannels, libraryLookup])
+    // The merged tail (v0.77.0): primary channels first, then each visible additional
+    // playlist's — every row carrying its provenance, per the 2026-09-23 decision (no
+    // automatic row-merging; the source is visible instead). Library views stay primary-only:
+    // favourites/history key on stream ids that are provider-scoped.
+    const selected = playlistView.selected
+    if (selected === 'primary') return providerChannels
+    if (selected !== 'all') {
+      const chosen = additional.find((entry) => entry.id === selected)
+      return chosen ? chosen.channels : providerChannels
+    }
+    return [...providerChannels, ...additionalChannels]
+  }, [selection, liveFavourites, historyChannels, selectedCustom, providerChannels, libraryLookup, additional, additionalChannels, playlistView])
 
   // Library views are plain lists (short, personal, reorderable); the guide grid stays for the
   // provider's own categories, where a virtualised 27k-row table is the right tool.
@@ -401,6 +506,11 @@ export function LiveTv({
       setNowPlaying(channel)
         setCatchup(null)
       if (!channel) return
+      // History (and favourites, below) are keyed on provider-scoped stream ids and stay
+      // primary-playlist-only for now: recording an additional playlist's channel would light
+      // up and re-play the PRIMARY's channel with the same numeric id. Documented phase-2 work
+      // (composite identity in the per-user tables).
+      if (channel.playlistId && channel.playlistId !== 'primary') return
       // Watching something is what history means here; failures are surfaced but never block play.
       void recordHistory({ kind: 'live', streamId: channel.stream_id, name: channel.name, category: channel.category_id })
         .then(() => fetchPrefs().then(applyPrefs))
@@ -601,10 +711,16 @@ export function LiveTv({
     }, [catchupChannelId, catchupStartMs, catchupStopMs])
   
   // Catch-up plays the transcoded HLS; everything else plays the live playlist.
+  // A channel from an additional playlist plays through that playlist's scoped paths
+  // (/api/iptv/playlists/<id>/stream/...), which the server addresses with that playlist's
+  // own credentials and provider — the browser never sees either.
+  const nowPlayingClient = nowPlaying?.playlistId && nowPlaying.playlistId !== 'primary'
+    ? new XtreamClient(nowPlaying.playlistId)
+    : session.client
   const streamUrl = nowPlaying
     ? catchup
       ? catchupStream
-      : session.client.getStreamUrl('live', nowPlaying.stream_id, 'm3u8')
+      : nowPlayingClient.getStreamUrl('live', nowPlaying.stream_id, 'm3u8')
     : null
   // A provider category is a category: its name is what belongs above its channel list (and the
   // guide under it), not "All channels" — which is only true for the unfiltered selection.
@@ -741,7 +857,13 @@ export function LiveTv({
                   type="button"
                   className={isFavourite(nowPlaying.stream_id) ? 'prefs-action active' : 'prefs-action'}
                   onClick={() => void toggleFavourite(nowPlaying)}
-                  title={isFavourite(nowPlaying.stream_id) ? 'Remove from favourites' : 'Add to favourites'}
+                  title={
+                    nowPlaying.playlistId && nowPlaying.playlistId !== 'primary'
+                      ? 'Favourites track the main playlist (coming to extra playlists)'
+                      : isFavourite(nowPlaying.stream_id)
+                        ? 'Remove from favourites'
+                        : 'Add to favourites'
+                  }
                 >
                   {isFavourite(nowPlaying.stream_id) ? '★' : '☆'}
                 </button>
@@ -966,6 +1088,43 @@ export function LiveTv({
             </ul>
           </div>
         ) : (
+          <>
+          {additional.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 6px' }}>
+                <span className="setup-hint">Playlists:</span>
+                {([{ id: 'all', label: 'All' }, { id: 'primary', label: 'Main' }, ...additional.map((entry) => ({ id: entry.id, label: entry.label, error: entry.error }))]).map((chip) => (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    className={playlistView.selected === chip.id ? 'category-btn active' : 'category-btn'}
+                    style={{ padding: '4px 10px' }}
+                    title={'error' in chip && chip.error ? `This playlist failed to load: ${chip.error}` : undefined}
+                    onClick={() => setPlaylistViewPersisted({ ...playlistView, selected: chip.id })}
+                  >
+                  {chip.label}{'error' in chip && chip.error ? ' (offline)' : ''}
+                  </button>
+                ))}
+                {additional.filter((entry) => entry.error === null).map((entry) => (
+                  <button
+                    key={`hide-${entry.id}`}
+                    type="button"
+                    className="admin-small-btn"
+                    title={playlistView.hidden.includes(entry.id) ? `Show ${entry.label} in All` : `Hide ${entry.label} from All`}
+                    onClick={() =>
+                      setPlaylistViewPersisted({
+                        ...playlistView,
+                        hidden: playlistView.hidden.includes(entry.id)
+                          ? playlistView.hidden.filter((id) => id !== entry.id)
+                          : [...playlistView.hidden, entry.id]
+                        })
+                    }
+                  >
+                  {playlistView.hidden.includes(entry.id) ? '👁 show' : '👁 hide'} {entry.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
           <EpgGrid
             session={session}
             channels={guideChannels}
@@ -982,6 +1141,7 @@ export function LiveTv({
                   : undefined
             }
           />
+          </>
         )}
         {selection.type === 'custom' && !picking && selectedCustom && selectedCustom.channels.length === 0 && (
           <div className="list-hint">

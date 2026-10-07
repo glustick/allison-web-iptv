@@ -1815,6 +1815,72 @@ app.put('/api/iptv/playlists', requireAuth, (req, res) => {
   }
 })
 
+/**
+ * The playlist a scoped request addresses, resolved from the account's own stored envelope —
+ * credentials included, since the whole point of these routes is that the browser never holds
+ * a second provider's secrets. Null when the account has no such playlist.
+ */
+function resolvePlaylistCredentials(
+  username: string,
+  playlistId: string
+): { label: string; server: string; username: string; password: string } | null {
+  const parsed = parseStoredPlaylists(username)
+  const found = parsed.envelope.playlists.find((playlist) => playlist.id === playlistId)
+  if (!found) return null
+  return { label: found.label, server: found.server, username: found.username, password: found.password }
+}
+
+// Playlist-scoped catalogue: every player_api action against an ADDITIONAL playlist, addressed
+// with its own credentials and its own provider target (v0.77.0). The primary keeps its own
+// routes — a scoped request for the migrated 'primary' playlist works too, but nothing the app
+// does needs it.
+app.get('/api/iptv/playlists/:playlistId/xtream', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const credentials = resolvePlaylistCredentials(session.username, String(req.params.playlistId))
+  if (!credentials) {
+    res.status(404).json({ error: 'No such playlist on this account' })
+    return
+  }
+  const params = new URLSearchParams(req.query as Record<string, string>)
+  params.set('username', credentials.username)
+  params.set('password', credentials.password)
+  const scoped = req as IncomingMessage & { url?: string; headers?: Record<string, unknown> }
+  scoped.url = `/player_api.php?${params.toString()}`
+  // The internal proxy resolves its target from this header first (see getTargetForRequest) —
+  // the one seam that lets one proxy serve several providers without the browser seeing any
+  // of their addresses.
+  scoped.headers = { ...scoped.headers, 'x-proxy-target-base': credentials.server }
+  relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
+})
+
+// Playlist-scoped streams: the same relay the primary's /api/stream uses, against the
+// playlist's own credentials and provider. The app-side path is playlist-scoped by
+// construction, so the relay's playlist-window keying (x-app-playlist-key = req.path) and the
+// browser's segment Referer both stay distinct per playlist — the signature-expiry rescue and
+// every other window behaviour work here unchanged.
+app.get('/api/iptv/playlists/:playlistId/stream/:kind/:file', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const credentials = resolvePlaylistCredentials(session.username, String(req.params.playlistId))
+  if (!credentials) {
+    res.status(404).json({ error: 'No such playlist on this account' })
+    return
+  }
+  const kind = String(req.params.kind)
+  const file = String(req.params.file)
+  if (!['live', 'movie', 'series', 'timeshift'].includes(kind) || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/.test(file)) {
+    res.status(400).json({ error: 'Unsupported stream path' })
+    return
+  }
+  const scoped = req as unknown as IncomingMessage & { url?: string; headers?: Record<string, unknown> }
+  scoped.headers = {
+    ...scoped.headers,
+    'x-proxy-target-base': credentials.server,
+    'x-app-playlist-key': req.path
+  }
+  scoped.url = `/${kind}/${encodeURIComponent(credentials.username)}/${encodeURIComponent(credentials.password)}/${file}`
+  relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
+})
+
 // --- Channel plans (what each channel needs, remembered) ------------------------------------
 // One row per channel: whether it needed the video re-encode tier, and whether its audio had to be
 // re-encoded. Written only from a playback that WORKED, cleared the moment one fails, and read by

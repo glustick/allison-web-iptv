@@ -15,6 +15,29 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.77.0 — two providers, one grid.** The multi-playlist feature's browse-and-play phase. The
+storage and management pieces (the versioned `iptv_credentials` envelope, GET/PUT
+`/api/iptv/playlists`, the Admin → Playlists panel) already existed from v0.51.0 — what was
+missing was everything a second playlist is *for*. **Server:** playlist-scoped relays
+(`/api/iptv/playlists/:id/xtream` for the catalogue, `.../stream/:kind/:file` for playback),
+each resolving the named playlist's own credentials out of the account's encrypted envelope and
+addressing its own provider via the proxy's `x-proxy-target-base` seam — the browser never sees
+a second provider's address or secrets, and the relay's playlist-window keying stays distinct
+per playlist by path construction, so the signature-expiry rescue works unchanged. **Client:**
+`XtreamClient` gains an optional playlist id that scopes every URL it builds; Live TV fetches
+each additional playlist in parallel (independent failures, like the desktop's connections) and
+merges them into the channel list with per-row provenance badges — the "Playlist column" the
+2026-09-23 decisions hang the feature on — plus persisted **filter chips** and a per-playlist
+**hide** toggle. Playback routes each channel through its own playlist's scoped relay.
+**Deliberately scoped out this phase, with the UI saying so:** favourites, history and catch-up
+stay primary-only (stream ids are provider-scoped — recording a second playlist's channel would
+light up the primary's same-id channel; composite per-user identity is the next phase), and
+non-primary rows show an honestly empty EPG (the aggregated guide matches the primary's
+channels; per-playlist guides are next). **Rig-verified end to end with two fake providers:**
+the backup playlist's catalogue lists its own channels through the scoped relay, its chip
+filters the grid, and its channels play through it (playhead advancing, buffer growing).
+814 tests; typecheck, lint and the build clean.
+
 **v0.76.0 — map a channel to its guide, by hand.** The roadmap's "manual channel→guide mapping
 + optional fuzzy joins" item, open since the matching layer shipped deliberately conservative
 (exact id → normalized id → exact name → unambiguous fuzzy only): a channel whose name differs

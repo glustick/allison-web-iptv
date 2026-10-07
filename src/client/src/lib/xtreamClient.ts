@@ -42,9 +42,24 @@ export class XtreamClient {
    * any access log in front of the app (this deployment sits behind a reverse proxy). The server
    * holds the credentials encrypted and addresses the provider itself; the two methods below are
    * thin, credential-free front doors onto that.
+   *
+   * `playlistId` scopes this client to an ADDITIONAL saved playlist (v0.77.0): every URL becomes
+   * `/api/iptv/playlists/<id>/…`, which the server resolves against that playlist's own
+   * credentials and provider address. Undefined = the primary, whose paths stay unchanged.
    */
+  constructor(private readonly playlistId?: string) {}
+
+  private scoped(base: string): string {
+    // Primary: the base unchanged. Additional playlist: the base's /api segment becomes the
+    // server's playlist-scoped route (/api/iptv/playlists/<id>/xtream|stream|…), which resolves
+    // that playlist's own credentials and provider address.
+    return this.playlistId
+      ? `/api/iptv/playlists/${encodeURIComponent(this.playlistId)}${base.replace('/api', '')}`
+      : base
+  }
+
   private playerApiUrl(params: Record<string, string> = {}): string {
-    const url = new URL('/api/xtream', window.location.origin)
+    const url = new URL(this.scoped('/api/xtream'), window.location.origin)
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
     return url.toString()
   }
@@ -120,6 +135,6 @@ export class XtreamClient {
   
   getStreamUrl(kind: MediaKind, streamId: number, extension: string): string {
     const path = kind === 'live' ? 'live' : kind === 'movie' ? 'movie' : 'series'
-    return `/api/stream/${path}/${streamId}.${extension}`
+    return `${this.scoped('/api/stream')}/${path}/${streamId}.${extension}`
   }
 }

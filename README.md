@@ -6,6 +6,26 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.77.0 — two providers, one grid)
+
+The multi-playlist feature's browse-and-play phase (the design and its operator decisions have
+been on the roadmap since 2026-09-23): additional Xtream playlists, managed in Admin → Playlists
+(the CRUD and panel already existed — what was missing was everything downstream), now appear in
+Live TV. Channels from all playlists are merged in the default view, each row carrying a **source
+badge** ("Backup line") — the Playlist column the whole feature hangs on; no automatic
+row-merging, per that decision. **Playlist chips** above the grid (All / Main / each additional)
+filter the view, persisted per device with a per-playlist **hide** toggle. Playback routes each
+channel through **its own playlist's scoped relay** (`/api/iptv/playlists/<id>/stream/...`,
+catalogue via `.../xtream`), which the server resolves against that playlist's own encrypted
+credentials and provider address — the browser never sees a second provider's server or secrets.
+Favourites, history and catch-up stay primary-playlist-scoped for now (stream ids are
+provider-scoped; a favourite recorded against a second playlist would light up the primary's
+same-id channel — composite per-user identity is the documented next phase), and non-primary
+rows show an honestly empty EPG for the same reason. Rig-verified end to end with two fake
+providers: the backup playlist's catalogue lists its own channels, its chip filters to them, and
+its channels play through the scoped relay (playhead advancing, buffer growing). 814 tests,
+typecheck, lint and the build clean.
+
 ## Current state (v0.76.0 — map a channel to its guide, by hand)
 
 The matching layer's conservatism has a release valve: a channel the matcher cannot resolve

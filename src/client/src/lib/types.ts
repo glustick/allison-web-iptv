@@ -65,6 +65,13 @@ export interface LiveStream {
   tv_archive: number
   direct_source: string
   tv_archive_duration: number
+  /** Which saved playlist this channel came from (v0.77.0): 'primary' or an additional
+   *  playlist's id. Absent on objects built before the merge (library synthesizers) — those
+   *  are primary by definition. Playback, badges and the merge all read it; the field rides
+   *  along on the object rather than replacing stream_id, because the provider's own ids stay
+   *  provider-scoped. */
+  playlistId?: string
+  playlistLabel?: string
 }
 
 export interface VodStream {

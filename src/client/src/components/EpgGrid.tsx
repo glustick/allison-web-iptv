@@ -61,9 +61,15 @@ function useChannelListings(
   shortEpgByStream: Record<number, ShortEpgProgram[]>,
   requestShortEpg: (streamId: number) => void
 ): Block[] | undefined {
-  const fromAggregate = aggregated.data?.listings[String(channel.stream_id)]
+  // Non-primary channels (v0.77.0): the aggregated guide matches the PRIMARY provider's
+  // channels, and the short-EPG fallback runs through the primary client too — either would
+  // show a DIFFERENT channel's listings under this row (stream ids are provider-scoped and
+  // collide). Their grid arrives with per-playlist EPG in a later phase; until then they are
+  // honestly empty, with the source badge saying where the channel came from.
+  const isPrimary = !channel.playlistId || channel.playlistId === 'primary'
+  const fromAggregate = isPrimary ? aggregated.data?.listings[String(channel.stream_id)] : undefined
   const aggregateHasNothing = aggregated.status === 'ready' && (!fromAggregate || fromAggregate.length === 0)
-  const shouldUseFallback = aggregated.status === 'error' || aggregateHasNothing
+  const shouldUseFallback = isPrimary && (aggregated.status === 'error' || aggregateHasNothing)
 
   useEffect(() => {
     if (shouldUseFallback) requestShortEpg(channel.stream_id)
@@ -162,7 +168,18 @@ function EpgRow({
         }}
       >
         {channel.stream_icon ? <img src={channel.stream_icon} alt="" loading="lazy" /> : <span className="epg-row-channel-icon placeholder" />}
-        <span className="epg-row-channel-name">{channel.name}</span>
+        <span className="epg-row-channel-name">
+          {channel.name}
+          {channel.playlistId && channel.playlistId !== 'primary' && channel.playlistLabel && (
+            <span
+              className="setup-hint"
+              style={{ marginLeft: 6, fontSize: '0.68rem', opacity: 0.75, whiteSpace: 'nowrap' }}
+              title={`This channel comes from the "${channel.playlistLabel}" playlist`}
+            >
+              {channel.playlistLabel}
+            </span>
+          )}
+        </span>
       </button>
       <div
         className="epg-row-timeline"
@@ -176,7 +193,7 @@ function EpgRow({
         {listings !== undefined && listings.length === 0 && (
           <span className="epg-row-empty">
             No guide data
-            {onMapChannel && (
+            {onMapChannel && (!channel.playlistId || channel.playlistId === 'primary') && (
               <button
                 type="button"
                 className="admin-small-btn"
