@@ -20,6 +20,9 @@ export interface ReorderableRow {
    * list. Carrying only the resolved one made both silently do nothing.
    */
   storedStreamId?: number
+  /** The playlist the saved entry is stored under ('' = primary) — matched against the saved
+   *  list for reorder/remove, exactly like storedStreamId (v0.78.0). */
+  storedPlaylistId?: string
   name: string
   kind: 'live' | 'movie' | 'series'
   /** Channel artwork, when the entry (or a loaded channel list) has it. */

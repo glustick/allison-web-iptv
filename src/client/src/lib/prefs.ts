@@ -8,6 +8,8 @@ export type MediaKind = 'live' | 'movie' | 'series'
 export interface Favourite {
   kind: MediaKind
   streamId: number
+  /** Which playlist the channel came from; undefined (or '') is the primary playlist. */
+  playlistId?: string
   name: string
   category: string | null
   /** Channel artwork, stored with the entry so a list renders without the provider's own list. */
@@ -19,6 +21,8 @@ export interface HistoryEntry {
   id: number
   kind: MediaKind
   streamId: number
+  /** Which playlist the channel came from; undefined (or '') is the primary playlist. */
+  playlistId?: string
   name: string
   category: string | null
   watchedAt: string
@@ -27,6 +31,8 @@ export interface HistoryEntry {
 export interface CustomCategoryChannel {
   kind: MediaKind
   streamId: number
+  /** Which playlist the channel came from; undefined (or '') is the primary playlist. */
+  playlistId?: string
   name: string
   sourceCategory: string | null
   icon: string | null
@@ -43,6 +49,8 @@ export interface CustomCategory {
 export interface ResumePosition {
   kind: MediaKind
   streamId: number
+  /** Which playlist the title came from; undefined (or '') is the primary playlist. */
+  playlistId?: string
   name: string
   category: string | null
   positionSeconds: number
@@ -60,6 +68,9 @@ export interface PrefsState {
 export interface ChannelRef {
   kind: MediaKind
   streamId: number
+  /** Which playlist the channel came from; undefined is the primary playlist. Stream ids are
+   *  provider-scoped, so without this the primary's channel 668 and the backup's 668 are one. */
+  playlistId?: string
   name: string
   category?: string | null
   icon?: string | null
@@ -91,7 +102,7 @@ export async function setFavourite(channel: ChannelRef, favourite: boolean): Pro
 }
 
 /** Replaces the display order of the account's favourites (drag-and-drop / move buttons). */
-export async function setFavouriteOrder(order: Array<{ kind: MediaKind; streamId: number }>): Promise<Favourite[]> {
+export async function setFavouriteOrder(order: Array<{ kind: MediaKind; streamId: number; playlistId?: string }>): Promise<Favourite[]> {
   const data = await request<{ favourites: Favourite[] }>('/api/prefs/favourites/order', jsonPost({ order }))
   return data.favourites ?? []
 }
@@ -99,7 +110,7 @@ export async function setFavouriteOrder(order: Array<{ kind: MediaKind; streamId
 /** Replaces the display order of a custom category's channels. */
 export async function reorderCategoryChannels(
   id: number,
-  order: Array<{ kind: MediaKind; streamId: number }>
+  order: Array<{ kind: MediaKind; streamId: number; playlistId?: string }>
 ): Promise<CustomCategory[]> {
   const data = await request<{ categories: CustomCategory[] }>(`/api/prefs/categories/${id}/order`, jsonPost({ order }))
   return data.categories ?? []
@@ -160,8 +171,14 @@ export async function addChannelToCategory(id: number, channel: ChannelRef): Pro
   return data.categories ?? []
 }
 
-export async function removeChannelFromCategory(id: number, kind: MediaKind, streamId: number): Promise<CustomCategory[]> {
-  const data = await request<{ categories: CustomCategory[] }>(`/api/prefs/categories/${id}/channels/${kind}/${streamId}`, {
+export async function removeChannelFromCategory(
+  id: number,
+  kind: MediaKind,
+  streamId: number,
+  playlistId?: string
+): Promise<CustomCategory[]> {
+  const query = playlistId ? `?playlist=${encodeURIComponent(playlistId)}` : ''
+  const data = await request<{ categories: CustomCategory[] }>(`/api/prefs/categories/${id}/channels/${kind}/${streamId}${query}`, {
     method: 'DELETE'
   })
   return data.categories ?? []

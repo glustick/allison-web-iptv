@@ -590,3 +590,116 @@ describe('epgRetryDelayMs', () => {
     expect(result.listings['1']?.[0]?.title).toBe('Back at last')
   })
 })
+
+describe('aggregatePlaylists (v0.78.0 — per-playlist guides)', () => {
+  // The point of the composite key: stream ids are provider-scoped, so two playlists both
+  // handing out id 668 are DIFFERENT channels with different programmes. The primary keeps its
+  // bare stream-id keys (every consumer since the first guide); each additional playlist keys
+  // `<playlistId>:<streamId>` so the two 668s can never overwrite each other.
+  async function twoProvidersFixture(): Promise<{
+    service: ReturnType<typeof createEpgService>
+    primary: string
+    backup: string
+  }> {
+    const primary = await listen((req, res) => {
+      if (req.url?.startsWith('/xmltv.php')) {
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(
+          guideXml([
+            { id: 'primary-668', displayName: 'Primary Six Sixty Eight', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'PRIMARY programme for 668' }] }
+          ])
+        )
+        return
+      }
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ stream_id: 668, name: 'Primary 668', epg_channel_id: 'primary-668' }]))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+    const backup = await listen((req, res) => {
+      if (req.url?.startsWith('/xmltv.php')) {
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(
+          guideXml([
+            { id: 'backup-668', displayName: 'Backup Six Sixty Eight', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'BACKUP programme for 668' }] }
+          ])
+        )
+        return
+      }
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ stream_id: 668, name: 'Backup 668', epg_channel_id: 'backup-668' }]))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+    return { service: createEpgService({ createUpstreamRequest: createNodeUpstreamRequest, now: fakeClock().now }), primary, backup }
+  }
+
+  it('keys the primary by bare stream id and additional playlists by <playlistId>:<streamId>', async () => {
+    const { service, primary, backup } = await twoProvidersFixture()
+    const result = await service.aggregatePlaylists({
+      playlists: [
+        { playlistId: '', credentials: { server: primary, username: 'user-a', password: 'pass' } },
+        { playlistId: 'p2', credentials: { server: backup, username: 'user-b', password: 'pass' } }
+      ],
+      epgUrls: [],
+      startMs: NOW - HOUR,
+      endMs: NOW + 2 * HOUR
+    })
+
+    expect(Object.keys(result.listings).sort()).toEqual(['668', 'p2:668'])
+    expect(result.listings['668'].map((p) => p.title)).toEqual(['PRIMARY programme for 668'])
+    expect(result.listings['p2:668'].map((p) => p.title)).toEqual(['BACKUP programme for 668'])
+    // Two provider guides, both present in the source union.
+    expect(result.sources.map((s) => s.kind)).toEqual(['provider', 'provider'])
+  })
+
+  it('shares a source across playlists without duplicating it in the union', async () => {
+    const { service, primary, backup } = await twoProvidersFixture()
+    const shared = await listen((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/xml' })
+      res.end(guideXml([]))
+    })
+    const result = await service.aggregatePlaylists({
+      playlists: [
+        { playlistId: '', credentials: { server: primary, username: 'user-a', password: 'pass' } },
+        { playlistId: 'p2', credentials: { server: backup, username: 'user-b', password: 'pass' } }
+      ],
+      epgUrls: [shared],
+      startMs: NOW - HOUR,
+      endMs: NOW + 2 * HOUR
+    })
+    // Primary's provider guide + backup's provider guide + the shared household source = 3.
+    expect(result.sources).toHaveLength(3)
+    expect(result.sources.filter((s) => s.url === shared)).toHaveLength(1)
+  })
+
+  it('keeps the surviving playlists when one provider is down, and fails only when all do', async () => {
+    const { service, primary } = await twoProvidersFixture()
+    const dead = 'http://127.0.0.1:1' // nothing listens here
+    const partial = await service.aggregatePlaylists({
+      playlists: [
+        { playlistId: '', credentials: { server: primary, username: 'user-a', password: 'pass' } },
+        { playlistId: 'p2', credentials: { server: dead, username: 'user-b', password: 'pass' } }
+      ],
+      epgUrls: [],
+      startMs: NOW - HOUR,
+      endMs: NOW + 2 * HOUR
+    })
+    expect(Object.keys(partial.listings)).toEqual(['668'])
+
+    await expect(
+      service.aggregatePlaylists({
+        playlists: [{ playlistId: '', credentials: { server: dead, username: 'user-a', password: 'pass' } }],
+        epgUrls: [],
+        startMs: NOW - HOUR,
+        endMs: NOW + 2 * HOUR
+      })
+    ).rejects.toThrow(/Could not load the channel list/)
+  })
+})

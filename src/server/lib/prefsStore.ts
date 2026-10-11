@@ -27,6 +27,8 @@ const HISTORY_LIMIT_PER_USER = 500
 export interface Favourite {
   kind: MediaKind
   streamId: number
+  /** Which playlist the channel came from; '' is the primary playlist. */
+  playlistId: string
   name: string
   category: string | null
   icon: string | null
@@ -37,6 +39,8 @@ export interface HistoryEntry {
   id: number
   kind: MediaKind
   streamId: number
+  /** Which playlist the channel came from; '' is the primary playlist. */
+  playlistId: string
   name: string
   category: string | null
   watchedAt: string
@@ -45,6 +49,8 @@ export interface HistoryEntry {
 export interface CustomCategoryChannel {
   kind: MediaKind
   streamId: number
+  /** Which playlist the channel came from; '' is the primary playlist. */
+  playlistId: string
   name: string
   sourceCategory: string | null
   icon: string | null
@@ -61,6 +67,8 @@ export interface CustomCategory {
 export interface ResumePosition {
   kind: MediaKind
   streamId: number
+  /** Which playlist the title came from; '' is the primary playlist. */
+  playlistId: string
   name: string
   category: string | null
   positionSeconds: number
@@ -78,6 +86,14 @@ export class PrefsError extends Error {
 export interface ChannelRef {
   kind: MediaKind
   streamId: number
+  /**
+   * Which playlist the channel came from. Absent or '' means the primary playlist. Stream ids
+   * are provider-scoped, so without this a second playlist's channel 668 would be the primary's
+   * 668. Deliberately NOT validated against the account's playlist list: a favourite must
+   * survive its playlist being removed from the account, exactly as the denormalised
+   * name/category let it survive a provider renumbering.
+   */
+  playlistId?: string
   name: string
   category?: string | null
   /** Channel artwork, so a saved entry renders without needing the provider's list. */
@@ -105,6 +121,15 @@ function validateStreamId(streamId: unknown): number {
   return value
 }
 
+/** Normalises the caller's playlist reference to the stored form: '' is the primary playlist. */
+function cleanPlaylistId(value: unknown): string {
+  if (value === undefined || value === null) return ''
+  if (typeof value !== 'string') throw new PrefsError('playlistId must be a string')
+  const trimmed = value.trim()
+  if (trimmed.length > 64) throw new PrefsError('playlistId must be 64 characters or fewer')
+  return trimmed
+}
+
 function cleanName(name: unknown, label: string, max: number): string {
   if (typeof name !== 'string') throw new PrefsError(`${label} is required`)
   const trimmed = name.trim()
@@ -117,9 +142,13 @@ export interface PrefsStore {
   listFavourites(username: string): Favourite[]
   setFavourite(username: string, channel: ChannelRef, favourite: boolean): void
   /** Replaces the display order of this user's favourites (drag-and-drop). */
-  setFavouriteOrder(username: string, order: Array<{ kind: MediaKind; streamId: number }>): void
+  setFavouriteOrder(username: string, order: Array<{ kind: MediaKind; streamId: number; playlistId?: string }>): void
   /** Replaces the display order of one custom category's channels. */
-  reorderCategoryChannels(username: string, id: number, order: Array<{ kind: MediaKind; streamId: number }>): void
+  reorderCategoryChannels(
+    username: string,
+    id: number,
+    order: Array<{ kind: MediaKind; streamId: number; playlistId?: string }>
+  ): void
   listHistory(username: string, limit?: number): HistoryEntry[]
   recordHistory(username: string, channel: ChannelRef): void
   clearHistory(username: string): void
@@ -128,7 +157,13 @@ export interface PrefsStore {
   renameCategory(username: string, id: number, name: string): void
   deleteCategory(username: string, id: number): void
   addChannelToCategory(username: string, id: number, channel: ChannelRef): void
-  removeChannelFromCategory(username: string, id: number, kind: MediaKind, streamId: number): void
+  removeChannelFromCategory(
+    username: string,
+    id: number,
+    kind: MediaKind,
+    streamId: number,
+    playlistId?: string
+  ): void
   listResumePositions(username: string, kind?: MediaKind): ResumePosition[]
   setResumePosition(
     username: string,
@@ -136,7 +171,7 @@ export interface PrefsStore {
     positionSeconds: number,
     durationSeconds?: number | null
   ): ResumePosition | null
-  clearResumePosition(username: string, kind: MediaKind, streamId: number): void
+  clearResumePosition(username: string, kind: MediaKind, streamId: number, playlistId?: string): void
 }
 
 export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
@@ -153,8 +188,13 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
     return handle.db
   }
 
-  function clearResume(db: Database, username: string, kind: MediaKind, streamId: number): void {
-    db.prepare('DELETE FROM resume_positions WHERE username = ? AND kind = ? AND stream_id = ?').run(username, kind, streamId)
+  function clearResume(db: Database, username: string, kind: MediaKind, streamId: number, playlistId: string): void {
+    db.prepare('DELETE FROM resume_positions WHERE username = ? AND kind = ? AND stream_id = ? AND playlist_id = ?').run(
+      username,
+      kind,
+      streamId,
+      playlistId
+    )
   }
 
   function categoryById(db: Database, username: string, id: number): { id: number; name: string } | undefined {
@@ -168,13 +208,14 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       const db = requireDb()
       const rows = db
         .prepare(
-          `SELECT kind, stream_id, name, category, stream_icon, added_at FROM favourites
+          `SELECT kind, stream_id, playlist_id, name, category, stream_icon, added_at FROM favourites
             WHERE username = ?
             ORDER BY position IS NULL, position, added_at DESC`
         )
         .all(username) as Array<{
         kind: string
         stream_id: number
+        playlist_id: string
         name: string
         category: string | null
         stream_icon: string | null
@@ -183,6 +224,7 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       return rows.map((row) => ({
         kind: validateKind(row.kind),
         streamId: row.stream_id,
+        playlistId: row.playlist_id,
         name: row.name,
         category: row.category,
         icon: row.stream_icon,
@@ -194,6 +236,7 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       const db = requireDb()
       const kind = validateKind(channel.kind)
       const streamId = validateStreamId(channel.streamId)
+      const playlistId = cleanPlaylistId(channel.playlistId)
       const name = cleanName(channel.name, 'name', MAX_NAME_LENGTH)
       if (favourite) {
         const lowest = (
@@ -203,39 +246,60 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
         // already arranged keeps its relative order.
         const position = (lowest ?? 0) - 1
         db.prepare(
-          `INSERT INTO favourites (username, kind, stream_id, name, category, added_at, position, stream_icon)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT (username, kind, stream_id)
+          `INSERT INTO favourites (username, kind, stream_id, playlist_id, name, category, added_at, position, stream_icon)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (username, kind, stream_id, playlist_id)
            DO UPDATE SET name = excluded.name,
                          category = excluded.category,
                          stream_icon = COALESCE(excluded.stream_icon, favourites.stream_icon)`
-        ).run(username, kind, streamId, name, channel.category ?? null, new Date().toISOString(), position, cleanIcon(channel.icon))
+        ).run(
+          username,
+          kind,
+          streamId,
+          playlistId,
+          name,
+          channel.category ?? null,
+          new Date().toISOString(),
+          position,
+          cleanIcon(channel.icon)
+        )
       } else {
-        db.prepare('DELETE FROM favourites WHERE username = ? AND kind = ? AND stream_id = ?').run(username, kind, streamId)
+        db.prepare('DELETE FROM favourites WHERE username = ? AND kind = ? AND stream_id = ? AND playlist_id = ?').run(
+          username,
+          kind,
+          streamId,
+          playlistId
+        )
       }
     },
 
-    setFavouriteOrder(username: string, order: Array<{ kind: MediaKind; streamId: number }>): void {
+    setFavouriteOrder(username: string, order: Array<{ kind: MediaKind; streamId: number; playlistId?: string }>): void {
       const db = requireDb()
       if (!Array.isArray(order)) throw new PrefsError('order must be an array')
-      const update = db.prepare('UPDATE favourites SET position = ? WHERE username = ? AND kind = ? AND stream_id = ?')
+      const update = db.prepare(
+        'UPDATE favourites SET position = ? WHERE username = ? AND kind = ? AND stream_id = ? AND playlist_id = ?'
+      )
       db.transaction(() => {
         order.forEach((entry, index) => {
-          update.run(index, username, validateKind(entry.kind), validateStreamId(entry.streamId))
+          update.run(index, username, validateKind(entry.kind), validateStreamId(entry.streamId), cleanPlaylistId(entry.playlistId))
         })
       })()
     },
 
-    reorderCategoryChannels(username: string, id: number, order: Array<{ kind: MediaKind; streamId: number }>): void {
+    reorderCategoryChannels(
+      username: string,
+      id: number,
+      order: Array<{ kind: MediaKind; streamId: number; playlistId?: string }>
+    ): void {
       const db = requireDb()
       if (!categoryById(db, username, id)) throw new PrefsError('That category does not exist')
       if (!Array.isArray(order)) throw new PrefsError('order must be an array')
       const update = db.prepare(
-        'UPDATE custom_category_channels SET position = ? WHERE category_id = ? AND kind = ? AND stream_id = ?'
+        'UPDATE custom_category_channels SET position = ? WHERE category_id = ? AND kind = ? AND stream_id = ? AND playlist_id = ?'
       )
       db.transaction(() => {
         order.forEach((entry, index) => {
-          update.run(index, id, validateKind(entry.kind), validateStreamId(entry.streamId))
+          update.run(index, id, validateKind(entry.kind), validateStreamId(entry.streamId), cleanPlaylistId(entry.playlistId))
         })
       })()
     },
@@ -244,12 +308,23 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       const db = requireDb()
       const capped = Math.min(Math.max(1, Math.floor(limit)), HISTORY_LIMIT_PER_USER)
       const rows = db
-        .prepare('SELECT id, kind, stream_id, name, category, watched_at FROM history WHERE username = ? ORDER BY watched_at DESC, id DESC LIMIT ?')
-        .all(username, capped) as Array<{ id: number; kind: string; stream_id: number; name: string; category: string | null; watched_at: string }>
+        .prepare(
+          'SELECT id, kind, stream_id, playlist_id, name, category, watched_at FROM history WHERE username = ? ORDER BY watched_at DESC, id DESC LIMIT ?'
+        )
+        .all(username, capped) as Array<{
+        id: number
+        kind: string
+        stream_id: number
+        playlist_id: string
+        name: string
+        category: string | null
+        watched_at: string
+      }>
       return rows.map((row) => ({
         id: row.id,
         kind: validateKind(row.kind),
         streamId: row.stream_id,
+        playlistId: row.playlist_id,
         name: row.name,
         category: row.category,
         watchedAt: row.watched_at
@@ -260,16 +335,12 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       const db = requireDb()
       const kind = validateKind(channel.kind)
       const streamId = validateStreamId(channel.streamId)
+      const playlistId = cleanPlaylistId(channel.playlistId)
       const name = cleanName(channel.name, 'name', MAX_NAME_LENGTH)
       db.transaction(() => {
-        db.prepare('INSERT INTO history (username, kind, stream_id, name, category, watched_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-          username,
-          kind,
-          streamId,
-          name,
-          channel.category ?? null,
-          new Date().toISOString()
-        )
+        db.prepare(
+          'INSERT INTO history (username, kind, stream_id, playlist_id, name, category, watched_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(username, kind, streamId, playlistId, name, channel.category ?? null, new Date().toISOString())
         // Keep the table bounded: history is a convenience list, not an audit log.
         db.prepare(
           `DELETE FROM history
@@ -289,7 +360,7 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
         .prepare('SELECT id, name, position FROM custom_categories WHERE username = ? ORDER BY position, name COLLATE NOCASE')
         .all(username) as Array<{ id: number; name: string; position: number }>
       const channelsFor = db.prepare(
-        'SELECT kind, stream_id, name, source_category, stream_icon, position FROM custom_category_channels WHERE category_id = ? ORDER BY position, name COLLATE NOCASE'
+        'SELECT kind, stream_id, playlist_id, name, source_category, stream_icon, position FROM custom_category_channels WHERE category_id = ? ORDER BY position, name COLLATE NOCASE'
       )
       // Ordering is explicit (drag-and-drop) but ties still fall back to the name for stability.
       return categories.map((category) => ({
@@ -300,6 +371,7 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
           channelsFor.all(category.id) as Array<{
             kind: string
             stream_id: number
+            playlist_id: string
             name: string
             source_category: string | null
             stream_icon: string | null
@@ -308,6 +380,7 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
         ).map((row) => ({
           kind: validateKind(row.kind),
           streamId: row.stream_id,
+          playlistId: row.playlist_id,
           name: row.name,
           sourceCategory: row.source_category,
           icon: row.stream_icon,
@@ -356,17 +429,18 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       if (!categoryById(db, username, id)) throw new PrefsError('That category does not exist')
       const kind = validateKind(channel.kind)
       const streamId = validateStreamId(channel.streamId)
+      const playlistId = cleanPlaylistId(channel.playlistId)
       const name = cleanName(channel.name, 'name', MAX_NAME_LENGTH)
       const position =
         ((db.prepare('SELECT MAX(position) AS max FROM custom_category_channels WHERE category_id = ?').get(id) as { max: number | null }).max ?? -1) + 1
       db.prepare(
-        `INSERT INTO custom_category_channels (category_id, kind, stream_id, name, source_category, position, stream_icon)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (category_id, kind, stream_id)
+        `INSERT INTO custom_category_channels (category_id, kind, stream_id, playlist_id, name, source_category, position, stream_icon)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (category_id, kind, stream_id, playlist_id)
          DO UPDATE SET name = excluded.name,
                        source_category = excluded.source_category,
                        stream_icon = COALESCE(excluded.stream_icon, custom_category_channels.stream_icon)`
-      ).run(id, kind, streamId, name, channel.category ?? null, position, cleanIcon(channel.icon))
+      ).run(id, kind, streamId, playlistId, name, channel.category ?? null, position, cleanIcon(channel.icon))
     },
 
     listResumePositions(username: string, kind?: MediaKind): ResumePosition[] {
@@ -375,17 +449,18 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
         kind
           ? db
               .prepare(
-                'SELECT kind, stream_id, name, category, position_seconds, duration_seconds, updated_at FROM resume_positions WHERE username = ? AND kind = ? ORDER BY updated_at DESC'
+                'SELECT kind, stream_id, playlist_id, name, category, position_seconds, duration_seconds, updated_at FROM resume_positions WHERE username = ? AND kind = ? ORDER BY updated_at DESC'
               )
               .all(username, validateKind(kind))
           : db
               .prepare(
-                'SELECT kind, stream_id, name, category, position_seconds, duration_seconds, updated_at FROM resume_positions WHERE username = ? ORDER BY updated_at DESC'
+                'SELECT kind, stream_id, playlist_id, name, category, position_seconds, duration_seconds, updated_at FROM resume_positions WHERE username = ? ORDER BY updated_at DESC'
               )
               .all(username)
       ) as Array<{
         kind: string
         stream_id: number
+        playlist_id: string
         name: string
         category: string | null
         position_seconds: number
@@ -395,6 +470,7 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       return rows.map((row) => ({
         kind: validateKind(row.kind),
         streamId: row.stream_id,
+        playlistId: row.playlist_id,
         name: row.name,
         category: row.category,
         positionSeconds: row.position_seconds,
@@ -421,6 +497,7 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
         throw new PrefsError('Resume only applies to movies and series')
       }
       const streamId = validateStreamId(channel.streamId)
+      const playlistId = cleanPlaylistId(channel.playlistId)
       const position = Number(positionSeconds)
       if (!Number.isFinite(position) || position < 0) throw new PrefsError('positionSeconds must be zero or more')
       const duration = durationSeconds === null || durationSeconds === undefined ? null : Number(durationSeconds)
@@ -430,25 +507,26 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
 
       const finished = duration !== null && position >= duration - FINISHED_TAIL_SECONDS
       if (position < MIN_RESUME_SECONDS || finished) {
-        clearResume(db, username, kind, streamId)
+        clearResume(db, username, kind, streamId, playlistId)
         return null
       }
 
       const name = cleanName(channel.name, 'name', MAX_NAME_LENGTH)
       db.prepare(
-        `INSERT INTO resume_positions (username, kind, stream_id, name, category, position_seconds, duration_seconds, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (username, kind, stream_id)
+        `INSERT INTO resume_positions (username, kind, stream_id, playlist_id, name, category, position_seconds, duration_seconds, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (username, kind, stream_id, playlist_id)
          DO UPDATE SET position_seconds = excluded.position_seconds,
                        duration_seconds = excluded.duration_seconds,
                        name = excluded.name,
                        category = excluded.category,
                        updated_at = excluded.updated_at`
-      ).run(username, kind, streamId, name, channel.category ?? null, position, duration, new Date().toISOString())
+      ).run(username, kind, streamId, playlistId, name, channel.category ?? null, position, duration, new Date().toISOString())
 
       return {
         kind,
         streamId,
+        playlistId,
         name,
         category: channel.category ?? null,
         positionSeconds: position,
@@ -457,17 +535,18 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       }
     },
 
-    clearResumePosition(username: string, kind: MediaKind, streamId: number): void {
-      clearResume(requireDb(), username, validateKind(kind), validateStreamId(streamId))
+    clearResumePosition(username: string, kind: MediaKind, streamId: number, playlistId?: string): void {
+      clearResume(requireDb(), username, validateKind(kind), validateStreamId(streamId), cleanPlaylistId(playlistId))
     },
 
-    removeChannelFromCategory(username: string, id: number, kind: MediaKind, streamId: number): void {
+    removeChannelFromCategory(username: string, id: number, kind: MediaKind, streamId: number, playlistId?: string): void {
       const db = requireDb()
       if (!categoryById(db, username, id)) throw new PrefsError('That category does not exist')
-      db.prepare('DELETE FROM custom_category_channels WHERE category_id = ? AND kind = ? AND stream_id = ?').run(
+      db.prepare('DELETE FROM custom_category_channels WHERE category_id = ? AND kind = ? AND stream_id = ? AND playlist_id = ?').run(
         id,
         validateKind(kind),
-        validateStreamId(streamId)
+        validateStreamId(streamId),
+        cleanPlaylistId(playlistId)
       )
     }
   }

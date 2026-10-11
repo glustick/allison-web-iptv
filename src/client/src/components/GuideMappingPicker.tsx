@@ -27,14 +27,19 @@ const STRATEGY_TEXT: Record<string, string> = {
 export function GuideMappingPicker({
   session,
   streamId,
+  playlistId,
   onClose,
   onMappingChanged
 }: {
   session: Session
   streamId: number
+  /** The mapped channel's playlist (v0.78.0): mappings are stored per playlist, so a
+   *  non-primary channel's picker targets `?playlist=<id>`. Undefined = primary. */
+  playlistId?: string
   onClose: () => void
   onMappingChanged: () => void
 }): JSX.Element {
+  const playlistQuery = playlistId ? `?playlist=${encodeURIComponent(playlistId)}` : ''
   const [data, setData] = useState<PickerData | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -44,7 +49,7 @@ export function GuideMappingPicker({
   useEffect(() => {
     let active = true
     setStatus('loading')
-    fetch(`/api/epg/mappings/${streamId}`)
+    fetch(`/api/epg/mappings/${streamId}${playlistQuery}`)
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         return (await res.json()) as PickerData & { ok: true }
@@ -62,13 +67,13 @@ export function GuideMappingPicker({
     return () => {
       active = false
     }
-  }, [streamId])
+  }, [streamId, playlistQuery])
 
   async function apply(guideChannelId: string, guideChannelName: string): Promise<void> {
     setSaving(true)
     setError(null)
     try {
-      const res = await fetch(`/api/epg/mappings/${streamId}`, {
+      const res = await fetch(`/api/epg/mappings/${streamId}${playlistQuery}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ guideChannelId, guideChannelName, channelName: data?.streamName })
@@ -87,7 +92,7 @@ export function GuideMappingPicker({
     setSaving(true)
     setError(null)
     try {
-      const res = await fetch(`/api/epg/mappings/${streamId}`, { method: 'DELETE' })
+      const res = await fetch(`/api/epg/mappings/${streamId}${playlistQuery}`, { method: 'DELETE' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       onMappingChanged()
       onClose()

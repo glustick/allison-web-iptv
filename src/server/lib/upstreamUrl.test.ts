@@ -73,4 +73,14 @@ describe('parseSameOriginTimeshiftPath', () => {
       expect(parseSameOriginTimeshiftPath(input), input).toBeNull()
     }
   })
+
+  it('reads the playlist-scoped catch-up shape and names the playlist (v0.78.0)', () => {
+    const parsed = parseSameOriginTimeshiftPath('/api/iptv/playlists/p2/timeshift/668.ts?start=1789533000&duration=30')
+    expect(parsed).toEqual({ file: '668.ts', startSeconds: 1789533000, durationMinutes: 30, playlistId: 'p2' })
+    // The primary's URL stays unscoped: no playlistId in the parse result.
+    expect(parseSameOriginTimeshiftPath('/api/timeshift/668.ts?start=1&duration=2')?.playlistId).toBeUndefined()
+    // A malformed scoped path is refused like any other, not half-parsed into a primary request.
+    expect(parseSameOriginTimeshiftPath('/api/iptv/playlists/p2/timeshift/nested/668.ts?start=1&duration=2')).toBeNull()
+    expect(parseSameOriginTimeshiftPath('/api/iptv/playlists//timeshift/668.ts?start=1&duration=2')).toBeNull()
+  })
 })

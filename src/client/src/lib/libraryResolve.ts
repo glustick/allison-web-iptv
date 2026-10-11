@@ -20,6 +20,10 @@ export interface LibraryEntry {
   streamId: number
   name: string
   category: string | null
+  /** Which playlist the saved row came from; undefined is the primary playlist (v0.78.0).
+   *  Non-primary rows resolve against that playlist's own catalogue — its ids are a
+   *  provider-scoped space the primary's lookup must never touch. */
+  playlistId?: string
 }
 
 export interface ProviderLookup {

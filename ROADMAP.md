@@ -15,6 +15,34 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.78.0 — the same channel, on both lines, finally distinct.** Multi-playlist phase 3: composite
+identity, the manual "also on →" switch, and per-playlist guides. **Storage:** every per-user table
+that keys on a stream id (favourites, history, resume positions, custom-category channels) gains a
+`playlist_id` dimension — stream ids are provider-scoped, so the backup's channel 668 and the
+primary's 668 were one row until now; SQLite cannot ALTER a primary key, so the three tables with it
+in the key are rebuilt the standard way and every legacy row comes back as `playlist_id = ''` (the
+primary). **Client:** the two deliberate primary-only guards come out — watching a non-primary
+channel records history under its playlist ref, and the now-playing star favourites there too —
+library rows (favourites/history/custom) resolve against their OWN playlist's catalogue from memory,
+and rows carry the playlist through playback so a favourite replays through its playlist's scoped
+relay. **Catch-up** works for additional playlists: the one unscoped URL builder
+(`getTimeshiftUrl`) went through `scoped()`, the server gained the matching
+`/api/iptv/playlists/:id/timeshift/:file` relay (credentials resolved per request,
+`x-app-playlist-key` keeping the signature-expiry rescue per playlist), and the transcoder's
+same-origin mapping resolves the named playlist's credentials — an unknown playlist fails the
+resolution rather than silently converting the primary's same-id channel. **Per-playlist EPG:**
+`/api/epg` aggregates every playlist — each against its own provider guide plus the household's
+shared XMLTV sources — with independent failures (one dead provider no longer blanks the grid);
+the primary keeps its bare stream-id listing keys and each additional playlist keys
+`<playlistId>:<streamId>`; the short-EPG fallback fetches through the row's own scoped client.
+Guide mappings (v0.76.0) gained the playlist dimension (`?playlist=` on the three routes, PK
+widened), and the Map… button is offered on non-primary rows too. **The switch:** a ported
+`channelMatchKey` (normalised name — region tags and quality words away) indexes every visible
+playlist's catalogue, and a row carrying the same normalised name on another line renders an
+`also on {label} →` action beside its provenance badge; one click plays that playlist's own row
+through the ordinary select path. Nothing merges and nothing fails over on its own — the 2026-09-23
+decisions, kept. 828 tests (14 new); typecheck, lint and the build clean.
+
 **v0.77.0 — two providers, one grid.** The multi-playlist feature's browse-and-play phase. The
 storage and management pieces (the versioned `iptv_credentials` envelope, GET/PUT
 `/api/iptv/playlists`, the Admin → Playlists panel) already existed from v0.51.0 — what was
@@ -1447,13 +1475,12 @@ validator rejected them; the cryptography was intact). The regression test asser
 still satisfies the strict reader. **Lesson: when a stored format changes, every reader of it is part of
 the format, and the migration should stay additive until they have all been found.**
 
-**Phase 2, next — the part that makes two playlists visible:** the browse layer carries a playlist
-dimension (channel identity becomes `playlistId:streamId`), the channel list gains a **Playlist column**,
-and hide/sort become per-playlist preferences held on the device (the same shape as the transcode hints,
-which need no server support). The relay and the Xtream proxy must resolve credentials for the playlist a
-request names rather than for the account. Then phase 3: the manual "also on…" switch. Then **phase 2**: the channel list carries a
-playlist dimension (identity becomes `playlistId:streamId`), with a **Playlist column**, per-playlist
-hide, and sort. Then **phase 3**: the manual counterpart switch. Phases of the earlier plan that the
+**Phase 2 landed 2026-10-07 (v0.77.0)** — the browse layer carries the playlist dimension, the
+channel list gained the **Playlist column** with filter chips and per-playlist hide, and the relay
+resolves credentials for the playlist a request names. **Phase 3 landed 2026-10-10 (v0.78.0)** — the
+manual "also on…" switch, composite per-user identity in the per-user tables (favourites, history,
+resume positions, custom categories), catch-up through the scoped relay, and per-playlist guides with
+playlist-scoped manual mappings. Phases of the earlier plan that the
 operator's decisions removed — automatic dedupe and automatic failover — are deliberately not built.
 
 **Phase 1 landed 2026-09-23 (v0.51.0), model only.** `src/server/lib/playlists.ts` parses a stored blob

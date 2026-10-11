@@ -49,6 +49,12 @@ function createSchema(db: Database.Database): void {
       username   TEXT NOT NULL,
       kind       TEXT NOT NULL,
       stream_id  INTEGER NOT NULL,
+      -- Which playlist the channel came from ('' = the primary playlist). Stream ids are
+      -- provider-scoped, so two playlists can hand out the same numeric id for different
+      -- channels; without this column a favourite of the backup's channel 668 would light up
+      -- the primary's 668. Like name/category below, it is denormalised on purpose: a playlist
+      -- later removed from the account must not silently blank someone's favourites.
+      playlist_id TEXT NOT NULL DEFAULT '',
       name       TEXT NOT NULL,
       category   TEXT,
       added_at   TEXT NOT NULL,
@@ -58,16 +64,18 @@ function createSchema(db: Database.Database): void {
       -- Drag-to-reorder position. New favourites take the lowest value so they appear on top
       -- without disturbing an order the user has arranged by hand.
       position   INTEGER,
-      PRIMARY KEY (username, kind, stream_id)
+      PRIMARY KEY (username, kind, stream_id, playlist_id)
     );
 
     -- Watch history. Name/category are denormalised on purpose: history should still make sense
-    -- after the provider renumbers or drops a channel.
+    -- after the provider renumbers or drops a channel. playlist_id rides along for the same
+    -- reason (see favourites): provider-scoped ids collide across playlists.
     CREATE TABLE IF NOT EXISTS history (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       username   TEXT NOT NULL,
       kind       TEXT NOT NULL,
       stream_id  INTEGER NOT NULL,
+      playlist_id TEXT NOT NULL DEFAULT '',
       name       TEXT NOT NULL,
       category   TEXT,
       watched_at TEXT NOT NULL
@@ -87,11 +95,13 @@ function createSchema(db: Database.Database): void {
       category_id     INTEGER NOT NULL REFERENCES custom_categories (id) ON DELETE CASCADE,
       kind            TEXT NOT NULL,
       stream_id       INTEGER NOT NULL,
+      -- Same playlist dimension as favourites: provider-scoped ids collide across playlists.
+      playlist_id     TEXT NOT NULL DEFAULT '',
       name            TEXT NOT NULL,
       source_category TEXT,
       stream_icon     TEXT,
       position        INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (category_id, kind, stream_id)
+      PRIMARY KEY (category_id, kind, stream_id, playlist_id)
     );
 
     -- Resume points, movies and series only (live TV has nothing to resume). Kept per item so
@@ -100,12 +110,15 @@ function createSchema(db: Database.Database): void {
       username         TEXT NOT NULL,
       kind             TEXT NOT NULL,
       stream_id        INTEGER NOT NULL,
+      -- Same playlist dimension as favourites (dormant for on-demand until VOD browsing
+      -- becomes playlist-aware, but the schema is the identity).
+      playlist_id      TEXT NOT NULL DEFAULT '',
       name             TEXT NOT NULL,
       category         TEXT,
       position_seconds REAL NOT NULL,
       duration_seconds REAL,
       updated_at       TEXT NOT NULL,
-      PRIMARY KEY (username, kind, stream_id)
+      PRIMARY KEY (username, kind, stream_id, playlist_id)
     );
 
     -- Search index over the provider's catalogue: one row per channel/film/series, its name
@@ -189,6 +202,56 @@ function migrateSchema(db: Database.Database): void {
   // (it has the provider's channel list anyway), so nothing has to be re-added by hand.
   addColumn('favourites', 'stream_icon', 'stream_icon TEXT')
   addColumn('custom_category_channels', 'stream_icon', 'stream_icon TEXT')
+
+  // v0.78.0 — the playlist dimension. Stream ids are provider-scoped: two playlists can hand
+  // out the same numeric id for different channels, so every per-user table that keys on a
+  // stream id needs the playlist alongside it. '' means the primary playlist, which is what
+  // every row saved before this migration was implicitly on. SQLite cannot ALTER a primary
+  // key, so the three tables whose PK includes the stream id are rebuilt the standard way
+  // (new table → copy → drop → rename); history's PK is its autoincrement id, so a plain
+  // column add is enough there. Foreign keys are dropped for the rebuild because the copy
+  // re-declares them and the rows being copied already satisfy them.
+  const widenWithPlaylistId = (table: string, pkColumns: string[], body: string): void => {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    // An empty PRAGMA means the table does not exist yet — createSchema just made (or will
+    // make) the new shape, and guide_mappings in particular is created lazily by its store.
+    if (columns.length === 0 || columns.some((entry) => entry.name === 'playlist_id')) return
+    const names = columns.map((entry) => entry.name)
+    db.exec(`
+      CREATE TABLE ${table}_new (${body} PRIMARY KEY (${[...pkColumns, 'playlist_id'].join(', ')}));
+      INSERT INTO ${table}_new (${[...names, 'playlist_id'].join(', ')})
+        SELECT ${names.join(', ')}, '' FROM ${table};
+      DROP TABLE ${table};
+      ALTER TABLE ${table}_new RENAME TO ${table};
+    `)
+    console.log(`[db] widened ${table} with playlist_id`)
+  }
+
+  db.pragma('foreign_keys = OFF')
+  try {
+    widenWithPlaylistId(
+      'favourites',
+      ['username', 'kind', 'stream_id'],
+      `username TEXT NOT NULL, kind TEXT NOT NULL, stream_id INTEGER NOT NULL, playlist_id TEXT NOT NULL DEFAULT '',
+       name TEXT NOT NULL, category TEXT, added_at TEXT NOT NULL, stream_icon TEXT, position INTEGER, `
+    )
+    widenWithPlaylistId(
+      'custom_category_channels',
+      ['category_id', 'kind', 'stream_id'],
+      `category_id INTEGER NOT NULL REFERENCES custom_categories (id) ON DELETE CASCADE, kind TEXT NOT NULL,
+       stream_id INTEGER NOT NULL, playlist_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, source_category TEXT,
+       stream_icon TEXT, position INTEGER NOT NULL DEFAULT 0, `
+    )
+    widenWithPlaylistId(
+      'resume_positions',
+      ['username', 'kind', 'stream_id'],
+      `username TEXT NOT NULL, kind TEXT NOT NULL, stream_id INTEGER NOT NULL, playlist_id TEXT NOT NULL DEFAULT '',
+       name TEXT NOT NULL, category TEXT, position_seconds REAL NOT NULL, duration_seconds REAL, updated_at TEXT NOT NULL, `
+    )
+  } finally {
+    db.pragma('foreign_keys = ON')
+  }
+  addColumn('history', 'playlist_id', "playlist_id TEXT NOT NULL DEFAULT ''")
 }
 
 /**

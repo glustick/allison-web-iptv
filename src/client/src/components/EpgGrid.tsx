@@ -17,7 +17,8 @@ import { useShortEpgCache } from '../lib/useShortEpgCache'
 import { useAggregatedEpg, type AggregatedEpgData } from '../lib/useAggregatedEpg'
 import { GuideMappingPicker } from './GuideMappingPicker'
 import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
-import type { LiveStream, ShortEpgProgram } from '../lib/types'
+import { playlistRefOf, type LiveStream, type ShortEpgProgram } from '../lib/types'
+import type { AlsoOnMatch } from '../lib/crossPlaylist'
 
 const HOUR_MS = 3_600_000
 // The channel row height, in one place: the List renders rows at this size and the keyboard
@@ -58,22 +59,22 @@ function formatTime(ms: number): string {
 function useChannelListings(
   channel: LiveStream,
   aggregated: { data: AggregatedEpgData | null; status: 'loading' | 'ready' | 'error' },
-  shortEpgByStream: Record<number, ShortEpgProgram[]>,
-  requestShortEpg: (streamId: number) => void
+  shortEpgByStream: Record<string, ShortEpgProgram[]>,
+  requestShortEpg: (channel: { stream_id: number; playlistId?: string }) => void
 ): Block[] | undefined {
-  // Non-primary channels (v0.77.0): the aggregated guide matches the PRIMARY provider's
-  // channels, and the short-EPG fallback runs through the primary client too — either would
-  // show a DIFFERENT channel's listings under this row (stream ids are provider-scoped and
-  // collide). Their grid arrives with per-playlist EPG in a later phase; until then they are
-  // honestly empty, with the source badge saying where the channel came from.
-  const isPrimary = !channel.playlistId || channel.playlistId === 'primary'
-  const fromAggregate = isPrimary ? aggregated.data?.listings[String(channel.stream_id)] : undefined
+  // v0.78.0: every playlist's channels match against their own guide server-side. The listing
+  // key matches the server's convention — the primary's stream id is bare, a non-primary
+  // channel's is `<playlistId>:<streamId>` — so two playlists handing out the same
+  // provider-scoped id can never show each other's programmes.
+  const playlistRef = playlistRefOf(channel)
+  const listingKey = playlistRef ? `${playlistRef}:${channel.stream_id}` : String(channel.stream_id)
+  const fromAggregate = aggregated.data?.listings[listingKey]
   const aggregateHasNothing = aggregated.status === 'ready' && (!fromAggregate || fromAggregate.length === 0)
-  const shouldUseFallback = isPrimary && (aggregated.status === 'error' || aggregateHasNothing)
+  const shouldUseFallback = aggregated.status === 'error' || aggregateHasNothing
 
   useEffect(() => {
-    if (shouldUseFallback) requestShortEpg(channel.stream_id)
-  }, [shouldUseFallback, channel.stream_id, requestShortEpg])
+    if (shouldUseFallback) requestShortEpg(channel)
+  }, [shouldUseFallback, channel, requestShortEpg])
 
   if (fromAggregate && fromAggregate.length > 0) {
     return fromAggregate.map((p) => ({
@@ -85,7 +86,7 @@ function useChannelListings(
     }))
   }
   if (shouldUseFallback) {
-    const listings = shortEpgByStream[channel.stream_id]
+    const listings = shortEpgByStream[listingKey]
     if (listings === undefined) return undefined
     return listings.map((p, i) => ({
       key: `${p.id}-${i}`,
@@ -106,9 +107,12 @@ interface RowProps {
   windowEnd: number
   now: number
   activeStreamId?: number
+  /** The playing channel's playlist ref — the active highlight is composite (v0.78.0): the
+   *  primary's 668 and the backup's 668 are different rows. */
+  activePlaylistId?: string
   aggregated: { data: AggregatedEpgData | null; status: 'loading' | 'ready' | 'error' }
-  shortEpgByStream: Record<number, ShortEpgProgram[]>
-  requestShortEpg: (streamId: number) => void
+  shortEpgByStream: Record<string, ShortEpgProgram[]>
+  requestShortEpg: (channel: { stream_id: number; playlistId?: string }) => void
   onSelectChannel: (channel: LiveStream) => void
   /** Drag-to-pan the whole grid (see lib/epgPan.ts): left/right moves the window through time,
    *  up/down moves the channel list. Attached to each row's timeline *and* its channel name, so the
@@ -124,6 +128,9 @@ interface RowProps {
   /** Opens the manual mapping picker for this channel (v0.76.0) — offered on guide-less rows,
    *  where "no data" is most often a match the conservative matcher refused. */
   onMapChannel?: (channel: LiveStream) => void
+  /** Where else this channel lives (v0.78.0) — the manual "also on →" switch, one action per
+   *  other playlist carrying it. Absent (or no matches) renders nothing. */
+  alsoOn?: (channel: { name: string }, ownRef?: string) => AlsoOnMatch[]
   didPan: () => boolean
 }
 
@@ -135,6 +142,7 @@ function EpgRow({
   windowEnd,
   now,
   activeStreamId,
+  activePlaylistId,
   aggregated,
   shortEpgByStream,
   requestShortEpg,
@@ -145,12 +153,13 @@ function EpgRow({
   onPlayCatchup,
     onRestartProgramme,
   onMapChannel,
+  alsoOn,
   didPan
 }: { index: number; style: CSSProperties } & RowProps): JSX.Element {
   const channel = channels[index]
   const listings = useChannelListings(channel, aggregated, shortEpgByStream, requestShortEpg)
   const visible = (listings ?? []).filter((p) => p.stopMs > windowStart && p.startMs < windowEnd)
-  const isActive = activeStreamId === channel.stream_id
+  const isActive = activeStreamId === channel.stream_id && (activePlaylistId ?? '') === (playlistRefOf(channel) ?? '')
   const nowPct = pct(now, windowStart, windowEnd)
   const showNowLine = now >= windowStart && now <= windowEnd
 
@@ -179,6 +188,33 @@ function EpgRow({
               {channel.playlistLabel}
             </span>
           )}
+          {alsoOn &&
+            alsoOn(channel, playlistRefOf(channel)).map((match) => (
+              // A span, not a button: this sits inside the row's channel <button>, and a nested
+              // <button> is invalid HTML that the browser silently strips. role="button" keeps
+              // it clickable and keyboard-reachable; stopPropagation keeps the row unselected.
+              <span
+                key={match.playlistId}
+                role="button"
+                tabIndex={0}
+                className="admin-small-btn"
+                style={{ marginLeft: 6, padding: '1px 6px', fontSize: '0.68rem', display: 'inline-block', cursor: 'pointer' }}
+                title={`This channel is also on the "${match.playlistLabel}" playlist — switch to it`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSelectChannel(match.channel)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onSelectChannel(match.channel)
+                  }
+                }}
+              >
+                also on {match.playlistLabel} →
+              </span>
+            ))}
         </span>
       </button>
       <div
@@ -193,7 +229,7 @@ function EpgRow({
         {listings !== undefined && listings.length === 0 && (
           <span className="epg-row-empty">
             No guide data
-            {onMapChannel && (!channel.playlistId || channel.playlistId === 'primary') && (
+            {onMapChannel && (
               <button
                 type="button"
                 className="admin-small-btn"
@@ -281,15 +317,21 @@ export function EpgGrid({
   session,
   channels,
   activeStreamId,
+  activePlaylistId,
   onSelectChannel,
   onOpenEpgSettings,
   emptyMessage,
   onPlayCatchup,
     onRestartProgramme,
+  alsoOn,
 }: {
   session: Session
   channels: LiveStream[]
   activeStreamId?: number
+  activePlaylistId?: string
+  /** The cross-playlist switch lookup (v0.78.0), built once by the caller over every visible
+   *  playlist's catalogue. */
+  alsoOn?: (channel: { name: string }, ownRef?: string) => AlsoOnMatch[]
   onSelectChannel: (channel: LiveStream | null) => void
   /** Jumps to the EPG section — the place external guide sources are added/removed. */
   onPlayCatchup?: (channel: LiveStream, programme: { startMs: number; stopMs: number; title: string }) => void
@@ -515,6 +557,7 @@ export function EpgGrid({
               windowEnd,
               now,
               activeStreamId,
+              activePlaylistId,
               aggregated,
               shortEpgByStream,
               requestShortEpg: request,
@@ -522,6 +565,7 @@ export function EpgGrid({
               onPlayCatchup,
                             onRestartProgramme,
               onMapChannel: (channel: LiveStream) => setMappingChannel(channel),
+              alsoOn,
               onTimelinePointerDown: startPan,
               onTimelinePointerMove: movePan,
               onTimelinePointerUp: endPan,
@@ -536,6 +580,7 @@ export function EpgGrid({
         <GuideMappingPicker
           session={session}
           streamId={mappingChannel.stream_id}
+          playlistId={playlistRefOf(mappingChannel)}
           onClose={() => setMappingChannel(null)}
           onMappingChanged={() => setMappingNonce((n) => n + 1)}
         />

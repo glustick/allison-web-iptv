@@ -166,7 +166,8 @@ export interface EpgServiceDeps {
    * service behaves exactly as before, automatic matching only.
    */
   manualMappings?: {
-    get(owner: string, streamId: number): { guideChannelId: string; guideChannelName: string; setAt: number } | null
+    /** playlistId '' is the primary playlist (v0.78.0 widening; primary-only callers pass ''). */
+    get(owner: string, playlistId: string, streamId: number): { guideChannelId: string; guideChannelName: string; setAt: number } | null
   }
 }
 
@@ -515,7 +516,8 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     credentials: EpgServiceCredentials,
     sources: string[],
     entries: GuideCacheEntry[],
-    manual?: Map<number, string>
+    manual?: Map<number, string>,
+    playlistId = ''
   ): string {
     const versions = entries.map((entry) => `${entry.fetchedAt}:${entry.status}`).join(',')
     // The overrides are part of the mapping's identity: set/clear must invalidate the cache,
@@ -523,26 +525,29 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     const overrides = manual
       ? [...manual.entries()].sort((a, b) => a[0] - b[0]).map(([id, gid]) => `${id}=${gid}`).join(',')
       : ''
-    return `${credentials.server}|${credentials.username}|${sources.join('\u0000')}|${versions}|${overrides}`
+    // The playlist dimension (v0.78.0): two playlists that share a provider account would
+    // otherwise share one mapping cache entry while their manual overrides differ.
+    return `${playlistId}|${credentials.server}|${credentials.username}|${sources.join('\u0000')}|${versions}|${overrides}`
   }
 
-  /** Stream → guide-channel mapping, memoised per (account, source set, guide versions): this is
-   *  the expensive part (thousands of streams × scoring), so it runs once per guide refresh
-   *  rather than per grid navigation. */
+  /** Stream → guide-channel mapping, memoised per (playlist, account, source set, guide versions):
+   *  this is the expensive part (thousands of streams × scoring), so it runs once per guide
+   *  refresh rather than per grid navigation. */
   function getMapping(
     credentials: EpgServiceCredentials,
     sources: string[],
     entries: GuideCacheEntry[],
-    streams: StreamForMatching[]
+    streams: StreamForMatching[],
+    playlistId = ''
   ): MappingCacheEntry {
     const manual = new Map<number, string>()
     if (manualMappings) {
       for (const stream of streams) {
-        const override = manualMappings.get(credentials.username, stream.stream_id)
+        const override = manualMappings.get(credentials.username, playlistId, stream.stream_id)
         if (override) manual.set(stream.stream_id, override.guideChannelId)
       }
     }
-    const key = mappingCacheKey(credentials, sources, entries, manual)
+    const key = mappingCacheKey(credentials, sources, entries, manual, playlistId)
     const cached = mappingCache.get(key)
     if (cached) return cached
 
@@ -616,11 +621,16 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     // One mapping per account in practice; keep the map small.
     if (mappingCache.size > 8) mappingCache.clear()
     mappingCache.set(key, entry)
-    lastSummary.set(`${credentials.server}|${credentials.username}`, entry.stats)
+    // Only the primary's summary feeds the config screen's peek (peekMatchSummary reads '').
+    lastSummary.set(`${playlistId}|${credentials.server}|${credentials.username}`, entry.stats)
     return entry
   }
 
-  async function resolveEverything(params: { credentials: EpgServiceCredentials; epgUrls: string[] }): Promise<{
+  async function resolveEverything(params: {
+    credentials: EpgServiceCredentials
+    epgUrls: string[]
+    playlistId?: string
+  }): Promise<{
     streams: StreamForMatching[]
     sources: string[]
     entries: GuideCacheEntry[]
@@ -633,11 +643,19 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       }),
       ...sources.map((url) => getGuideOrError(url))
     ])
-    const mapping = getMapping(params.credentials, sources, entries, streams)
+    const mapping = getMapping(params.credentials, sources, entries, streams, params.playlistId ?? '')
     return { streams, sources, entries, mapping }
   }
 
-  async function aggregate(params: {
+  /**
+   * One playlist's programmes for the window. `playlistId` is the composite-key decision: ''
+   * (the primary playlist) keys listings by the bare stream id — every consumer since the
+   * first guide does, and legacy caches keep matching — while a non-primary playlist keys by
+   * `<playlistId>:<streamId>`, so two playlists handing out the same provider-scoped id can
+   * never overwrite each other's programmes.
+   */
+  async function aggregateOne(params: {
+    playlistId: string
     credentials: EpgServiceCredentials
     epgUrls: string[]
     startMs?: number
@@ -650,6 +668,9 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     })
 
     const listings: Record<string, EpgWindowProgramme[]> = {}
+    const keyFor = params.playlistId === ''
+      ? (streamId: number) => String(streamId)
+      : (streamId: number) => `${params.playlistId}:${streamId}`
     for (const [streamId, match] of mapping.mapping) {
       const guide = guidesByUrl.get(match.guideUrl)
       if (!guide) continue
@@ -657,7 +678,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       if (!programmes || programmes.length === 0) continue
       const inWindow = programmesInWindow(programmes, params.startMs, params.endMs)
       if (inWindow.length === 0) continue
-      listings[String(streamId)] = inWindow.map((p) => ({
+      listings[keyFor(streamId)] = inWindow.map((p) => ({
         startMs: p.startMs,
         stopMs: p.stopMs,
         title: p.title,
@@ -671,8 +692,77 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     }
   }
 
+  async function aggregate(params: {
+    credentials: EpgServiceCredentials
+    epgUrls: string[]
+    startMs?: number
+    endMs?: number
+  }): Promise<EpgWindow> {
+    return aggregateOne({ playlistId: '', credentials: params.credentials, epgUrls: params.epgUrls, startMs: params.startMs, endMs: params.endMs })
+  }
+
+  /**
+   * Every playlist's programmes in one response (v0.78.0). Each playlist resolves its own
+   * provider guide plus the shared household sources, and matches its own channels — one
+   * playlist's provider being down must not blank the others (independent failures, the same
+   * rule the channel merge follows). The response only fails when NO playlist resolved.
+   * `sources` is the union across playlists, deduped by URL — the household's XMLTV sources
+   * are shared, so the same URL is fetched once no matter how many playlists see it.
+   */
+  async function aggregatePlaylists(params: {
+    playlists: Array<{ playlistId: string; credentials: EpgServiceCredentials }>
+    epgUrls: string[]
+    startMs?: number
+    endMs?: number
+  }): Promise<EpgWindow> {
+    const settled = await Promise.allSettled(
+      params.playlists.map((entry) =>
+        aggregateOne({
+          playlistId: entry.playlistId,
+          credentials: entry.credentials,
+          epgUrls: params.epgUrls,
+          startMs: params.startMs,
+          endMs: params.endMs
+        })
+      )
+    )
+    const windows = settled
+      .map((result, i) => {
+        if (result.status === 'fulfilled') return result.value
+        const label = params.playlists[i]?.playlistId || 'primary'
+        // One playlist failing is that playlist's problem; the grid shows its rows empty.
+        console.error(`[epg] playlist "${label}" failed to aggregate:`, result.reason)
+        return null
+      })
+      .filter((value): value is EpgWindow => value !== null)
+    if (windows.length === 0) {
+      const first = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+      throw first?.reason instanceof Error ? first.reason : new Error('No playlist produced a guide')
+    }
+
+    const seen = new Set<string>()
+    const sources: EpgSourceStatus[] = []
+    const listings: Record<string, EpgWindowProgramme[]> = {}
+    for (const window of windows) {
+      for (const source of window.sources) {
+        if (seen.has(source.url)) continue
+        seen.add(source.url)
+        sources.push(source)
+      }
+      for (const [key, programmes] of Object.entries(window.listings)) {
+        // Keys are unique per playlist by construction; a collision would mean the same
+        // composite key answered twice, which the mapping cache cannot produce.
+        listings[key] = programmes
+      }
+    }
+    return { sources, listings }
+  }
+
   return {
     aggregate,
+    /** v0.78.0: every playlist's programmes in one response (primary keys stay bare stream
+     *  ids; non-primary keys are `<playlistId>:<streamId>`). */
+    aggregatePlaylists,
     /** Kept out of aggregate() so a status poll never builds listings. */
     getStatus(params: { credentials: EpgServiceCredentials; epgUrls: string[] }): Promise<EpgSourceStatus[]> {
       const sources = [providerGuideUrl(params.credentials), ...params.epgUrls]
@@ -689,9 +779,9 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     getMatchSummary(params: { credentials: EpgServiceCredentials; epgUrls: string[] }): Promise<EpgMatchSummary> {
       return resolveEverything(params).then((resolved) => resolved.mapping.stats)
     },
-    /** The last computed summary for this account, if any (no fetch, no recompute). */
+    /** The last computed summary for the primary playlist, if any (no fetch, no recompute). */
     peekMatchSummary(params: { credentials: EpgServiceCredentials }): EpgMatchSummary | null {
-      return lastSummary.get(`${params.credentials.server}|${params.credentials.username}`) ?? null
+      return lastSummary.get(`|${params.credentials.server}|${params.credentials.username}`) ?? null
     },
     /**
      * Drops cached guides so the next request refetches them, then starts those fetches in the
@@ -708,6 +798,8 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       credentials: EpgServiceCredentials
       epgUrls: string[]
       streamId: number
+      /** '' (or absent) is the primary playlist — the manual override is stored per playlist. */
+      playlistId?: string
     }): Promise<{
       streamName: string
       automatic: { channelId: string; strategy: MatchStrategy; score?: number } | null
@@ -715,7 +807,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       suggestions: Array<{ guideChannelId: string; guideChannelName: string; score: number }>
       guideChannels: Array<{ id: string; name: string }>
     }> {
-      const { sources, entries, streams } = await resolveEverything(params)
+      const { sources, entries, streams } = await resolveEverything({ ...params, playlistId: params.playlistId ?? '' })
       const stream = streams.find((s) => s.stream_id === params.streamId)
       const streamName = stream?.name ?? ''
 
@@ -750,7 +842,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
         }
       })
 
-      const manual = manualMappings?.get(params.credentials.username, params.streamId) ?? null
+      const manual = manualMappings?.get(params.credentials.username, params.playlistId ?? '', params.streamId) ?? null
       return {
         streamName,
         automatic: manual ? null : automatic,

@@ -308,3 +308,134 @@ describe('drag-and-drop ordering', () => {
     rmSync(legacyDir, { recursive: true, force: true })
   })
 })
+
+describe('playlist dimension (v0.78.0)', () => {
+  // Stream ids are provider-scoped: the backup playlist's channel 668 is a different channel
+  // from the primary's 668. The composite key (stream_id, playlist_id) is what keeps them apart.
+  const backup = (streamId: number, name: string) => ({
+    kind: 'live' as const,
+    streamId,
+    playlistId: 'p2',
+    name,
+    category: 'UK | News'
+  })
+
+  it('keeps the same stream id on two playlists apart', () => {
+    store.setFavourite('alice', live(668, 'Primary 668'), true)
+    store.setFavourite('alice', backup(668, 'Backup 668'), true)
+
+    const favourites = store.listFavourites('alice')
+    expect(favourites).toHaveLength(2)
+    const primary = favourites.find((f) => f.playlistId === '')
+    const other = favourites.find((f) => f.playlistId === 'p2')
+    expect(primary?.name).toBe('Primary 668')
+    expect(other?.name).toBe('Backup 668')
+
+    // Removing one leaves the other: an un-favourite of the primary's 668 must not touch p2's.
+    store.setFavourite('alice', live(668, 'Primary 668'), false)
+    const remaining = store.listFavourites('alice')
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0]).toMatchObject({ playlistId: 'p2', name: 'Backup 668' })
+  })
+
+  it('treats an absent playlistId as the primary playlist, and orders per composite row', () => {
+    store.setFavourite('alice', live(1, 'One'), true)
+    store.setFavourite('alice', backup(1, 'One (backup)'), true)
+    expect(store.listFavourites('alice')).toHaveLength(2)
+
+    // Ordering targets exactly one composite row.
+    store.setFavouriteOrder('alice', [
+      { kind: 'live', streamId: 1, playlistId: 'p2' },
+      { kind: 'live', streamId: 1 }
+    ])
+    expect(store.listFavourites('alice').map((f) => f.playlistId)).toEqual(['p2', ''])
+  })
+
+  it('records history per playlist and lists the playlist id back', () => {
+    store.recordHistory('alice', live(668, 'Primary 668'))
+    store.recordHistory('alice', backup(668, 'Backup 668'))
+    const history = store.listHistory('alice')
+    expect(history).toHaveLength(2)
+    expect(history.map((h) => h.playlistId).sort()).toEqual(['', 'p2'])
+  })
+
+  it('scopes resume positions per playlist', () => {
+    const movie = (playlistId: string) => ({ kind: 'movie' as const, streamId: 77, playlistId, name: 'Same Id Film', category: 'Movies' })
+    store.setResumePosition('alice', movie(''), 600, 9000)
+    store.setResumePosition('alice', movie('p2'), 1200, 9000)
+
+    const positions = store.listResumePositions('alice')
+    expect(positions).toHaveLength(2)
+    expect(positions.find((r) => r.playlistId === '')?.positionSeconds).toBe(600)
+    expect(positions.find((r) => r.playlistId === 'p2')?.positionSeconds).toBe(1200)
+
+    // Clearing one playlist's position leaves the other's.
+    store.clearResumePosition('alice', 'movie', 77, 'p2')
+    expect(store.listResumePositions('alice')).toHaveLength(1)
+    expect(store.listResumePositions('alice')[0].playlistId).toBe('')
+  })
+
+  it('scopes custom-category channels per playlist', () => {
+    const category = store.createCategory('alice', 'Mix')
+    store.addChannelToCategory('alice', category.id, live(668, 'Primary 668'))
+    store.addChannelToCategory('alice', category.id, backup(668, 'Backup 668'))
+    const channels = store.listCategories('alice')[0].channels
+    expect(channels).toHaveLength(2)
+    expect(channels.map((c) => c.playlistId).sort()).toEqual(['', 'p2'])
+
+    store.removeChannelFromCategory('alice', category.id, 'live', 668, '')
+    const after = store.listCategories('alice')[0].channels
+    expect(after).toHaveLength(1)
+    expect(after[0]).toMatchObject({ playlistId: 'p2', name: 'Backup 668' })
+  })
+
+  it('migrates a pre-playlist database: every row comes back on the primary playlist', () => {
+    // The v0.77.x shapes: per-user tables keyed without any playlist dimension.
+    const legacyDir = mkdtempSync(join(tmpdir(), 'allison-legacy-playlist-'))
+    const legacy = new Database(join(legacyDir, 'allison.db'))
+    legacy.exec(`
+      CREATE TABLE favourites (
+        username TEXT NOT NULL, kind TEXT NOT NULL, stream_id INTEGER NOT NULL,
+        name TEXT NOT NULL, category TEXT, added_at TEXT NOT NULL, stream_icon TEXT, position INTEGER,
+        PRIMARY KEY (username, kind, stream_id));
+      CREATE TABLE history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, kind TEXT NOT NULL,
+        stream_id INTEGER NOT NULL, name TEXT NOT NULL, category TEXT, watched_at TEXT NOT NULL);
+      CREATE TABLE custom_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, name TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, UNIQUE (username, name));
+      CREATE TABLE custom_category_channels (
+        category_id INTEGER NOT NULL REFERENCES custom_categories (id) ON DELETE CASCADE,
+        kind TEXT NOT NULL, stream_id INTEGER NOT NULL, name TEXT NOT NULL, source_category TEXT,
+        stream_icon TEXT, position INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (category_id, kind, stream_id));
+      CREATE TABLE resume_positions (
+        username TEXT NOT NULL, kind TEXT NOT NULL, stream_id INTEGER NOT NULL,
+        name TEXT NOT NULL, category TEXT, position_seconds REAL NOT NULL, duration_seconds REAL,
+        updated_at TEXT NOT NULL, PRIMARY KEY (username, kind, stream_id));
+    `)
+    legacy.prepare('INSERT INTO favourites (username, kind, stream_id, name, category, added_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('alice', 'live', 5, 'Legacy', null, '2026-01-01T00:00:00.000Z')
+    legacy.prepare('INSERT INTO history (username, kind, stream_id, name, category, watched_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('alice', 'live', 5, 'Legacy', null, '2026-01-01T00:00:00.000Z')
+    legacy.prepare('INSERT INTO resume_positions (username, kind, stream_id, name, category, position_seconds, duration_seconds, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('alice', 'movie', 7, 'Legacy Film', null, 600, 9000, '2026-01-01T00:00:00.000Z')
+    const categoryId = Number(legacy.prepare('INSERT INTO custom_categories (username, name, position, created_at) VALUES (?, ?, ?, ?)')
+      .run('alice', 'Legacy Cat', 0, '2026-01-01T00:00:00.000Z').lastInsertRowid)
+    legacy.prepare('INSERT INTO custom_category_channels (category_id, kind, stream_id, name, position) VALUES (?, ?, ?, ?, ?)')
+      .run(categoryId, 'live', 5, 'Legacy', 0)
+    legacy.close()
+
+    const migrated = createPrefsStore({ dataDir: legacyDir })
+    expect(migrated.listFavourites('alice')[0]).toMatchObject({ playlistId: '', name: 'Legacy' })
+    expect(migrated.listHistory('alice')[0]).toMatchObject({ playlistId: '', name: 'Legacy' })
+    expect(migrated.listResumePositions('alice')[0]).toMatchObject({ playlistId: '', name: 'Legacy Film' })
+    expect(migrated.listCategories('alice')[0].channels[0]).toMatchObject({ playlistId: '', name: 'Legacy' })
+
+    // The migrated tables still enforce their composite keys: a same-id different-playlist row
+    // is a new row, not a replacement.
+    migrated.setFavourite('alice', backup(5, 'Backup 5'), true)
+    expect(migrated.listFavourites('alice')).toHaveLength(2)
+    rmSync(legacyDir, { recursive: true, force: true })
+  })
+})

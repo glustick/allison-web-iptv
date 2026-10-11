@@ -27,7 +27,8 @@ import {
   type PrefsState
 } from '../lib/prefs'
 import { XtreamClient } from '../lib/xtreamClient'
-import type { Category, LiveStream } from '../lib/types'
+import { buildAlsoOnIndex } from '../lib/crossPlaylist'
+import { playlistRefOf, liveChannelKey, type Category, type LiveStream } from '../lib/types'
 
 // The player's height cap is drag-resizable (see useResizableDimension.ts) via the row-resize
 // handle on the seam between the player block and the EPG grid below. Defaults reproduce the
@@ -51,7 +52,12 @@ type Selection =
 
 /** A library entry (favourite/history/custom channel) as a grid row. Only the fields the rows
  *  and the player actually use are meaningful; the rest exist to satisfy LiveStream. */
-function synthesizeStream(streamId: number, name: string, category: string | null): LiveStream {
+function synthesizeStream(
+  streamId: number,
+  name: string,
+  category: string | null,
+  playlist?: { id: string; label?: string }
+): LiveStream {
   return {
     num: 0,
     name,
@@ -64,7 +70,10 @@ function synthesizeStream(streamId: number, name: string, category: string | nul
     custom_sid: null,
     tv_archive: 0,
     direct_source: '',
-    tv_archive_duration: 0
+    tv_archive_duration: 0,
+    // A synthesised row remembers its playlist (v0.78.0) so playback goes through that
+    // playlist's scoped relay rather than silently playing the primary's same-id channel.
+    ...(playlist ? { playlistId: playlist.id, playlistLabel: playlist.label } : {})
   }
 }
 
@@ -268,17 +277,35 @@ export function LiveTv({
     [additional, playlistView.hidden]
   )
 
+  // The manual "also on →" switch (v0.78.0): one lookup over every VISIBLE playlist's catalogue
+  // (a hidden line does not offer what it hides), the row's own playlist excluded at lookup time.
+  const alsoOnLookup = useMemo(
+    () =>
+      buildAlsoOnIndex([
+        { id: '', label: 'Main', channels: providerChannels },
+        ...additional
+          .filter((entry) => !playlistView.hidden.includes(entry.id))
+          .map((entry) => ({ id: entry.id, label: entry.label, channels: entry.channels }))
+      ]),
+    [providerChannels, additional, playlistView.hidden]
+  )
+
   // History is a list of visits; the sidebar view is the distinct channels, most recent first.
+  // Distinct per composite channel (v0.78.0): the same provider-scoped id on two playlists is
+  // two channels, and each row keeps its playlist so playback resolves through the right relay.
   const historyChannels = useMemo(() => {
-    const seen = new Set<number>()
+    const seen = new Set<string>()
     const rows: LiveStream[] = []
     for (const entry of prefs.history) {
-      if (entry.kind !== 'live' || seen.has(entry.streamId)) continue
-      seen.add(entry.streamId)
-      rows.push(synthesizeStream(entry.streamId, entry.name, entry.category))
+      if (entry.kind !== 'live') continue
+      const key = `${entry.playlistId ?? ''}:${entry.streamId}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const playlist = entry.playlistId ? additional.find((a) => a.id === entry.playlistId) : undefined
+      rows.push(synthesizeStream(entry.streamId, entry.name, entry.category, playlist ? { id: playlist.id, label: playlist.label } : undefined))
     }
     return rows
-  }, [prefs.history])
+  }, [prefs.history, additional])
 
   const selectedCustom: CustomCategory | null =
     selection.type === 'custom' ? prefs.categories.find((category) => category.id === selection.id) ?? null : null
@@ -290,19 +317,24 @@ export function LiveTv({
   // archive flag a synthesised row never had. See lib/libraryResolve.ts for the measurement.
   const libraryEntries = useMemo((): LibraryEntry[] => {
     if (selection.type === 'favourites') {
-      return liveFavourites.map((favourite) => ({ streamId: favourite.streamId, name: favourite.name, category: favourite.category }))
+      return liveFavourites.map((favourite) => ({
+        streamId: favourite.streamId,
+        name: favourite.name,
+        category: favourite.category,
+        playlistId: favourite.playlistId || undefined
+      }))
     }
     // History rows are the same shape of problem as favourites — an id from the day of the visit — and
     // they do carry their category, so the same per-category load and resolver apply unchanged.
     if (selection.type === 'history') {
       return prefs.history
         .filter((entry) => entry.kind === 'live')
-        .map((entry) => ({ streamId: entry.streamId, name: entry.name, category: entry.category }))
+        .map((entry) => ({ streamId: entry.streamId, name: entry.name, category: entry.category, playlistId: entry.playlistId || undefined }))
     }
     if (selection.type === 'custom') {
       return (selectedCustom?.channels ?? [])
         .filter((channel) => channel.kind === 'live')
-        .map((channel) => ({ streamId: channel.streamId, name: channel.name, category: channel.sourceCategory }))
+        .map((channel) => ({ streamId: channel.streamId, name: channel.name, category: channel.sourceCategory, playlistId: channel.playlistId || undefined }))
     }
     return []
     }, [selection, liveFavourites, selectedCustom, prefs.history])
@@ -340,40 +372,57 @@ export function LiveTv({
   const libraryLookup = useMemo(() => providerLookup(libraryChannels), [libraryChannels])
 
 
+  // Per-playlist lookups (v0.78.0): a non-primary saved row must resolve against ITS playlist's
+  // catalogue — the ids are a provider-scoped space the primary's lookup must never touch.
+  const additionalLookupById = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof providerLookup>>()
+    for (const entry of additional) map.set(entry.id, providerLookup(entry.channels))
+    return map
+  }, [additional])
+
+  const resolveSavedEntry = useCallback(
+    (entry: LibraryEntry): LiveStream => {
+      if (entry.playlistId) {
+        const lookup = additionalLookupById.get(entry.playlistId)
+        const found = lookup
+          ? resolveLibraryEntry({ streamId: entry.streamId, name: entry.name, category: entry.category }, lookup)
+          : null
+        if (found) return found
+        const playlist = additional.find((a) => a.id === entry.playlistId)
+        return synthesizeStream(entry.streamId, entry.name, entry.category, {
+          id: entry.playlistId,
+          label: playlist?.label
+        })
+      }
+      return (
+        resolveLibraryEntry({ streamId: entry.streamId, name: entry.name, category: entry.category }, libraryLookup) ??
+        synthesizeStream(entry.streamId, entry.name, entry.category)
+      )
+    },
+    [additionalLookupById, additional, libraryLookup]
+  )
+
   const channels: LiveStream[] = useMemo(() => {
     if (selection.type === 'favourites') {
-      return liveFavourites.map(
-        (favourite) =>
-          resolveLibraryEntry(
-            { streamId: favourite.streamId, name: favourite.name, category: favourite.category },
-            libraryLookup
-          ) ?? synthesizeStream(favourite.streamId, favourite.name, favourite.category)
+      return liveFavourites.map((favourite) =>
+        resolveSavedEntry({ streamId: favourite.streamId, name: favourite.name, category: favourite.category, playlistId: favourite.playlistId || undefined })
       )
     }
     if (selection.type === 'history') {
-      return historyChannels.map(
-        (row) =>
-          resolveLibraryEntry(
-            { streamId: row.stream_id, name: row.name, category: row.category_id || null },
-            libraryLookup
-          ) ?? row
+      return historyChannels.map((row) =>
+        resolveSavedEntry({ streamId: row.stream_id, name: row.name, category: row.category_id || null, playlistId: playlistRefOf(row) })
       )
     }
     if (selection.type === 'custom') {
       return (selectedCustom?.channels ?? [])
         .filter((channel) => channel.kind === 'live')
-        .map(
-          (channel) =>
-            resolveLibraryEntry(
-              { streamId: channel.streamId, name: channel.name, category: channel.sourceCategory },
-              libraryLookup
-            ) ?? synthesizeStream(channel.streamId, channel.name, channel.sourceCategory)
+        .map((channel) =>
+          resolveSavedEntry({ streamId: channel.streamId, name: channel.name, category: channel.sourceCategory, playlistId: channel.playlistId || undefined })
         )
     }
     // The merged tail (v0.77.0): primary channels first, then each visible additional
     // playlist's — every row carrying its provenance, per the 2026-09-23 decision (no
-    // automatic row-merging; the source is visible instead). Library views stay primary-only:
-    // favourites/history key on stream ids that are provider-scoped.
+    // automatic row-merging; the source is visible instead).
     const selected = playlistView.selected
     if (selected === 'primary') return providerChannels
     if (selected !== 'all') {
@@ -381,7 +430,7 @@ export function LiveTv({
       return chosen ? chosen.channels : providerChannels
     }
     return [...providerChannels, ...additionalChannels]
-  }, [selection, liveFavourites, historyChannels, selectedCustom, providerChannels, libraryLookup, additional, additionalChannels, playlistView])
+  }, [selection, liveFavourites, historyChannels, selectedCustom, providerChannels, additional, additionalChannels, playlistView, resolveSavedEntry])
 
   // Library views are plain lists (short, personal, reorderable); the guide grid stays for the
   // provider's own categories, where a virtualised 27k-row table is the right tool.
@@ -425,11 +474,14 @@ export function LiveTv({
     () =>
       isLibraryView
         ? channels.map((channel, index) => ({
-            key: `live:${channel.stream_id}`,
+            // Composite key (v0.78.0): the primary's 668 and the backup's 668 are two rows in
+            // the favourites list, and React keys must not collide between them.
+            key: liveChannelKey(channel),
             // playback uses the channel as the provider lists it now
             streamId: channel.stream_id,
             // reordering and removing use the id the saved entry is stored under
             storedStreamId: libraryEntries[index]?.streamId ?? channel.stream_id,
+            storedPlaylistId: libraryEntries[index]?.playlistId ?? '',
             name: channel.name,
             kind: 'live' as const,
             icon: providerIconById.get(channel.stream_id) ?? null
@@ -481,8 +533,13 @@ export function LiveTv({
 
   const handleLibraryReorder = useCallback(
     (ordered: ReorderableRow[]): void => {
-      // The saved entry's id, not the channel's current one: these are matched against the stored list.
-      const payload = ordered.map((row) => ({ kind: row.kind, streamId: row.storedStreamId ?? row.streamId }))
+      // The saved entry's id and playlist, not the channel's current ones: these are matched
+      // against the stored list (v0.78.0).
+      const payload = ordered.map((row) => ({
+        kind: row.kind,
+        streamId: row.storedStreamId ?? row.streamId,
+        playlistId: row.storedPlaylistId || undefined
+      }))
       if (selection.type === 'favourites') {
         void setFavouriteOrder(payload)
           .then((favourites) => applyPrefs({ ...prefs, favourites }))
@@ -496,8 +553,13 @@ export function LiveTv({
     [applyPrefs, handlePrefsError, prefs, selectedCustom, selection]
   )
 
+  // Favourites are keyed on the composite (streamId, playlist): the primary's 668 and the
+  // backup's 668 are different channels with different stars (v0.78.0).
   const isFavourite = useCallback(
-    (streamId: number): boolean => liveFavourites.some((favourite) => favourite.streamId === streamId),
+    (channel: Pick<LiveStream, 'stream_id' | 'playlistId'>): boolean => {
+      const ref = playlistRefOf(channel) ?? ''
+      return liveFavourites.some((favourite) => favourite.streamId === channel.stream_id && (favourite.playlistId || '') === ref)
+    },
     [liveFavourites]
   )
 
@@ -506,13 +568,16 @@ export function LiveTv({
       setNowPlaying(channel)
         setCatchup(null)
       if (!channel) return
-      // History (and favourites, below) are keyed on provider-scoped stream ids and stay
-      // primary-playlist-only for now: recording an additional playlist's channel would light
-      // up and re-play the PRIMARY's channel with the same numeric id. Documented phase-2 work
-      // (composite identity in the per-user tables).
-      if (channel.playlistId && channel.playlistId !== 'primary') return
       // Watching something is what history means here; failures are surfaced but never block play.
-      void recordHistory({ kind: 'live', streamId: channel.stream_id, name: channel.name, category: channel.category_id })
+      // v0.78.0: the saved ref carries the playlist, so the primary's 668 and the backup's 668
+      // are separate history rows that each replay the right channel.
+      void recordHistory({
+        kind: 'live',
+        streamId: channel.stream_id,
+        playlistId: playlistRefOf(channel),
+        name: channel.name,
+        category: channel.category_id
+      })
         .then(() => fetchPrefs().then(applyPrefs))
         .catch((err) => handlePrefsError(err, 'Could not record watch history'))
     },
@@ -526,11 +591,12 @@ export function LiveTv({
           {
             kind: 'live',
             streamId: channel.stream_id,
+            playlistId: playlistRefOf(channel),
             name: channel.name,
             category: channel.category_id,
             icon: channel.stream_icon
           },
-          !isFavourite(channel.stream_id)
+          !isFavourite(channel)
         )
         applyPrefs({ ...prefs, favourites })
       } catch (err) {
@@ -605,7 +671,7 @@ export function LiveTv({
     async (channel: LiveStream): Promise<void> => {
       if (!selectedCustom) return
       try {
-        const categories = await removeChannelFromCategory(selectedCustom.id, 'live', channel.stream_id)
+        const categories = await removeChannelFromCategory(selectedCustom.id, 'live', channel.stream_id, playlistRefOf(channel))
         applyPrefs({ ...prefs, categories })
       } catch (err) {
         handlePrefsError(err, 'Could not remove that channel')
@@ -651,7 +717,10 @@ export function LiveTv({
   // update) re-ran this effect: the cleanup stops the transcode and a fresh one starts, so the
   // player was handed a new stream every few seconds and never got to play — a hang with nothing
   // in the console. Primitives cannot do that.
+  // The composite identity (v0.78.0): the primary's 668 and the backup's 668 are different
+  // catch-up sessions, and the archive request must go through the right playlist's relay.
   const catchupChannelId = catchup && nowPlaying ? nowPlaying.stream_id : null
+  const catchupPlaylistId = catchup && nowPlaying ? playlistRefOf(nowPlaying) ?? null : null
   const catchupStartMs = catchup ? catchup.startMs : null
   const catchupStopMs = catchup ? catchup.stopMs : null
   // The client is read through a ref, never a dependency. `appAuth` builds a fresh XtreamClient
@@ -670,7 +739,9 @@ export function LiveTv({
       setCatchupStream(null)
       return
     }
-    const sourceUrl = clientRef.current.getTimeshiftUrl(
+    // v0.78.0: a non-primary channel's catch-up rides that playlist's scoped timeshift relay.
+    const catchupClient = catchupPlaylistId ? new XtreamClient(catchupPlaylistId) : clientRef.current
+    const sourceUrl = catchupClient.getTimeshiftUrl(
       catchupChannelId,
       Math.floor(catchupStartMs / 1000),
       Math.max(1, Math.ceil((catchupStopMs - catchupStartMs) / 60_000))
@@ -708,7 +779,7 @@ export function LiveTv({
         body: JSON.stringify({ sessionId })
       }).catch(() => {})
     }
-    }, [catchupChannelId, catchupStartMs, catchupStopMs])
+    }, [catchupChannelId, catchupPlaylistId, catchupStartMs, catchupStopMs])
   
   // Catch-up plays the transcoded HLS; everything else plays the live playlist.
   // A channel from an additional playlist plays through that playlist's scoped paths
@@ -835,7 +906,11 @@ export function LiveTv({
             {/* A different source for the same channel: key it so the player reloads. */}
             <LivePlayer
               url={streamUrl}
-              channelKey={catchup ? `live:${nowPlaying.stream_id}@${catchup.startMs}` : `live:${nowPlaying.stream_id}`}
+              channelKey={
+                catchup
+                  ? `${liveChannelKey(nowPlaying)}@${catchup.startMs}`
+                  : liveChannelKey(nowPlaying)
+              }
             />
             <div className="now-playing-bar">
               <span>
@@ -855,17 +930,11 @@ export function LiveTv({
               <span className="now-playing-actions">
                 <button
                   type="button"
-                  className={isFavourite(nowPlaying.stream_id) ? 'prefs-action active' : 'prefs-action'}
+                  className={isFavourite(nowPlaying) ? 'prefs-action active' : 'prefs-action'}
                   onClick={() => void toggleFavourite(nowPlaying)}
-                  title={
-                    nowPlaying.playlistId && nowPlaying.playlistId !== 'primary'
-                      ? 'Favourites track the main playlist (coming to extra playlists)'
-                      : isFavourite(nowPlaying.stream_id)
-                        ? 'Remove from favourites'
-                        : 'Add to favourites'
-                  }
+                  title={isFavourite(nowPlaying) ? 'Remove from favourites' : 'Add to favourites'}
                 >
-                  {isFavourite(nowPlaying.stream_id) ? '★' : '☆'}
+                  {isFavourite(nowPlaying) ? '★' : '☆'}
                 </button>
                 {prefs.categories.length > 0 && (
                   <select
@@ -878,6 +947,7 @@ export function LiveTv({
                       addChannelToCategory(id, {
                         kind: 'live',
                         streamId: nowPlaying.stream_id,
+                        playlistId: playlistRefOf(nowPlaying),
                         name: nowPlaying.name,
                         category: nowPlaying.category_id,
                         icon: nowPlaying.stream_icon
@@ -969,6 +1039,8 @@ export function LiveTv({
             session={session}
             channels={guideChannels}
             activeStreamId={nowPlaying?.stream_id}
+            activePlaylistId={nowPlaying ? playlistRefOf(nowPlaying) : undefined}
+            alsoOn={alsoOnLookup}
             onSelectChannel={selectChannel}
             onOpenEpgSettings={onOpenEpgSettings}
             onPlayCatchup={playCatchup}
@@ -982,7 +1054,7 @@ export function LiveTv({
           <ReorderableChannelList
             rows={libraryRows}
             reorderable={selection.type !== 'history'}
-            activeKey={nowPlaying ? `live:${nowPlaying.stream_id}` : undefined}
+            activeKey={nowPlaying ? liveChannelKey(nowPlaying) : undefined}
             emptyMessage={
               selection.type === 'favourites'
                 ? 'No favourites yet — press ☆ on a channel while it plays.'
@@ -990,11 +1062,13 @@ export function LiveTv({
                   ? 'Nothing watched yet.'
                   : 'Empty category — use Add channels to pick channels from any category.'
             }
-            onPlay={(row) =>
-              selectChannel(
-                channels.find((channel) => channel.stream_id === row.streamId) ?? synthesizeStream(row.streamId, row.name, null)
+            onPlay={(row) => {
+              const ref = row.storedPlaylistId || ''
+              const found = channels.find(
+                (channel) => channel.stream_id === row.streamId && (playlistRefOf(channel) ?? '') === ref
               )
-            }
+              selectChannel(found ?? synthesizeStream(row.streamId, row.name, null, ref ? { id: ref } : undefined))
+            }}
             onReorder={handleLibraryReorder}
             rowActions={(row) =>
               selection.type === 'favourites' ? (
@@ -1003,7 +1077,10 @@ export function LiveTv({
                   className="admin-small-btn"
                   title="Remove from favourites"
                   onClick={() => {
-                    void setFavourite({ kind: 'live', streamId: row.storedStreamId ?? row.streamId, name: row.name }, false)
+                    void setFavourite(
+                      { kind: 'live', streamId: row.storedStreamId ?? row.streamId, playlistId: row.storedPlaylistId || undefined, name: row.name },
+                      false
+                    )
                       .then((favourites) => applyPrefs({ ...prefs, favourites }))
                       .catch((err) => handlePrefsError(err, 'Could not update favourites'))
                   }}
@@ -1015,7 +1092,13 @@ export function LiveTv({
                   type="button"
                   className="admin-small-btn danger"
                   title="Remove from this category"
-                  onClick={() => void handleRemoveFromCategory({ stream_id: row.streamId, name: row.name } as LiveStream)}
+                  onClick={() =>
+                    void handleRemoveFromCategory({
+                      stream_id: row.streamId,
+                      name: row.name,
+                      playlistId: row.storedPlaylistId || undefined
+                    } as LiveStream)
+                  }
                 >
                   ✕
                 </button>
@@ -1129,6 +1212,8 @@ export function LiveTv({
             session={session}
             channels={guideChannels}
             activeStreamId={nowPlaying?.stream_id}
+            activePlaylistId={nowPlaying ? playlistRefOf(nowPlaying) : undefined}
+            alsoOn={alsoOnLookup}
             onSelectChannel={selectChannel}
             onOpenEpgSettings={onOpenEpgSettings}
             onPlayCatchup={playCatchup}

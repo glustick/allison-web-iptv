@@ -57,20 +57,26 @@ export function mapSameOriginStreamPath(
 // It matters because catch-up streams are raw MPEG-TS: hls.js parses playlists, and Safari cannot
 // decode MPEG-TS at all, so the browser has to be given HLS — which means a transcode, which means
 // this mapping.
+//
+// v0.78.0 adds the playlist-scoped shape (/api/iptv/playlists/<id>/timeshift/...): a non-primary
+// playlist's channel has its own provider and its own credentials, and the caller must resolve
+// THOSE rather than the account's primary. The playlist id rides along in the parse result; the
+// caller decides whether it names a real playlist.
 const TIMESHIFT_PATH_PATTERN = /^\/api\/timeshift\/([A-Za-z0-9_-]+\.ts)$/
+const SCOPED_TIMESHIFT_PATH_PATTERN = /^\/api\/iptv\/playlists\/([A-Za-z0-9_-]+)\/timeshift\/([A-Za-z0-9_-]+\.ts)$/
 
 export interface TimeshiftPathRequest {
   file: string
   startSeconds: number
   durationMinutes: number
+  /** Set when the path names a non-primary playlist; the caller resolves its credentials. */
+  playlistId?: string
 }
 
 /** The parts of a same-origin catch-up URL, or null when the input is not one. */
 export function parseSameOriginTimeshiftPath(input: string): TimeshiftPathRequest | null {
   if (typeof input !== 'string') return null
   const [path, query = ''] = input.split('#')[0].split('?')
-  const match = TIMESHIFT_PATH_PATTERN.exec(path)
-  if (!match) return null
   const params = new URLSearchParams(query)
   // has() as well as a numeric check: Number(null) is 0, so a URL that simply omitted the parameters
   // would look like a valid request for a stream starting at the epoch.
@@ -78,5 +84,9 @@ export function parseSameOriginTimeshiftPath(input: string): TimeshiftPathReques
   const startSeconds = Number(params.get('start'))
   const durationMinutes = Number(params.get('duration'))
   if (!Number.isFinite(startSeconds) || !Number.isFinite(durationMinutes)) return null
-  return { file: match[1], startSeconds, durationMinutes }
+  const primary = TIMESHIFT_PATH_PATTERN.exec(path)
+  if (primary) return { file: primary[1], startSeconds, durationMinutes }
+  const scoped = SCOPED_TIMESHIFT_PATH_PATTERN.exec(path)
+  if (scoped) return { file: scoped[2], startSeconds, durationMinutes, playlistId: scoped[1] }
+  return null
 }

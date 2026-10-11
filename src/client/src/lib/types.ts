@@ -155,6 +155,21 @@ export function favoriteKey(entry: FavoriteEntry): string {
   return `${entry.kind}:${id}`
 }
 
+/**
+ * The playlist reference a per-user preference stores: undefined for the primary playlist,
+ * the additional playlist's id otherwise. LiveStream spells the primary two ways (absent on
+ * unstamped rows, 'primary' on defensive checks) while stored prefs use '' — this collapses
+ * all of them, so comparisons and saved refs have one shape.
+ */
+export function playlistRefOf(channel: { playlistId?: string }): string | undefined {
+  return channel.playlistId && channel.playlistId !== 'primary' ? channel.playlistId : undefined
+}
+
+/** The composite key one live channel answers to across playlists (undefined ref = primary). */
+export function liveChannelKey(channel: { stream_id: number; playlistId?: string }): string {
+  return `${playlistRefOf(channel) ?? ''}:${channel.stream_id}`
+}
+
 // Recently-watched tracks whatever was actually handed to play() — a flat, directly
 // replayable reference (for series this is the episode that was played, not the series).
 export interface RecentlyWatchedEntry {

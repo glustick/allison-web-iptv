@@ -30,6 +30,17 @@ describe('stream URLs', () => {
     expect(url).not.toMatch(/\/movie\/[^/]+\/[^/]+\//)
     expect(url.split('/').filter(Boolean)).toEqual(['api', 'stream', 'movie', '52422.mp4'])
   })
+
+  it('builds catch-up URLs that stay same-origin and credential-free', () => {
+    expect(new XtreamClient().getTimeshiftUrl(668, 1789533000, 30)).toBe('/api/timeshift/668.ts?start=1789533000&duration=30')
+  })
+
+  it('scopes catch-up URLs to the playlist like every other builder (v0.78.0)', () => {
+    const scoped = new XtreamClient('p2').getTimeshiftUrl(668, 1789533000, 30)
+    expect(scoped).toBe('/api/iptv/playlists/p2/timeshift/668.ts?start=1789533000&duration=30')
+    // And the scoped stream path, so the whole playback path stays on one playlist's relay.
+    expect(new XtreamClient('p2').getStreamUrl('live', 668, 'm3u8')).toBe('/api/iptv/playlists/p2/stream/live/668.m3u8')
+  })
 })
 
 describe('API calls', () => {

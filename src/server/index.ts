@@ -976,6 +976,39 @@ app.get('/api/timeshift/:file', requireAuth, (req, res) => {
   relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
 })
 
+// v0.78.0 — the playlist-scoped catch-up route: a non-primary playlist's channel has its own
+// provider and its own credentials, resolved per request out of the account's encrypted envelope
+// (the same shape as the scoped stream route below). x-app-playlist-key carries the app-side
+// path, so the proxy's signature-expiry rescue keys its playlist windows per playlist by
+// construction — the same reasoning as the scoped stream route.
+app.get('/api/iptv/playlists/:playlistId/timeshift/:file', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const playlist = resolvePlaylistCredentials(session.username, String(req.params.playlistId))
+  if (!playlist) {
+    res.status(404).json({ error: 'Unknown playlist' })
+    return
+  }
+  let upstreamPath: string
+  try {
+    upstreamPath = buildTimeshiftPath(
+      playlist,
+      String(req.params.file),
+      Number(req.query.start),
+      Number(req.query.duration)
+    )
+  } catch (err) {
+    res.status(err instanceof TimeshiftRequestError ? 400 : 500).json({
+      error: err instanceof Error ? err.message : 'Unsupported catch-up request'
+    })
+    return
+  }
+  const rewritten = req as unknown as IncomingMessage & { url?: string }
+  rewritten.headers['x-proxy-target-base'] = playlist.server
+  rewritten.headers['x-app-playlist-key'] = req.path
+  rewritten.url = upstreamPath
+  relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
+})
+
 app.get('/api/stream/:kind/:file', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
   const credentials = resolveAccountCredentials(session.username)
@@ -1582,7 +1615,8 @@ app.delete('/api/prefs/resume/:kind/:streamId', requireAuth, (req, res) => {
     prefsStore.clearResumePosition(
       session.username,
       String(req.params.kind) as 'movie' | 'series',
-      Number(req.params.streamId)
+      Number(req.params.streamId),
+      typeof req.query.playlist === 'string' ? req.query.playlist : undefined
     )
     res.json({ ok: true, resumePositions: prefsStore.listResumePositions(session.username) })
   } catch (err) {
@@ -1637,7 +1671,8 @@ app.delete('/api/prefs/categories/:id/channels/:kind/:streamId', requireAuth, (r
       session.username,
       Number(req.params.id),
       String(req.params.kind) as 'live' | 'movie' | 'series',
-      Number(req.params.streamId)
+      Number(req.params.streamId),
+      typeof req.query.playlist === 'string' ? req.query.playlist : undefined
     )
     res.json({ ok: true, categories: prefsStore.listCategories(session.username) })
   } catch (err) {
@@ -2218,6 +2253,7 @@ app.post('/api/epg/refresh', requireAuth, requireAdmin, (req, res) => {
 // Clients refetch per time-window navigation; guides themselves are cached server-side per TTL.
 app.get('/api/epg', requireAuth, (req, res) => {
   void (async (): Promise<void> => {
+    const session = req.authSession as AuthSession
     const credentials = resolveEpgCredentials(req)
     if (!credentials) {
       res.status(401).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
@@ -2230,7 +2266,29 @@ app.get('/api/epg', requireAuth, (req, res) => {
       return
     }
     try {
-      const window = await epgService.aggregate({ credentials, epgUrls: credentials.epgUrls, startMs, endMs })
+      // v0.78.0: every playlist on the account contributes its own guide and its own matching —
+      // one playlist's provider being down must not blank the others (independent failures, the
+      // same rule the channel merge follows). The primary keeps its bare stream-id listing keys;
+      // each additional playlist keys `<playlistId>:<streamId>` so provider-scoped ids cannot
+      // overwrite each other. The first saved playlist IS the primary (playlists.ts's rule), so
+      // it maps to the '' dimension regardless of its readable id.
+      const playlists: Array<{ playlistId: string; credentials: { server: string; username: string; password: string } }> = [
+        { playlistId: '', credentials }
+      ]
+      try {
+        const parsed = parseStoredPlaylists(session.username)
+        parsed.envelope.playlists.slice(1).forEach((playlist) => {
+          playlists.push({
+            playlistId: playlist.id,
+            credentials: { server: playlist.server, username: playlist.username, password: playlist.password }
+          })
+        })
+      } catch (err) {
+        // A decrypt failure leaves the primary answering alone rather than the grid going dark —
+        // the same leniency credentialsFromStored applies to reads.
+        console.error('[epg] additional playlists unavailable:', err)
+      }
+      const window = await epgService.aggregatePlaylists({ playlists, epgUrls: credentials.epgUrls, startMs, endMs })
       res.json({ ok: true, ...window })
     } catch (err) {
       console.error('[epg] aggregate failed:', err)
@@ -2264,6 +2322,29 @@ app.get('/api/epg/status', requireAuth, (req, res) => {
 // London" against a guide that lists "BBC One HD"). Manual mappings win over every automatic
 // tier inside epgService; these three endpoints are the UI's whole surface for them.
 
+/**
+ * The playlist a mapping request means: `?playlist=<id>` names a non-primary playlist, absence
+ * (or an empty value) means the primary. The owner of the mapping stays the PROVIDER username
+ * (see the POST route), so the named playlist's own credentials provide it. Returns null when a
+ * named playlist does not exist on the account.
+ */
+function resolveMappingRequest(req: Request, sessionUsername: string): {
+  credentials: { server: string; username: string; password: string; epgUrls: string[] }
+  playlistId: string
+} | null {
+  const playlistParam = typeof req.query.playlist === 'string' ? req.query.playlist.trim() : ''
+  if (playlistParam.length === 0) {
+    const credentials = resolveEpgCredentials(req)
+    return credentials ? { credentials, playlistId: '' } : null
+  }
+  const playlist = resolvePlaylistCredentials(sessionUsername, playlistParam)
+  if (!playlist) return null
+  return {
+    credentials: { server: playlist.server, username: playlist.username, password: playlist.password, epgUrls: systemEpgStore.read().urls },
+    playlistId: playlistParam
+  }
+}
+
 app.get('/api/epg/mappings/:streamId', requireAuth, (req, res) => {
   void (async (): Promise<void> => {
     const streamId = Number(req.params.streamId)
@@ -2272,19 +2353,33 @@ app.get('/api/epg/mappings/:streamId', requireAuth, (req, res) => {
       return
     }
     try {
-      const credentials = resolveEpgCredentials(req)
-      if (!credentials) {
-        res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+      const session = req.authSession as AuthSession
+      // An unknown playlist and a missing IPTV config are different answers: the first is a
+      // 404 the client can act on, the second means setup is incomplete.
+      const resolved = resolveMappingRequest(req, session.username)
+      if (!resolved) {
+        if (typeof req.query.playlist === 'string' && req.query.playlist.trim().length > 0) {
+          res.status(404).json({ error: 'Unknown playlist' })
+        } else {
+          res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+        }
         return
       }
+      const { credentials, playlistId } = resolved
       // mappingPickerData is async (it may hydrate guides from disk) — awaiting it matters:
       // spreading an unawaited Promise into res.json() silently yields an empty object.
       const picker = await epgService.mappingPickerData({
         credentials,
         epgUrls: credentials.epgUrls ?? [],
-        streamId
+        streamId,
+        playlistId
       })
-      res.json({ ok: true, ...picker, mappingsInUse: guideMappingsStore.list(credentials.username).length })
+      res.json({
+        ok: true,
+        ...picker,
+        playlistId,
+        mappingsInUse: guideMappingsStore.list(credentials.username, playlistId).length
+      })
     } catch (err) {
       console.error('[epg] mapping picker failed:', err)
       res.status(502).json({ error: err instanceof Error ? err.message : 'Could not load the mapping picker' })
@@ -2307,13 +2402,19 @@ app.post('/api/epg/mappings/:streamId', requireAuth, (req, res) => {
   try {
     // The owner is the PROVIDER username, not the app account: stream ids are provider-scoped,
     // and epgService's matcher (and its cache) resolve mappings by the same identity — the
-    // household's app account and its provider account are deliberately kept apart here.
-    const credentials = resolveEpgCredentials(req)
-    if (!credentials) {
-      res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+    // household's app account and its provider account are deliberately kept apart here. The
+    // playlist dimension (v0.78.0) separates two playlists that even share a username string.
+    const session = req.authSession as AuthSession
+    const resolved = resolveMappingRequest(req, session.username)
+    if (!resolved) {
+      if (typeof req.query.playlist === 'string' && req.query.playlist.trim().length > 0) {
+        res.status(404).json({ error: 'Unknown playlist' })
+      } else {
+        res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+      }
       return
     }
-    const mapping = guideMappingsStore.set(credentials.username, {
+    const mapping = guideMappingsStore.set(resolved.credentials.username, resolved.playlistId, {
       streamId,
       // The channel's own name is denormalised for display; the client supplies it because the
       // server's channel list may not carry this stream at mapping time. A missing name falls
@@ -2336,12 +2437,17 @@ app.delete('/api/epg/mappings/:streamId', requireAuth, (req, res) => {
     return
   }
   try {
-    const credentials = resolveEpgCredentials(req)
-    if (!credentials) {
-      res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+    const session = req.authSession as AuthSession
+    const resolved = resolveMappingRequest(req, session.username)
+    if (!resolved) {
+      if (typeof req.query.playlist === 'string' && req.query.playlist.trim().length > 0) {
+        res.status(404).json({ error: 'Unknown playlist' })
+      } else {
+        res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+      }
       return
     }
-    res.json({ ok: true, removed: guideMappingsStore.clear(credentials.username, streamId) })
+    res.json({ ok: true, removed: guideMappingsStore.clear(resolved.credentials.username, resolved.playlistId, streamId) })
   } catch (err) {
     console.error('[epg] mapping clear failed:', err)
     res.status(500).json({ error: err instanceof Error ? err.message : 'Could not clear the mapping' })
@@ -2390,7 +2496,18 @@ function resolveUpstreamUrl(relativeOrAbsolute: string, req: Request): string {
   // See lib/upstreamUrl.ts — and note this has to happen *before* the origin check below, since the
   // provider path is what that check is supposed to see.
   const mappedTimeshift = parseSameOriginTimeshiftPath(relativeOrAbsolute)
-  const timeshiftCredentials = mappedSession ? resolveAccountCredentials(mappedSession.username) : null
+  const timeshiftCredentials = mappedSession
+    ? mappedTimeshift?.playlistId
+      ? // A playlist-scoped catch-up source: the named playlist's own credentials, never the
+        // account's primary. An unknown playlist fails the resolution rather than falling through
+        // to the primary — silently transcoding the primary's same-id channel would be far worse
+        // than an error the client can see.
+        resolvePlaylistCredentials(mappedSession.username, mappedTimeshift.playlistId)
+      : resolveAccountCredentials(mappedSession.username)
+    : null
+  if (mappedTimeshift && mappedTimeshift.playlistId && !timeshiftCredentials) {
+    throw new Error('Unknown playlist for catch-up source')
+  }
   if (mappedTimeshift && timeshiftCredentials) {
     relativeOrAbsolute = buildTimeshiftPath(
       timeshiftCredentials,
