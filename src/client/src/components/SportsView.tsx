@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { Session } from '../lib/appAuth'
+import { XtreamClient } from '../lib/xtreamClient'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { LivePlayer } from './LivePlayer'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
@@ -241,11 +242,19 @@ function FixtureRow({
   )
 }
 
-/** A channel row, used in the channels pane. */
+/** A channel row, used in the channels pane. v0.79.0: a feed from an additional playlist
+ *  carries its provenance so the operator can see which line would serve it. */
 function ChannelRow({ channel, onPlay }: { channel: LiveStream; onPlay: (channel: LiveStream) => void }): JSX.Element {
   return (
     <button className="sports-row" onClick={() => onPlay(channel)}>
-      <span className="sports-row-label">{channel.name}</span>
+      <span className="sports-row-label">
+        {channel.name}
+        {channel.playlistId && channel.playlistId !== 'primary' && channel.playlistLabel && (
+          <span className="setup-hint" style={{ marginLeft: 6, fontSize: '0.68rem', opacity: 0.75 }}>
+            {channel.playlistLabel}
+          </span>
+        )}
+      </span>
       {channel.stream_icon ? <img className="sports-row-icon" src={channel.stream_icon} alt="" loading="lazy" /> : null}
     </button>
   )
@@ -307,8 +316,11 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
   // Only the categories that classify as a sport (a competition or a carrier) — see the module
   // comment in lib/sports.ts. A category that fails to load contributes nothing rather than
   // failing the tab.
+  // v0.79.0: categories arrive from every playlist (the server flattens them), and their ids
+  // are provider-scoped — the union is deduped before asking, and a playlist that lacks an id
+  // simply returns nothing for it.
   const sportsCategoryIds = useMemo(
-    () => categories.filter((c) => classifyCategory(c.category_name) !== null).map((c) => c.category_id),
+    () => [...new Set(categories.filter((c) => classifyCategory(c.category_name) !== null).map((c) => c.category_id))],
     [categories]
   )
 
@@ -529,7 +541,14 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
     })
   }, [])
 
-  const streamUrl = nowPlaying ? session.client.getStreamUrl('live', nowPlaying.stream_id, 'm3u8') : null
+  // v0.79.0: a feed from an additional playlist plays through that playlist's scoped relay —
+  // the server resolves its credentials; the browser never sees the second provider.
+  const streamUrl = nowPlaying
+    ? (nowPlaying.playlistId && nowPlaying.playlistId !== 'primary'
+        ? new XtreamClient(nowPlaying.playlistId)
+        : session.client
+      ).getStreamUrl('live', nowPlaying.stream_id, 'm3u8')
+    : null
 
   if (loadError) {
     return (
@@ -574,7 +593,12 @@ export function SportsView({ session }: { session: Session }): JSX.Element {
           <div className="player-section" style={{ '--player-max-height': `${playerMaxHeight}px` } as CSSProperties}>
             <LivePlayer url={streamUrl} channelKey={`live:${nowPlaying.stream_id}`} />
             <div className="now-playing-bar">
-              <span>Now playing: {nowPlaying.name}</span>
+              <span>
+                Now playing: {nowPlaying.name}
+                {nowPlaying.playlistId && nowPlaying.playlistId !== 'primary' && nowPlaying.playlistLabel && (
+                  <span className="setup-hint" style={{ marginLeft: 6 }}>· {nowPlaying.playlistLabel}</span>
+                )}
+              </span>
             </div>
             <div
               className="resize-handle resize-handle--row"

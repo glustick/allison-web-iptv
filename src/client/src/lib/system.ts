@@ -3,6 +3,8 @@
 import type { MediaKind } from './prefs'
 
 export interface SearchHit {
+  /** Which playlist the hit belongs to ('' = the primary, matching the server's convention). */
+  playlistId?: string
   kind: MediaKind
   streamId: number
   name: string

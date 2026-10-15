@@ -1447,7 +1447,7 @@ app.get('/api/search', requireAuth, (req, res) => {
     const hits = query.trim().length === 0 ? [] : searchService.search(query, Number.isFinite(limit) ? limit : 40, kind)
     // Keep the index warm in the background; a search never waits on a rebuild.
     const credentials = resolveAccountCredentials(session.username)
-    if (credentials) searchService.ensureFresh(credentials)
+    if (credentials) searchService.ensureFresh(allAccountPlaylists(session.username, credentials))
     res.json({ ok: true, query, hits, index: searchService.status() })
   } catch (err) {
     console.error('[search] failed:', err)
@@ -1459,7 +1459,7 @@ app.get('/api/search/status', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
   try {
     const credentials = resolveAccountCredentials(session.username)
-    if (credentials) searchService.ensureFresh(credentials)
+    if (credentials) searchService.ensureFresh(allAccountPlaylists(session.username, credentials))
     res.json({ ok: true, index: searchService.status() })
   } catch (err) {
     console.error('[search] status failed:', err)
@@ -1478,7 +1478,7 @@ app.post('/api/search/reindex', requireAuth, requireAdmin, (req, res) => {
         res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
         return
       }
-      const index = await searchService.rebuild(credentials)
+      const index = await searchService.rebuild(allAccountPlaylists(session.username, credentials))
       res.json({ ok: true, index })
     } catch (err) {
       console.error('[search] reindex failed:', err)
@@ -2043,16 +2043,57 @@ app.get('/api/sports/catalogue', requireAuth, (req, res) => {
         ? [...new Set(raw.split(',').map((id) => id.trim()).filter((id) => /^[A-Za-z0-9_-]+$/.test(id)))].slice(0, 400)
         : []
     try {
-      const categories = await sportsCatalogue.getCategories(credentials)
-      const streams = categoryIds.length > 0 ? await sportsCatalogue.getStreams(credentials, categoryIds) : null
+      // v0.79.0: every playlist contributes its own sports channels — one dead provider leaves
+      // its slice's error in `playlists` and everyone else's rows intact (independent failures,
+      // the rule every other multi-playlist surface follows). Rows carry playlistId/playlistLabel
+      // so the client's schedule can badge provenance and route playback through the right relay.
+      const playlists = allAccountPlaylists(session.username, credentials)
+      const labels = new Map<string, string>()
+      try {
+        for (const playlist of parseStoredPlaylists(session.username).envelope.playlists) {
+          labels.set(playlist.id === 'primary' ? '' : playlist.id, playlist.label)
+        }
+      } catch {
+        // Labels are cosmetic here; ids answer on their own.
+      }
+      const slices = await Promise.all(
+        playlists.map(async (playlist) => {
+          const label = playlist.playlistId === '' ? 'Main' : labels.get(playlist.playlistId) ?? playlist.playlistId
+          const categories = await sportsCatalogue.getCategories(playlist.credentials, playlist.playlistId)
+          const streams = categoryIds.length > 0 ? await sportsCatalogue.getStreams(playlist.credentials, categoryIds, playlist.playlistId) : null
+          const stamp = (rows: Record<string, unknown>[]): Record<string, unknown>[] =>
+            playlist.playlistId === ''
+              ? rows
+              : rows.map((row) => ({ ...row, playlistId: playlist.playlistId, playlistLabel: label }))
+          return {
+            playlistId: playlist.playlistId,
+            label,
+            categories: stamp(categories.rows),
+            categoriesFetchedAt: categories.fetchedAt,
+            streams: stamp(streams?.rows ?? []),
+            streamsFetchedAt: streams?.fetchedAt ?? null,
+            errors: [categories.error, ...(streams?.errors ?? [])].filter((message): message is string => Boolean(message)),
+            missing: streams?.missing ?? []
+          }
+        })
+      )
+      // Flattened top-level fields keep the response one shape for the client: rows from every
+      // playlist, tagged. `playlists` carries the per-slice health the chips can show.
       res.json({
         ok: true,
-        categories: categories.rows,
-        categoriesFetchedAt: categories.fetchedAt,
-        streams: streams?.rows ?? [],
-        streamsFetchedAt: streams?.fetchedAt ?? null,
-        errors: [categories.error, ...(streams?.errors ?? [])].filter((message): message is string => Boolean(message)),
-        missing: streams?.missing ?? []
+        categories: slices.flatMap((slice) => slice.categories),
+        categoriesFetchedAt: slices.find((slice) => slice.playlistId === '')?.categoriesFetchedAt ?? null,
+        streams: slices.flatMap((slice) => slice.streams),
+        streamsFetchedAt: slices.find((slice) => slice.playlistId === '')?.streamsFetchedAt ?? null,
+        errors: slices.flatMap((slice) => slice.errors),
+        missing: slices.flatMap((slice) => slice.missing),
+        playlists: slices.map((slice) => ({
+          id: slice.playlistId,
+          label: slice.label,
+          error: slice.errors[0] ?? null,
+          categories: slice.categories.length,
+          streams: slice.streams.length
+        }))
       })
     } catch (err) {
       console.error('[sports] catalogue failed:', err)
@@ -2251,6 +2292,33 @@ app.post('/api/epg/refresh', requireAuth, requireAdmin, (req, res) => {
 // Windowed, aggregated programme listings for the EPG grid — provider guide first, extra
 // user-configured XMLTV sources filling channels the provider has nothing for (epgService.ts).
 // Clients refetch per time-window navigation; guides themselves are cached server-side per TTL.
+/**
+ * Every playlist on the account as a (playlistId, credentials) list, primary first. The first
+ * saved playlist IS the primary (playlists.ts's rule), so it maps to the '' dimension regardless
+ * of its readable id. A decrypt failure leaves the primary answering alone rather than the whole
+ * surface going dark — the same leniency credentialsFromStored applies to reads.
+ */
+function allAccountPlaylists(
+  username: string,
+  primaryCredentials: { server: string; username: string; password: string }
+): Array<{ playlistId: string; credentials: { server: string; username: string; password: string } }> {
+  const playlists: Array<{ playlistId: string; credentials: { server: string; username: string; password: string } }> = [
+    { playlistId: '', credentials: primaryCredentials }
+  ]
+  try {
+    const parsed = parseStoredPlaylists(username)
+    parsed.envelope.playlists.slice(1).forEach((playlist) => {
+      playlists.push({
+        playlistId: playlist.id,
+        credentials: { server: playlist.server, username: playlist.username, password: playlist.password }
+      })
+    })
+  } catch (err) {
+    console.error('[playlists] additional playlists unavailable:', err)
+  }
+  return playlists
+}
+
 app.get('/api/epg', requireAuth, (req, res) => {
   void (async (): Promise<void> => {
     const session = req.authSession as AuthSession
@@ -2266,29 +2334,7 @@ app.get('/api/epg', requireAuth, (req, res) => {
       return
     }
     try {
-      // v0.78.0: every playlist on the account contributes its own guide and its own matching —
-      // one playlist's provider being down must not blank the others (independent failures, the
-      // same rule the channel merge follows). The primary keeps its bare stream-id listing keys;
-      // each additional playlist keys `<playlistId>:<streamId>` so provider-scoped ids cannot
-      // overwrite each other. The first saved playlist IS the primary (playlists.ts's rule), so
-      // it maps to the '' dimension regardless of its readable id.
-      const playlists: Array<{ playlistId: string; credentials: { server: string; username: string; password: string } }> = [
-        { playlistId: '', credentials }
-      ]
-      try {
-        const parsed = parseStoredPlaylists(session.username)
-        parsed.envelope.playlists.slice(1).forEach((playlist) => {
-          playlists.push({
-            playlistId: playlist.id,
-            credentials: { server: playlist.server, username: playlist.username, password: playlist.password }
-          })
-        })
-      } catch (err) {
-        // A decrypt failure leaves the primary answering alone rather than the grid going dark —
-        // the same leniency credentialsFromStored applies to reads.
-        console.error('[epg] additional playlists unavailable:', err)
-      }
-      const window = await epgService.aggregatePlaylists({ playlists, epgUrls: credentials.epgUrls, startMs, endMs })
+      const window = await epgService.aggregatePlaylists({ playlists: allAccountPlaylists(session.username, credentials), epgUrls: credentials.epgUrls, startMs, endMs })
       res.json({ ok: true, ...window })
     } catch (err) {
       console.error('[epg] aggregate failed:', err)

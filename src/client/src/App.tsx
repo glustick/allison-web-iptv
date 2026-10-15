@@ -51,7 +51,7 @@ export default function App(): JSX.Element {
   const [updateMessage, setUpdateMessage] = useState<string | null>(null)
   // A search hit is played by the view that owns that kind, so the request carries a nonce:
   // picking the same result twice must still switch tab and start playback.
-  const [playRequest, setPlayRequest] = useState<{ kind: MediaKind; streamId: number; name: string; nonce: number } | null>(null)
+  const [playRequest, setPlayRequest] = useState<{ kind: MediaKind; streamId: number; name: string; playlistId?: string; nonce: number } | null>(null)
   const [authError, setAuthError] = useState<string | null>(null)
   // An admin whose own account has no IPTV provider configured would otherwise be stuck on
   // the IPTV setup screen, unable to manage users or watch sessions at all — the admin console
@@ -286,7 +286,15 @@ export default function App(): JSX.Element {
         </div>
         <SearchBar
           onPlay={(hit: SearchHit) => {
-            setPlayRequest({ kind: hit.kind, streamId: hit.streamId, name: hit.name, nonce: Date.now() })
+            setPlayRequest({
+              kind: hit.kind,
+              streamId: hit.streamId,
+              name: hit.name,
+              // A hit from a non-primary playlist must play through that playlist's relay
+              // (v0.79.0 — ids are provider-scoped, so the id alone names the wrong channel).
+              playlistId: hit.playlistId || undefined,
+              nonce: Date.now()
+            })
             setTab(hit.kind === 'live' ? 'live' : hit.kind === 'movie' ? 'movies' : 'series')
           }}
         />

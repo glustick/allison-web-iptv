@@ -15,6 +15,30 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.79.0 — on-demand everywhere: both lines' films, series and search.** Multi-playlist phase 4,
+completing the feature across every surface that was still primary-only. **Movies & Series** gain
+the playlist chips (All / Main / each additional) with per-playlist categories, streams, series
+info and episodes fetched through each playlist's scoped client — independent failures, an offline
+playlist says so on its chip — and composite favourites/history/resume throughout: film ids and
+episode ids are provider-scoped like everything else, so the two lines' "The Big Film" with the
+same id are two rows, two stars, two resume points. This wakes the composite `resume_positions`
+schema that shipped dormant in v0.78.0. **Search** indexes every playlist's catalogue (live +
+movies + series) — the store's PK gained the playlist dimension (rebuilt the standard way, legacy
+rows = primary), a rebuild is sequential per playlist with per-playlist failure isolation (one dead
+provider logs and skips; the others stay searchable), and every hit carries its playlist so the
+play request routes through the right scoped relay from any tab. The candidate prefilter's ceiling
+grew with the catalogues (400 → 1200) so a broad query can't drop a whole playlist before ranking.
+**Sports** derives its schedule from every playlist's sports channels: the server's once-a-day
+catalogue cache went per-playlist (the persisted file nests additional playlists under `additional`,
+an older file loads unchanged), the endpoint returns rows tagged with their playlist plus a
+per-playlist health list, feeds carry a provenance badge, and playback routes through the owning
+playlist's relay. Hidden playlists (the grid's own hide list) stay hidden in the VOD tabs — one
+concept, no second toggle. **Rig-verified end to end with two fake providers sharing ids 555/777:**
+search returns both playlists' hits with their playlist named, the backup's VOD catalogue and
+episodes answer through the scoped relay, a resume point on the backup's film records under p2
+(and the primary's 555 stays untouched), and the sports catalogue carries both playlists with the
+backup's rows tagged. 836 tests; typecheck, lint and the build clean.
+
 **v0.78.0 — the same channel, on both lines, finally distinct.** Multi-playlist phase 3: composite
 identity, the manual "also on →" switch, and per-playlist guides. **Storage:** every per-user table
 that keys on a stream id (favourites, history, resume positions, custom-category channels) gains a
@@ -1480,7 +1504,11 @@ channel list gained the **Playlist column** with filter chips and per-playlist h
 resolves credentials for the playlist a request names. **Phase 3 landed 2026-10-10 (v0.78.0)** — the
 manual "also on…" switch, composite per-user identity in the per-user tables (favourites, history,
 resume positions, custom categories), catch-up through the scoped relay, and per-playlist guides with
-playlist-scoped manual mappings. Phases of the earlier plan that the
+playlist-scoped manual mappings. **Phase 4 landed 2026-10-15 (v0.79.0)** — Movies, Series, search
+and the Sports tab all became playlist-aware, completing the feature: per-playlist VOD browsing with
+composite resume, an index over every playlist's catalogue with hits that route to the right relay,
+and a sports schedule derived from both lines' channels. **The feature is whole** — every surface
+that was primary-only now carries the playlist dimension. Phases of the earlier plan that the
 operator's decisions removed — automatic dedupe and automatic failover — are deliberately not built.
 
 **Phase 1 landed 2026-09-23 (v0.51.0), model only.** `src/server/lib/playlists.ts` parses a stored blob

@@ -13,6 +13,11 @@ export interface SearchStatus extends SearchIndexStats {
   lastError: string | null
 }
 
+export interface SearchPlaylist {
+  playlistId: string
+  credentials: ProviderCredentials
+}
+
 export function createSearchService({ dataDir }: { dataDir: string }) {
   const store = createSearchStore({ dataDir })
   const lists = createProviderLists()
@@ -23,21 +28,29 @@ export function createSearchService({ dataDir }: { dataDir: string }) {
     return { ...store.stats(), indexing: indexing !== null, lastError }
   }
 
-  function rebuild(credentials: ProviderCredentials): Promise<SearchStatus> {
+  function rebuild(playlists: SearchPlaylist[]): Promise<SearchStatus> {
     if (indexing) return indexing
     const run = (async (): Promise<SearchStatus> => {
-      try {
-        lastError = null
-        // Sequential rather than parallel: these are three multi-megabyte catalogue downloads
-        // from one IPTV account, and hammering the provider is how accounts get rate-limited.
-        store.replaceKind('live', await lists.live(credentials))
-        store.replaceKind('movie', await lists.movies(credentials))
-        store.replaceKind('series', await lists.series(credentials))
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err)
-      } finally {
-        indexing = null
+      lastError = null
+      const failures: string[] = []
+      for (const playlist of playlists) {
+        // Sequential rather than parallel, within a playlist and across them: these are three
+        // multi-megabyte catalogue downloads per IPTV account, and hammering providers is how
+        // accounts get rate-limited. A playlist that fails is logged and skipped — one dead
+        // provider must not leave the other playlists unsearchable (the independent-failures
+        // rule every other multi-playlist surface follows).
+        try {
+          store.replaceKind('live', playlist.playlistId, await lists.live(playlist.credentials))
+          store.replaceKind('movie', playlist.playlistId, await lists.movies(playlist.credentials))
+          store.replaceKind('series', playlist.playlistId, await lists.series(playlist.credentials))
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          const label = playlist.playlistId === '' ? 'primary' : `"${playlist.playlistId}"`
+          failures.push(`${label}: ${message}`)
+        }
       }
+      lastError = failures.length > 0 ? failures.join('; ') : null
+      indexing = null
       return status()
     })()
     indexing = run
@@ -45,10 +58,10 @@ export function createSearchService({ dataDir }: { dataDir: string }) {
   }
 
   /** Starts a background rebuild when the index is missing or older than its TTL. */
-  function ensureFresh(credentials: ProviderCredentials): void {
+  function ensureFresh(playlists: SearchPlaylist[]): void {
     if (indexing) return
     if (!store.isStale(INDEX_TTL_MS)) return
-    void rebuild(credentials)
+    void rebuild(playlists)
   }
 
   return {

@@ -144,8 +144,9 @@ export async function setResumePosition(
   return data.resumePositions ?? []
 }
 
-export async function clearResumePosition(kind: MediaKind, streamId: number): Promise<ResumePosition[]> {
-  const data = await request<{ resumePositions: ResumePosition[] }>(`/api/prefs/resume/${kind}/${streamId}`, {
+export async function clearResumePosition(kind: MediaKind, streamId: number, playlistId?: string): Promise<ResumePosition[]> {
+  const query = playlistId ? `?playlist=${encodeURIComponent(playlistId)}` : ''
+  const data = await request<{ resumePositions: ResumePosition[] }>(`/api/prefs/resume/${kind}/${streamId}${query}`, {
     method: 'DELETE'
   })
   return data.resumePositions ?? []

@@ -36,6 +36,9 @@ interface StoredFile {
   streams?: Record<string, Entry>
   /** The sports category ids the client last asked for — what the nightly warm refreshes. */
   lastCategoryIds?: string[]
+  /** v0.79.0: additional playlists' caches, keyed by playlist id. The primary's slices stay at
+   *  the top level so an older file loads unchanged (it simply has no additional playlists). */
+  additional?: Record<string, { categories?: Entry | null; streams?: Record<string, Entry> }>
 }
 
 export interface CatalogueCredentials {
@@ -71,11 +74,24 @@ export function createSportsCatalogueService(deps: SportsCatalogueDeps = {}) {
   const ttlMs = deps.ttlMs ?? TTL_MS
   const dataDir = deps.dataDir
 
+  // The primary's cache ('' dimension); additional playlists live in `additionalCaches`,
+  // same shape per playlist (v0.79.0).
   let categories: Entry | null = null
   const streams = new Map<string, Entry>()
+  const additionalCaches = new Map<string, { categories: Entry | null; streams: Map<string, Entry> }>()
   let lastIds: string[] = []
   let loaded = false
   let loading: Promise<void> | null = null
+
+  function cacheFor(playlistId: string): { categories: Entry | null; streams: Map<string, Entry> } {
+    if (playlistId === '') return { get categories() { return categories }, set categories(entry: Entry | null) { categories = entry }, streams }
+    let cache = additionalCaches.get(playlistId)
+    if (!cache) {
+      cache = { categories: null, streams: new Map() }
+      additionalCaches.set(playlistId, cache)
+    }
+    return cache
+  }
 
   const inFlight = new Map<string, Promise<Entry>>()
 
@@ -94,6 +110,10 @@ export function createSportsCatalogueService(deps: SportsCatalogueDeps = {}) {
           categories = raw.categories ?? null
           for (const [id, entry] of Object.entries(raw.streams ?? {})) streams.set(id, entry)
           lastIds = Array.isArray(raw.lastCategoryIds) ? raw.lastCategoryIds.filter((id) => typeof id === 'string') : []
+          for (const [playlistId, cache] of Object.entries(raw.additional ?? {})) {
+            const fresh = { categories: cache.categories ?? null, streams: new Map(Object.entries(cache.streams ?? {})) }
+            additionalCaches.set(playlistId, fresh)
+          }
         }
       } catch (err) {
         // A missing file is the cold path; anything else is worth knowing but not fatal — the
@@ -116,7 +136,13 @@ export function createSportsCatalogueService(deps: SportsCatalogueDeps = {}) {
       version: 1,
       categories,
       streams: Object.fromEntries(streams),
-      lastCategoryIds: lastIds
+      lastCategoryIds: lastIds,
+      additional: Object.fromEntries(
+        [...additionalCaches.entries()].map(([playlistId, cache]) => [
+          playlistId,
+          { categories: cache.categories, streams: Object.fromEntries(cache.streams) }
+        ])
+      )
     }
     const tmp = `${path}.tmp`
     try {
@@ -133,7 +159,9 @@ export function createSportsCatalogueService(deps: SportsCatalogueDeps = {}) {
     return Boolean(entry && entry.error === null && now() - entry.fetchedAt < ttlMs)
   }
 
-  /** Cache-or-fetch for one key (the category list, or one category's streams). */
+  /** Cache-or-fetch for one key (the category list, or one category's streams). Keys are
+   *  playlist-qualified (`<playlistId>~<key>`) so two playlists' category ids — provider-scoped,
+   *  like every other id — can never share a cache slot or an in-flight dedupe. */
   async function ensure(key: string, current: Entry | null, fetcher: () => Promise<Entry>): Promise<Entry> {
     await ensureLoaded()
     if (isFresh(current)) return current as Entry
@@ -147,8 +175,12 @@ export function createSportsCatalogueService(deps: SportsCatalogueDeps = {}) {
           entry.error !== null && current
             ? { fetchedAt: current.fetchedAt, rows: current.rows, error: entry.error }
             : entry
-        if (key === 'categories') categories = next
-        else streams.set(key, next)
+        const tilde = key.indexOf('~')
+        const playlistId = tilde === -1 ? '' : key.slice(0, tilde)
+        const ownKey = tilde === -1 ? key : key.slice(tilde + 1)
+        const cache = cacheFor(playlistId)
+        if (ownKey === 'categories') cache.categories = next
+        else cache.streams.set(ownKey, next)
         await persist()
         return next
       })
@@ -185,26 +217,28 @@ export function createSportsCatalogueService(deps: SportsCatalogueDeps = {}) {
     }
   }
 
-  async function getCategories(credentials: CatalogueCredentials): Promise<CategoriesResult> {
-    const entry = await ensure('categories', categories, () =>
+  async function getCategories(credentials: CatalogueCredentials, playlistId = ''): Promise<CategoriesResult> {
+    const cache = cacheFor(playlistId)
+    const entry = await ensure(`${playlistId}~categories`, cache.categories, () =>
       fetchEntry(credentials, { action: 'get_live_categories' })
     )
     return { rows: entry.rows, fetchedAt: entry.rows.length > 0 ? entry.fetchedAt : null, error: entry.error }
   }
 
-  async function getStreams(credentials: CatalogueCredentials, categoryIds: string[]): Promise<StreamsResult> {
+  async function getStreams(credentials: CatalogueCredentials, categoryIds: string[], playlistId = ''): Promise<StreamsResult> {
     await ensureLoaded()
-    // Remembered for the nightly warm (see lastCategoryIds).
-    if (categoryIds.length > 0 && JSON.stringify(categoryIds) !== JSON.stringify(lastIds)) {
+    // Remembered for the nightly warm (see lastCategoryIds) — the primary's ask only.
+    if (playlistId === '' && categoryIds.length > 0 && JSON.stringify(categoryIds) !== JSON.stringify(lastIds)) {
       lastIds = [...categoryIds]
       void persist()
     }
+    const cache = cacheFor(playlistId)
     const rows: CatalogueRow[] = []
     const errors: string[] = []
     const missing: string[] = []
     let oldest: number | null = null
     for (const categoryId of categoryIds) {
-      const entry = await ensure(categoryId, streams.get(categoryId) ?? null, () =>
+      const entry = await ensure(`${playlistId}~${categoryId}`, cache.streams.get(categoryId) ?? null, () =>
         fetchEntry(credentials, { action: 'get_live_streams', category_id: categoryId })
       )
       if (entry.error) errors.push(entry.error)
@@ -226,14 +260,15 @@ export function createSportsCatalogueService(deps: SportsCatalogueDeps = {}) {
       return [...lastIds]
     },
     /** Forces a refetch of the given keys (used by the nightly warm and by a manual refresh). */
-    async refresh(credentials: CatalogueCredentials, categoryIds: string[]): Promise<void> {
+    async refresh(credentials: CatalogueCredentials, categoryIds: string[], playlistId = ''): Promise<void> {
       await ensureLoaded()
-      categories = null
-      await ensure('categories', null, () => fetchEntry(credentials, { action: 'get_live_categories' }))
+      const cache = cacheFor(playlistId)
+      cache.categories = null
+      await ensure(`${playlistId}~categories`, null, () => fetchEntry(credentials, { action: 'get_live_categories' }))
       for (const categoryId of categoryIds) {
-        streams.delete(categoryId)
+        cache.streams.delete(categoryId)
       }
-      if (categoryIds.length > 0) await getStreams(credentials, categoryIds)
+      if (categoryIds.length > 0) await getStreams(credentials, categoryIds, playlistId)
     },
     status(): { categoriesFetchedAt: number | null; categories: number; streams: Record<string, number> } {
       return {
@@ -246,6 +281,7 @@ export function createSportsCatalogueService(deps: SportsCatalogueDeps = {}) {
     clearCache(): void {
       categories = null
       streams.clear()
+      additionalCaches.clear()
       lastIds = []
       loaded = false
     }

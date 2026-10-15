@@ -85,6 +85,10 @@ export interface VodStream {
   added: string
   category_id: string
   container_extension: string
+  /** Which saved playlist this film came from (v0.79.0); absent = the primary, exactly the
+   *  convention LiveStream established in v0.77.0. Ids are provider-scoped. */
+  playlistId?: string
+  playlistLabel?: string
 }
 
 export interface SeriesItem {
@@ -99,6 +103,9 @@ export interface SeriesItem {
   releaseDate: string
   rating: string
   category_id: string
+  /** Which saved playlist this series came from (v0.79.0); absent = the primary. */
+  playlistId?: string
+  playlistLabel?: string
 }
 
 export interface SeriesEpisode {

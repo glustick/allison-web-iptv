@@ -13,7 +13,10 @@ import type { IndexRow } from './providerLists.js'
 // "bbcone" finds "BBC One". Deliberately one code path rather than an FTS5 fast path plus a
 // fallback: this has to work identically on every SQLite build.
 
-const MAX_CANDIDATES = 400
+// v0.79.0: the index spans every playlist's catalogue, so the LIKE prefilter's candidate
+// ceiling grows with it — 400 was one provider's worth of rows, and truncating the prefilter
+// could drop a whole playlist's hit for broad queries before ranking ever saw it.
+const MAX_CANDIDATES = 1200
 const DEFAULT_LIMIT = 40
 
 // Search tokenises differently from guide matching on purpose. The matcher strips packaging noise
@@ -46,6 +49,9 @@ export function searchTokens(name: string): string[] {
 export interface SearchHit {
   kind: MediaKind
   streamId: number
+  /** Which playlist the hit belongs to ('' = the primary). Playing it must go through that
+   *  playlist's scoped relay (v0.79.0). */
+  playlistId: string
   name: string
   category: string | null
   icon: string | null
@@ -63,6 +69,7 @@ export interface SearchIndexStats {
 interface Row {
   kind: string
   stream_id: number
+  playlist_id: string
   name: string
   category: string | null
   stream_icon: string | null
@@ -70,7 +77,8 @@ interface Row {
 }
 
 export interface SearchStore {
-  replaceKind(kind: MediaKind, rows: IndexRow[]): number
+  /** Replaces one playlist's slice of one kind. playlistId '' is the primary. */
+  replaceKind(kind: MediaKind, playlistId: string, rows: IndexRow[]): number
   clear(): void
   stats(): SearchIndexStats
   search(query: string, limit?: number, kind?: MediaKind): SearchHit[]
@@ -92,20 +100,21 @@ export function createSearchStore({ dataDir }: { dataDir: string }): SearchStore
   }
 
   return {
-    replaceKind(kind: MediaKind, rows: IndexRow[]): number {
+    replaceKind(kind: MediaKind, playlistId: string, rows: IndexRow[]): number {
       const db = requireDb()
       const insert = db.prepare(
-        `INSERT INTO search_index (kind, stream_id, name, category, stream_icon, tokens)
-         VALUES (@kind, @streamId, @name, @category, @icon, @tokens)
-         ON CONFLICT (kind, stream_id)
+        `INSERT INTO search_index (kind, stream_id, playlist_id, name, category, stream_icon, tokens)
+         VALUES (@kind, @streamId, @playlistId, @name, @category, @icon, @tokens)
+         ON CONFLICT (kind, stream_id, playlist_id)
          DO UPDATE SET name = excluded.name, category = excluded.category, stream_icon = excluded.stream_icon, tokens = excluded.tokens`
       )
       db.transaction(() => {
-        db.prepare('DELETE FROM search_index WHERE kind = ?').run(kind)
+        db.prepare('DELETE FROM search_index WHERE kind = ? AND playlist_id = ?').run(kind, playlistId)
         for (const row of rows) {
           insert.run({
             kind: row.kind,
             streamId: row.streamId,
+            playlistId,
             name: row.name,
             category: row.category,
             icon: row.icon,
@@ -114,8 +123,11 @@ export function createSearchStore({ dataDir }: { dataDir: string }): SearchStore
             tokens: searchTokens(row.name).join(' ')
           })
         }
+        // The freshness marker stays keyed to the PRIMARY's slice (playlist ''): a backup landing
+        // alone must not make a dead primary's index read fresh. Other playlists keep their own
+        // markers for diagnosis.
         db.prepare('INSERT OR REPLACE INTO search_meta (key, value) VALUES (?, ?)').run(
-          `indexed_at_${kind}`,
+          playlistId === '' ? `indexed_at_${kind}` : `indexed_at_${kind}_${playlistId}`,
           new Date().toISOString()
         )
       })()
@@ -165,7 +177,7 @@ export function createSearchStore({ dataDir }: { dataDir: string }): SearchStore
       const params: unknown[] = [`%${anchor}%`]
       if (kind) params.push(kind)
       const rows = db
-        .prepare(`SELECT kind, stream_id, name, category, stream_icon, tokens FROM search_index WHERE ${where} LIMIT ${MAX_CANDIDATES}`)
+        .prepare(`SELECT kind, stream_id, playlist_id, name, category, stream_icon, tokens FROM search_index WHERE ${where} LIMIT ${MAX_CANDIDATES}`)
         .all(...params) as Row[]
 
       const hits: SearchHit[] = []
@@ -178,6 +190,7 @@ export function createSearchStore({ dataDir }: { dataDir: string }): SearchStore
         hits.push({
           kind: row.kind as MediaKind,
           streamId: row.stream_id,
+          playlistId: row.playlist_id,
           name: row.name,
           category: row.category,
           icon: row.stream_icon,

@@ -127,11 +127,14 @@ function createSchema(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS search_index (
       kind        TEXT NOT NULL,
       stream_id   INTEGER NOT NULL,
+      -- Which playlist the row belongs to ('' = primary). Stream ids are provider-scoped, so
+      -- two playlists' catalogues collide on the same numeric ids (v0.79.0).
+      playlist_id TEXT NOT NULL DEFAULT '',
       name        TEXT NOT NULL,
       category    TEXT,
       stream_icon TEXT,
       tokens      TEXT NOT NULL,
-      PRIMARY KEY (kind, stream_id)
+      PRIMARY KEY (kind, stream_id, playlist_id)
     );
     CREATE INDEX IF NOT EXISTS search_index_tokens ON search_index (tokens);
 
@@ -247,6 +250,12 @@ function migrateSchema(db: Database.Database): void {
       ['username', 'kind', 'stream_id'],
       `username TEXT NOT NULL, kind TEXT NOT NULL, stream_id INTEGER NOT NULL, playlist_id TEXT NOT NULL DEFAULT '',
        name TEXT NOT NULL, category TEXT, position_seconds REAL NOT NULL, duration_seconds REAL, updated_at TEXT NOT NULL, `
+    )
+    widenWithPlaylistId(
+      'search_index',
+      ['kind', 'stream_id'],
+      `kind TEXT NOT NULL, stream_id INTEGER NOT NULL, playlist_id TEXT NOT NULL DEFAULT '',
+       name TEXT NOT NULL, category TEXT, stream_icon TEXT, tokens TEXT NOT NULL, `
     )
   } finally {
     db.pragma('foreign_keys = ON')

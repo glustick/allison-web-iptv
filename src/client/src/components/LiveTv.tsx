@@ -86,7 +86,7 @@ export function LiveTv({
   session: Session
   onOpenEpgSettings?: () => void
   /** A search hit for this view to open (see App.tsx). */
-  playRequest?: { kind: string; streamId: number; name: string; nonce: number } | null
+  playRequest?: { kind: string; streamId: number; name: string; playlistId?: string; nonce: number } | null
   onPlayHandled?: () => void
 }): JSX.Element {
   const [categories, setCategories] = useState<Category[]>([])
@@ -235,11 +235,20 @@ export function LiveTv({
   }, [nowPlaying])
   useEffect(() => () => reportNowPlaying(null), [])
 
-  // A search result: switch the view to All so the channel is in context, and start it.
+  // A search result: switch the view to All so the channel is in context, and start it. The
+  // synth row keeps the hit's playlist (v0.79.0) so playback routes through that playlist's
+  // scoped relay rather than silently playing the primary's same-id channel.
   useEffect(() => {
     if (!playRequest || playRequest.kind !== 'live') return
     setSelection({ type: 'all' })
-    selectChannel(synthesizeStream(playRequest.streamId, playRequest.name, null))
+    selectChannel(
+      synthesizeStream(
+        playRequest.streamId,
+        playRequest.name,
+        null,
+        playRequest.playlistId ? { id: playRequest.playlistId, label: additional.find((a) => a.id === playRequest.playlistId)?.label } : undefined
+      )
+    )
     onPlayHandled?.()
   }, [playRequest?.nonce])
 
