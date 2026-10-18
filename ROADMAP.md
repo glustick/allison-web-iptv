@@ -15,6 +15,30 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.79.1 — Sky Sports FHD plays: the probe stopped racing the player, and conversion says so.**
+The reported failure — "Sky Sports+ / Sky Sports FHD doesn't play" — was measured end to end on
+the live provider (2026-10-18). The streams themselves are fine from the host: H.264 1080p50 with
+an E-AC-3-first audio ladder (eac3, eac3, aac, aac), the HD variants AAC-first. What died was the
+first play: the client fires its codec probe at the same moment hls.js starts loading the same
+channel, and the probe was a whole second ffmpeg connection pulling the live source — on the
+account's limited connections the two raced until the probe hit its full 30s backstop while the
+player starved on a black screen with no error, no overlay, nothing; the E-AC-3 verdict then cost
+another ~12s of session warm-up, and the watch history showed every attempt abandoned seconds in.
+Two changes. **The fast probe** (`tsProgramMap.ts`): the facts the routing decision needs are
+stated in the PAT/PMT at the head of any TS segment, so `probeTracks` now follows master →
+variant → the first 256KB of one segment (~1-3s, one short connection — verified against real
+Sky Sports FHD/HD segments: identical codec lists to ffmpeg's) and parses the program map in
+process, no ffmpeg at all; anything it can't confidently read (fMP4, byte-range, exotic stream
+types, a refused fetch) falls back to the ffmpeg probe unchanged. **The conversion notice**
+(`LivePlayer`): every path that starts a conversion session — the informed remux route, the
+probe's E-AC-3 verdict, the silent-audio watchdog, the stall ladder's last rung — now shows
+"converting it now (usually ready within 15 seconds)" instead of a silent black screen, cleared
+the moment fragments flow. Rig-measured after: first play of an unprobed FHD channel reaches
+full A/V in ~3-12s (was 45s+), a remembered channel ~13s with the notice up, HD variants play
+direct in under 6s. 853 tests (17 new: the PMT parser against synthetic TS, the playlist
+navigation helpers, and the fast path's fetch-stubbed chain with its ffmpeg fallbacks);
+typecheck, lint and the build clean.
+
 **v0.79.0 — on-demand everywhere: both lines' films, series and search.** Multi-playlist phase 4,
 completing the feature across every surface that was still primary-only. **Movies & Series** gain
 the playlist chips (All / Main / each additional) with per-playlist categories, streams, series

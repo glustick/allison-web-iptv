@@ -49,6 +49,14 @@ const RECOVERY_CHECK_INTERVAL_MS = 15_000
 // audio". Polling the element's own decoded-byte counters catches that shape.
 const SILENT_AUDIO_CHECK_INTERVAL_MS = 1000
 const SILENT_AUDIO_SILENT_TICKS = 3
+// What the viewer sees while a conversion session starts. The session takes ~10-15s of ffmpeg
+// reading the live source before its first segment exists (plus the probe that decides a
+// conversion is needed at all), and until now every second of that was a silent black screen —
+// which is exactly what "Sky Sports FHD doesn't play" looked like from the sofa: the watch
+// history showed attempts abandoned seconds in, all of them mid-conversion (2026-10-18).
+// Cleared the moment fragments flow (the FRAG_BUFFERED handler); an error replaces it.
+const CONVERSION_NOTICE =
+  'This channel’s audio can’t play in this browser directly — converting it now (usually ready within 15 seconds)…'
 // Two concurrent requests for one stream (this one, plus ffmpeg about to open it) can trip a
 // single-connection provider, so the element is detached and given a moment before transcode.
 const CONNECTION_RELEASE_DELAY_MS = 2000
@@ -188,6 +196,7 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
       if (route.route === 'remux' || route.route === 'video-transcode') {
         // The session paths: start it (the hook records the plan when playback proves it), then
         // the reload re-enters this effect with the session's output ready to attach.
+        setStatusNotice(CONVERSION_NOTICE)
         tryFallbackForSilentAudio(
           url,
           false,
@@ -346,6 +355,7 @@ let stallCount = 0
       if (silentFallbackStarted || gaveUp || fatalErrorShown) return
       silentFallbackStarted = true
       clearInterval(silentAudioTimer)
+      setStatusNotice(CONVERSION_NOTICE)
       video.pause()
       video.removeAttribute('src')
       video.load()
@@ -545,6 +555,7 @@ let stallCount = 0
             noteStreamNeedsTranscode(url)
             setError(null)
             instance.destroy()
+            setStatusNotice(CONVERSION_NOTICE)
             tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
             return
           }
@@ -576,6 +587,7 @@ let stallCount = 0
                 noteStreamNeedsTranscode(url)
                 setError(null)
                 instance.destroy()
+                setStatusNotice(CONVERSION_NOTICE)
                 tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
                 break
               }
@@ -643,6 +655,7 @@ let stallCount = 0
                 noteStreamNeedsTranscode(url)
                 setError(null)
                 instance.destroy()
+                setStatusNotice(CONVERSION_NOTICE)
                 tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
                 break
               }
@@ -736,6 +749,7 @@ let stallCount = 0
       const kind = await sniffStreamKind(url)
       if (cancelled || kind !== 'mpegts') return
       console.warn('[player] stream is raw MPEG-TS, not HLS; routing it through the transcoder')
+      setStatusNotice(CONVERSION_NOTICE)
       tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
     })()
     return () => { cancelled = true }
@@ -796,6 +810,7 @@ let stallCount = 0
           `[player] ${videoCodec} live video in an MPEG-TS HLS container that this browser cannot present — ` +
             'remuxing the container (stream copy, no re-encode)'
         )
+        setStatusNotice(CONVERSION_NOTICE)
         tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
         return
       }
@@ -830,6 +845,7 @@ let stallCount = 0
       const tracks = audioTracks
       if (canDecodeAudioCodec(tracks[0].codec, decodeProbe)) return
       console.warn(`[player] first audio track is ${tracks[0].codec}, which this browser cannot decode; transcoding`)
+      setStatusNotice(CONVERSION_NOTICE)
       tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
     })()
     return () => { cancelled = true }
