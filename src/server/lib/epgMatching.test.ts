@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildGuideIndexes, channelTokens, matchStreamToGuideChannel, matchStreamToGuideChannelDetailed, normalizeChannelName, normalizeName } from './epgMatching.js'
+import { buildGuideIndexes, channelTokens, matchStreamToGuideChannel, matchStreamToGuideChannelDetailed, normalizeChannelName, normalizeName, planBulkSuggestionApply, suggestGuideChannels, SUGGESTION_MIN_SCORE, type MatchStrategy } from './epgMatching.js'
 import { parseXmltv } from './xmltv.js'
 
 const NOW = Date.parse('2026-01-15T12:00:00Z')
@@ -161,5 +161,138 @@ describe('fuzzy name matching (v0.6.6)', () => {
     // The index makes this a bounded candidate scan per stream; anything near a full
     // cross-product (19M comparisons) would take orders of magnitude longer.
     expect(elapsed).toBeLessThan(2000)
+  })
+})
+
+describe('suggestGuideChannels (v0.82.0)', () => {
+  it('offers the best candidate for a name the matcher refuses, with its display name', () => {
+    // The matcher refuses "Sky Sports" against two siblings (no margin) — the suggester still
+    // offers the closest one, because a human (or threshold) judges offers, not coin flips.
+    const indexes = guideFrom([
+      { id: 'g1', displayName: 'Sky Sports 1' },
+      { id: 'g2', displayName: 'Sky Sports 2' }
+    ])
+    const suggestions = suggestGuideChannels({ stream_id: 1, name: 'Sky Sports 1 HD', epg_channel_id: null }, indexes, 3)
+    expect(suggestions.length).toBeGreaterThan(0)
+    expect(suggestions[0].channelId).toBe('g1')
+    expect(suggestions[0].name).toBe('Sky Sports 1')
+    expect(suggestions[0].score).toBeGreaterThanOrEqual(SUGGESTION_MIN_SCORE)
+  })
+
+  it('applies the same scoring formula as the matcher (comparable numbers)', () => {
+    const indexes = guideFrom([{ id: 'g1', displayName: 'BBC One London' }])
+    const stream = { stream_id: 1, name: 'BBC ONE Lon', epg_channel_id: null }
+    const suggestion = suggestGuideChannels(stream, indexes, 1)[0]
+    const matched = matchStreamToGuideChannelDetailed(stream, indexes)
+    // Same formula, so a bulk threshold means the same thing the coverage stats show.
+    expect(suggestion.score).toBeCloseTo(matched.score ?? 0, 5)
+  })
+
+  it('floors suggestions at SUGGESTION_MIN_SCORE and never returns an empty-name candidate', () => {
+    const indexes = guideFrom([{ id: 'g1', displayName: 'BBC One' }])
+    const suggestions = suggestGuideChannels({ stream_id: 1, name: 'Completely Different Network', epg_channel_id: null }, indexes, 5)
+    for (const suggestion of suggestions) expect(suggestion.score).toBeGreaterThanOrEqual(SUGGESTION_MIN_SCORE)
+    expect(suggestions.every((s) => s.name.length > 0)).toBe(true)
+  })
+
+  it('answers nothing for a stream whose tokens share nothing distinctive with the guide', () => {
+    const indexes = guideFrom([{ id: 'g1', displayName: 'Sky News' }])
+    expect(suggestGuideChannels({ stream_id: 1, name: 'zzz qqq', epg_channel_id: null }, indexes)).toEqual([])
+  })
+})
+
+describe('planBulkSuggestionApply (v0.82.0, ported from the desktop sibling)', () => {
+  const G1 = guideFrom([{ id: 'g1', displayName: 'Sky Sports One HD' }])
+  const G2 = guideFrom([{ id: 'g2', displayName: 'Really Unrelated TV' }])
+
+  function planFor(
+    streams: Array<{ stream_id: number; name: string; epg_channel_id: string | null }>,
+    overrides: Partial<Parameters<typeof planBulkSuggestionApply>[1]> = {},
+    threshold = 0.8
+  ) {
+    const sources = ['prov', 'ext']
+    const resolved = new Map<number, { guideUrl: string; channelId: string; strategy: MatchStrategy }>()
+    return planBulkSuggestionApply(
+      streams,
+      {
+        sources,
+        indexes: [G1, G2],
+        resolved,
+        manualStreamIds: new Set<number>(),
+        programmeCount: () => 5,
+        ...overrides
+      },
+      threshold
+    )
+  }
+
+  it('applies at the threshold and counts refusals below it (the desktop’s own pinned semantics)', async () => {
+    // "Sky Sports 1" → "Sky Sports One HD" scores ~0.9+ (Dice with number-fold + first-token bonus);
+    // a genuinely unrelated name scores under any sane threshold.
+    const plan = await planFor([
+      { stream_id: 1, name: 'Sky Sports 1 HD', epg_channel_id: null },
+      { stream_id: 2, name: 'Completely Different Network ZZZ', epg_channel_id: null }
+    ])
+    expect(plan.considered).toBe(2)
+    expect(plan.applied).toHaveLength(1)
+    expect(plan.applied[0]).toMatchObject({ streamId: 1, guideChannelId: 'g1', channelName: 'Sky Sports 1 HD' })
+    expect(plan.belowThreshold).toBe(1)
+  })
+
+  it('takes the best suggestion across all loaded sources', async () => {
+    const plan = await planFor([{ stream_id: 1, name: 'Sky Sports 1 HD', epg_channel_id: null }])
+    expect(plan.applied[0]?.guideChannelId).toBe('g1') // G1's channel, not G2's
+  })
+
+  it('never overwrites the operator’s own mappings and skips healthy matches', async () => {
+    const plan = await planFor([{ stream_id: 1, name: 'Sky Sports 1 HD', epg_channel_id: null }], {
+      manualStreamIds: new Set([1])
+    })
+    expect(plan).toEqual({ considered: 0, alreadyMapped: 1, belowThreshold: 0, applied: [] })
+
+    const healthy = await planFor([{ stream_id: 1, name: 'Sky Sports 1 HD', epg_channel_id: null }], {
+      resolved: new Map([[1, { guideUrl: 'prov', channelId: 'g1', strategy: 'exact-id' }]])
+    })
+    // Resolved AND the resolved channel carries programmes: nothing to fix, not even counted.
+    expect(healthy).toEqual({ considered: 0, alreadyMapped: 0, belowThreshold: 0, applied: [] })
+  })
+
+  it('treats a match whose guide channel carries zero programmes as still unmatched (dead epg_channel_id)', async () => {
+    const plan = await planFor([{ stream_id: 1, name: 'Sky Sports 1 HD', epg_channel_id: 'dead-id' }], {
+      resolved: new Map([[1, { guideUrl: 'prov', channelId: 'dead-channel', strategy: 'exact-id' }]]),
+      programmeCount: (sourceIndex, channelId) => (sourceIndex === 0 && channelId === 'g1' ? 7 : 0)
+    })
+    expect(plan.considered).toBe(1)
+    expect(plan.applied[0]).toMatchObject({ guideChannelId: 'g1' })
+  })
+
+  it('honours the threshold exactly: 0.9 refuses what 0.8 accepts', async () => {
+    // "...News UK" vs "...News" scores ~0.89 (an extra token dilutes the Dice) - between the two.
+    const streams = [{ stream_id: 1, name: 'Sky Sports News UK', epg_channel_id: null }]
+    const guide = guideFrom([{ id: 'g1', displayName: 'Sky Sports News' }])
+    const run = (threshold: number) =>
+      planBulkSuggestionApply(
+        streams,
+        {
+          sources: ['prov', 'ext'],
+          indexes: [guide, G2],
+          resolved: new Map(),
+          manualStreamIds: new Set(),
+          programmeCount: () => 5
+        },
+        threshold
+      )
+    const loose = await run(0.8)
+    const strict = await run(0.9)
+    expect(loose.applied).toHaveLength(1)
+    expect(strict.applied).toHaveLength(0)
+    expect(strict.belowThreshold).toBe(1)
+  })
+
+  it('yields through the injected onBatch at the asked cadence', async () => {
+    let batches = 0
+    const streams = Array.from({ length: 5 }, (_, i) => ({ stream_id: i + 1, name: `Sky Sports 1 HD ${i}`, epg_channel_id: null }))
+    await planFor(streams, { onBatch: () => void batches++, batchEvery: 2 })
+    expect(batches).toBe(2) // after streams 2 and 4; stream 5 ends the loop without a trailing yield
   })
 })

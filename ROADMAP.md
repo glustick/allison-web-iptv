@@ -15,6 +15,27 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.82.0 — bulk guide suggestions: every unmatched channel fixed in one pass.** The genuinely-open
+half of the manual-mapping entry, ported from the desktop sibling's `planBulkSuggestionApply`. The
+EPG settings screen gains a block under the coverage cards: pick a threshold (60–100%, the
+desktop's own ladder, default 80%), press **Suggest mappings**, and the server scores every
+channel the automatic tiers left without live guide data against every loaded guide — via a new
+postings-based `suggestGuideChannels` (the matcher's own Dice + first-token + length-penalty
+formula, so a bulk score means what the coverage stats mean; deliberately **no margin rule**,
+because an ambiguous family's runner-up may genuinely be the answer and a threshold, not a
+tiebreak, is what judges offers). The preview shows counts plus the first 20 rows
+("channel → guide channel, NN%"); **Apply** re-plans at apply time (guides refresh, mappings
+change — what lands is what scores now) and writes through a new transactional `setMany` on the
+mappings store (whole batch or nothing, cap enforced once). The operator's own mappings are
+never touched; every applied mapping is an ordinary manual mapping, reviewable and clearable per
+channel in the existing Map… picker. The considered set includes matches whose guide channel
+carries zero programmes — the desktop's dead-`epg_channel_id` rule (cheap insurance here, where
+the index only ever contains live channels). The planner rides v0.80.0's yield discipline and
+lives as pure functions over injected inputs (suggest + plan in `epgMatching.ts`, the service
+method feeds them resolved data); the two routes register **before** the `/:streamId` mapping
+routes, which would otherwise swallow "bulk-suggest" as a stream id. 891 tests (16 new);
+typecheck, lint and the builds clean.
+
 **v0.81.0 — multi-view: several live channels as tiles, the desktop's grid brought to the web.**
 A mode of the Live TV page (not a tab — switching tabs unmounts playback by design): the
 resizable player block becomes a 2- or 4-tile grid of small live channels, one tile unmuted at a

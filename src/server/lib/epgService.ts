@@ -8,7 +8,9 @@ import {
   buildGuideIndexes,
   channelTokens,
   matchStreamToGuideChannelDetailed,
+  planBulkSuggestionApply,
   tokenSetScore,
+  type BulkSuggestionPlan,
   type GuideIndexes,
   type MatchStrategy,
   type StreamForMatching
@@ -899,6 +901,51 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
           .slice(0, 5),
         guideChannels
       }
+    },
+
+    /**
+     * The bulk suggestion plan (v0.82.0): every channel the automatic tiers left without live
+     * guide data, scored against every loaded guide, with the best offer per channel at or above
+     * the threshold. Nothing is written — the route turns the plan into ordinary manual mappings
+     * (transactionally, via the store's setMany) when the operator confirms. Runs with the same
+     * yield discipline as the mapping build, since it walks the same catalogues.
+     */
+    async bulkSuggestionPlan(params: {
+      credentials: EpgServiceCredentials
+      epgUrls: string[]
+      playlistId?: string
+      threshold?: number
+    }): Promise<BulkSuggestionPlan> {
+      const playlistId = params.playlistId ?? ''
+      const { sources, entries, streams, mapping } = await resolveEverything({
+        credentials: params.credentials,
+        epgUrls: params.epgUrls,
+        playlistId
+      })
+      const indexes = entries.map((entry) => ensureIndex(entry))
+      const programmeCount = (sourceIndex: number, channelId: string): number =>
+        entries[sourceIndex]?.guide?.programmesByChannel.get(channelId)?.length ?? 0
+      const manualStreamIds = new Set<number>()
+      if (manualMappings) {
+        for (const stream of streams) {
+          if (manualMappings.get(params.credentials.username, playlistId, stream.stream_id)) {
+            manualStreamIds.add(stream.stream_id)
+          }
+        }
+      }
+      return planBulkSuggestionApply(
+        streams,
+        {
+          sources,
+          indexes,
+          resolved: mapping.mapping,
+          manualStreamIds,
+          programmeCount,
+          onBatch: yieldToEventLoop,
+          batchEvery: MAPPING_YIELD_EVERY
+        },
+        params.threshold ?? 0.8
+      )
     },
 
     refresh(params: { credentials: EpgServiceCredentials; epgUrls: string[]; url?: string }): void {

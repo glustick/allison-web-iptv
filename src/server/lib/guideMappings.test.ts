@@ -133,3 +133,62 @@ describe('guideMappingsStore', () => {
     expect(store.get('tester', '', 668)?.guideChannelId).toBe('replaced.example')
   })
 })
+
+describe('setMany (v0.82.0 bulk suggestions)', () => {
+  let dataDir: string
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'allisoniptv-guide-mappings-bulk-'))
+  })
+
+  it('writes a batch in one transaction; every row reads back with denormalized names', () => {
+    const store = createGuideMappingsStore({ dataDir })
+    const written = store.setMany('user1', '', [
+      { ...MAPPING, streamId: 1 },
+      { ...MAPPING, streamId: 2, channelName: 'Second Channel' },
+      { ...MAPPING, streamId: 3, guideChannelId: 'other.example', guideChannelName: 'Other Guide Channel' }
+    ])
+    expect(written).toBe(3)
+    expect(store.get('user1', '', 2)).toMatchObject({ channelName: 'Second Channel', guideChannelName: MAPPING.guideChannelName })
+    expect(store.get('user1', '', 3)).toMatchObject({ guideChannelId: 'other.example', guideChannelName: 'Other Guide Channel' })
+    expect(store.list('user1', '').length).toBe(3)
+  })
+
+  it('replaces existing mappings rather than stacking, same as set()', () => {
+    const store = createGuideMappingsStore({ dataDir })
+    store.set('user1', '', { ...MAPPING, streamId: 1, guideChannelId: 'old.example' })
+    store.setMany('user1', '', [{ ...MAPPING, streamId: 1, guideChannelId: 'new.example' }])
+    expect(store.get('user1', '', 1)?.guideChannelId).toBe('new.example')
+    expect(store.list('user1', '').length).toBe(1)
+  })
+
+  it('answers zero and writes nothing for an empty batch', () => {
+    const store = createGuideMappingsStore({ dataDir })
+    expect(store.setMany('user1', '', [])).toBe(0)
+    expect(store.list('user1', '')).toEqual([])
+  })
+
+  it('enforces the per-owner cap once for the whole batch, keeping the newest', () => {
+    const store = createGuideMappingsStore({ dataDir })
+    // Pre-fill all but two slots, then apply a batch of three: one of them must be evicted
+    // (the oldest-set row), not the batch rejected — and the eviction happens once, after
+    // the batch, so the batch itself is never partially truncated.
+    const filler = Array.from({ length: 1998 }, (_, i) => ({
+      streamId: 10_000 + i,
+      channelName: `Filler ${i}`,
+      guideChannelId: `filler-${i}.example`,
+      guideChannelName: `Filler ${i}`
+    }))
+    store.setMany('user1', '', filler)
+    const written = store.setMany('user1', '', [
+      { ...MAPPING, streamId: 1 },
+      { ...MAPPING, streamId: 2 },
+      { ...MAPPING, streamId: 3 }
+    ])
+    expect(written).toBe(3)
+    expect(store.list('user1', '').length).toBe(2000)
+    // The batch's rows survive; the oldest filler went.
+    expect(store.get('user1', '', 1)).not.toBeNull()
+    expect(store.get('user1', '', 3)).not.toBeNull()
+    expect(store.get('user1', '', 10_000)).toBeNull()
+  })
+})

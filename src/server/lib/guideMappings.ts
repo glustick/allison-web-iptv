@@ -49,6 +49,11 @@ export interface GuideMappingsStore {
   list(owner: string, playlistId: string): GuideMapping[]
   /** Sets (or replaces) the mapping for one stream on one playlist. */
   set(owner: string, playlistId: string, mapping: Omit<GuideMapping, 'setAt' | 'playlistId'>): GuideMapping
+  /**
+   * Sets many mappings in one transaction (v0.82.0's bulk suggestions): the whole batch lands or
+   * none of it does, and the per-user cap is enforced once at the end rather than per row.
+   */
+  setMany(owner: string, playlistId: string, mappings: Array<Omit<GuideMapping, 'setAt' | 'playlistId'>>): number
   /** Clears the mapping for one stream on one playlist. Returns whether a row was removed. */
   clear(owner: string, playlistId: string, streamId: number): boolean
 }
@@ -115,6 +120,42 @@ export function createGuideMappingsStore(opts: { dataDir: string }): GuideMappin
     setAt: row.set_at
   })
 
+  // The insert set() and setMany() share, wrapped so a bulk apply either lands whole or not at
+  // all — a half-applied batch of a thousand mappings would be a genuinely confusing state to
+  // explain. The per-user cap (the oldest-set mappings go first; bounded like every per-user
+  // table, and per owner across playlists) is enforced once at the end of the batch, not per row.
+  const setManyInternal = (
+    owner: string,
+    playlistId: string,
+    mappings: Array<Omit<GuideMapping, 'setAt' | 'playlistId'>>
+  ): GuideMapping[] => {
+    ensureTable()
+    const setAt = Date.now()
+    const insert = db().transaction((rows: Array<Omit<GuideMapping, 'setAt' | 'playlistId'>>) => {
+      const statement = db().prepare(
+        `INSERT INTO guide_mappings (owner, stream_id, playlist_id, channel_name, guide_channel_id, guide_channel_name, set_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (owner, stream_id, playlist_id) DO UPDATE SET
+           channel_name = excluded.channel_name,
+           guide_channel_id = excluded.guide_channel_id,
+           guide_channel_name = excluded.guide_channel_name,
+           set_at = excluded.set_at`
+      )
+      for (const mapping of rows) {
+        statement.run(owner, mapping.streamId, playlistId, mapping.channelName, mapping.guideChannelId, mapping.guideChannelName, setAt)
+      }
+      db()
+        .prepare(
+          `DELETE FROM guide_mappings WHERE owner = ? AND (playlist_id, stream_id) NOT IN (
+             SELECT playlist_id, stream_id FROM guide_mappings WHERE owner = ? ORDER BY set_at DESC, stream_id DESC LIMIT ?
+           )`
+        )
+        .run(owner, owner, MAX_MAPPINGS_PER_USER)
+    })
+    insert(mappings)
+    return mappings.map((mapping) => ({ ...mapping, playlistId, setAt }))
+  }
+
   return {
     get(owner: string, playlistId: string, streamId: number): GuideMapping | null {
       ensureTable()
@@ -137,39 +178,13 @@ export function createGuideMappingsStore(opts: { dataDir: string }): GuideMappin
     },
 
     set(owner: string, playlistId: string, mapping: Omit<GuideMapping, 'setAt' | 'playlistId'>): GuideMapping {
-      ensureTable()
-      const setAt = Date.now()
-      db()
-        .prepare(
-          `INSERT INTO guide_mappings (owner, stream_id, playlist_id, channel_name, guide_channel_id, guide_channel_name, set_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT (owner, stream_id, playlist_id) DO UPDATE SET
-             channel_name = excluded.channel_name,
-             guide_channel_id = excluded.guide_channel_id,
-             guide_channel_name = excluded.guide_channel_name,
-             set_at = excluded.set_at`
-        )
-        .run(
-          owner,
-          mapping.streamId,
-          playlistId,
-          mapping.channelName,
-          mapping.guideChannelId,
-          mapping.guideChannelName,
-          setAt
-        )
-      // Bounded, like every per-user table: the oldest-set mappings go first when the cap is
-      // hit. Reaching this at all means two thousand hand-made decisions, which is a household
-      // curating, not a loop. The cap is per owner across playlists — it bounds one person's
-      // curation, not one playlist's.
-      db()
-        .prepare(
-          `DELETE FROM guide_mappings WHERE owner = ? AND (playlist_id, stream_id) NOT IN (
-             SELECT playlist_id, stream_id FROM guide_mappings WHERE owner = ? ORDER BY set_at DESC, stream_id DESC LIMIT ?
-           )`
-        )
-        .run(owner, owner, MAX_MAPPINGS_PER_USER)
-      return { ...mapping, playlistId, setAt }
+      const inserted = setManyInternal(owner, playlistId, [mapping])
+      return inserted[0]
+    },
+
+    setMany(owner: string, playlistId: string, mappings: Array<Omit<GuideMapping, 'setAt' | 'playlistId'>>): number {
+      if (mappings.length === 0) return 0
+      return setManyInternal(owner, playlistId, mappings).length
     },
 
     clear(owner: string, playlistId: string, streamId: number): boolean {

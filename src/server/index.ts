@@ -2395,6 +2395,97 @@ function resolveMappingRequest(req: Request, sessionUsername: string): {
   }
 }
 
+// Bulk mapping suggestions (v0.82.0) — the two routes are registered BEFORE the /:streamId
+// routes below, which would otherwise swallow "bulk-suggest"/"bulk-apply" as a stream id.
+// Threshold: the desktop's BULK_THRESHOLDS shape; anything outside 0.5–1 is refused rather than
+// clamped, so a typo cannot silently apply (or refuse) everything.
+const BULK_SUGGEST_THRESHOLD_MIN = 0.5
+
+function parseBulkThreshold(value: unknown): number | null {
+  const parsed = typeof value === 'string' ? Number(value) : typeof value === 'number' ? value : NaN
+  return Number.isFinite(parsed) && parsed >= BULK_SUGGEST_THRESHOLD_MIN && parsed <= 1 ? parsed : null
+}
+
+function bulkRequestMappingFailure(res: Response, req: Request): { credentials: { server: string; username: string; password: string; epgUrls: string[] }; playlistId: string } | null {
+  const session = req.authSession as AuthSession
+  const resolved = resolveMappingRequest(req, session.username)
+  if (resolved) return resolved
+  if (typeof req.query.playlist === 'string' && req.query.playlist.trim().length > 0) {
+    res.status(404).json({ error: 'Unknown playlist' })
+  } else {
+    res.status(409).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+  }
+  return null
+}
+
+app.get('/api/epg/mappings/bulk-suggest', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
+    const threshold = parseBulkThreshold(req.query.threshold)
+    if (threshold === null) {
+      res.status(400).json({ error: `threshold must be a number between ${BULK_SUGGEST_THRESHOLD_MIN} and 1` })
+      return
+    }
+    const resolved = bulkRequestMappingFailure(res, req)
+    if (!resolved) return
+    try {
+      const plan = await epgService.bulkSuggestionPlan({
+        credentials: resolved.credentials,
+        epgUrls: resolved.credentials.epgUrls ?? [],
+        playlistId: resolved.playlistId,
+        threshold
+      })
+      res.json({
+        ok: true,
+        playlistId: resolved.playlistId,
+        threshold,
+        considered: plan.considered,
+        alreadyMapped: plan.alreadyMapped,
+        belowThreshold: plan.belowThreshold,
+        applied: plan.applied
+      })
+    } catch (err) {
+      console.error('[epg] bulk suggestion plan failed:', err)
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Could not plan bulk suggestions' })
+    }
+  })()
+})
+
+app.post('/api/epg/mappings/bulk-apply', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
+    const threshold = parseBulkThreshold(req.body?.threshold)
+    if (threshold === null) {
+      res.status(400).json({ error: `threshold must be a number between ${BULK_SUGGEST_THRESHOLD_MIN} and 1` })
+      return
+    }
+    const resolved = bulkRequestMappingFailure(res, req)
+    if (!resolved) return
+    try {
+      // Re-planned at apply time, deliberately: guides refresh, mappings change — the preview
+      // the operator saw may be minutes stale, and the applied set must be what scores NOW.
+      const plan = await epgService.bulkSuggestionPlan({
+        credentials: resolved.credentials,
+        epgUrls: resolved.credentials.epgUrls ?? [],
+        playlistId: resolved.playlistId,
+        threshold
+      })
+      const written = guideMappingsStore.setMany(
+        resolved.credentials.username,
+        resolved.playlistId,
+        plan.applied.map((entry) => ({
+          streamId: entry.streamId,
+          channelName: entry.channelName,
+          guideChannelId: entry.guideChannelId,
+          guideChannelName: entry.guideChannelName
+        }))
+      )
+      res.json({ ok: true, applied: written, considered: plan.considered, belowThreshold: plan.belowThreshold })
+    } catch (err) {
+      console.error('[epg] bulk apply failed:', err)
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Could not apply bulk suggestions' })
+    }
+  })()
+})
+
 app.get('/api/epg/mappings/:streamId', requireAuth, (req, res) => {
   void (async (): Promise<void> => {
     const streamId = Number(req.params.streamId)

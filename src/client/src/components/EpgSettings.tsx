@@ -43,6 +43,28 @@ interface MatchSummary {
   builtAt: number
 }
 
+interface BulkSuggestionRow {
+  streamId: number
+  channelName: string
+  guideChannelId: string
+  guideChannelName: string
+  score: number
+}
+
+interface BulkSuggestResponse {
+  ok?: boolean
+  threshold?: number
+  considered?: number
+  alreadyMapped?: number
+  belowThreshold?: number
+  applied?: BulkSuggestionRow[]
+  error?: string
+}
+
+/** The same ladder the desktop sibling's bulk apply offers — the operator's known shape. */
+const BULK_THRESHOLDS = [0.6, 0.7, 0.8, 0.9, 1]
+const BULK_PREVIEW_ROWS = 20
+
 interface EpgConfigResponse {
   epgUrls: string[]
   sources: EpgSourceStatus[]
@@ -114,6 +136,59 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
+  // Bulk mapping suggestions (v0.82.0): threshold choice, the fetched preview, and the run's
+  // outcome. The preview is fetched on demand (the plan walks every channel); the apply re-plans
+  // server-side, so what lands is what scores at apply time, not what the preview showed.
+  const [bulkThreshold, setBulkThreshold] = useState(0.8)
+  const [bulkPreview, setBulkPreview] = useState<BulkSuggestResponse | null>(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkResult, setBulkResult] = useState<string | null>(null)
+  const [bulkError, setBulkError] = useState<string | null>(null)
+
+  const suggestQuery = (threshold: number): string =>
+    `?playlist=&threshold=${threshold}`
+
+  async function handleBulkSuggest(): Promise<void> {
+    setBulkBusy(true)
+    setBulkError(null)
+    setBulkResult(null)
+    try {
+      const res = await fetch(`/api/epg/mappings/bulk-suggest${suggestQuery(bulkThreshold)}`)
+      const data = (await res.json().catch(() => ({}))) as BulkSuggestResponse
+      if (!res.ok) throw new Error(data.error ?? 'Could not plan bulk suggestions')
+      setBulkPreview(data)
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'Could not plan bulk suggestions')
+      setBulkPreview(null)
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  async function handleBulkApply(): Promise<void> {
+    setBulkBusy(true)
+    setBulkError(null)
+    try {
+      const res = await fetch('/api/epg/mappings/bulk-apply?playlist=', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threshold: bulkThreshold })
+      })
+      const data = (await res.json().catch(() => ({}))) as BulkSuggestResponse & { applied?: number }
+      if (!res.ok) throw new Error(data.error ?? 'Could not apply bulk suggestions')
+      setBulkResult(
+        (data.applied ?? 0) > 0
+          ? `Applied ${data.applied} mapping(s) — every one is an ordinary manual mapping now, reviewable and clearable per channel in the guide.`
+          : `Nothing to apply at ${Math.round(bulkThreshold * 100)}% — try a lower threshold.`
+      )
+      setBulkPreview(null)
+      await refresh()
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'Could not apply bulk suggestions')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
 
   const sourceCols = useResizableColumns('epg-sources', SOURCE_COLUMNS)
 
@@ -273,6 +348,80 @@ export function EpgSettings({ session }: { session: Session }): JSX.Element {
           </div>
         ) : (
           <p className="setup-hint">Matching is running — open Live TV once and this fills in.</p>
+        )}
+
+        {canEdit && (summary?.unmatched ?? 0) > 0 && (
+          <div className="bulk-suggest">
+            <div className="epg-section-actions" style={{ marginTop: 10 }}>
+              <label className="setup-hint" style={{ marginRight: 4 }}>
+                Auto-map unmatched channels scoring at{' '}
+                <select
+                  value={bulkThreshold}
+                  onChange={(e) => {
+                    setBulkThreshold(Number(e.target.value))
+                    setBulkPreview(null)
+                    setBulkResult(null)
+                  }}
+                  disabled={bulkBusy}
+                >
+                  {BULK_THRESHOLDS.map((value) => (
+                    <option key={value} value={value}>
+                      {Math.round(value * 100)}%
+                    </option>
+                  ))}
+                </select>{' '}
+                or better
+              </label>
+              <button type="button" className="admin-small-btn" onClick={() => void handleBulkSuggest()} disabled={bulkBusy}>
+                {bulkBusy ? 'Scoring…' : 'Suggest mappings'}
+              </button>
+            </div>
+            {bulkError && <div className="login-error" style={{ marginTop: 8 }}>{bulkError}</div>}
+            {bulkResult && <p className="epg-note" style={{ marginTop: 8 }}>{bulkResult}</p>}
+            {bulkPreview && (
+              <div style={{ marginTop: 8 }}>
+                <p className="epg-note">
+                  {bulkPreview.considered === 0
+                    ? 'Every channel already resolves to live guide data — nothing to suggest.'
+                    : `${bulkPreview.considered} channel(s) have no live guide data; ${bulkPreview.applied?.length ?? 0} scored ${Math.round(
+                        (bulkPreview.threshold ?? bulkThreshold) * 100
+                      )}% or better, ${bulkPreview.belowThreshold ?? 0} did not. ${bulkPreview.alreadyMapped ?? 0} of your own mappings are left untouched.`}
+                </p>
+                {(bulkPreview.applied?.length ?? 0) > 0 && (
+                  <>
+                    <div className="admin-table-wrap" style={{ maxHeight: 260 }}>
+                      <table className="admin-table">
+                        <thead>
+                          <tr>
+                            <th>Channel</th>
+                            <th>Suggested guide channel</th>
+                            <th>Score</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(bulkPreview.applied ?? []).slice(0, BULK_PREVIEW_ROWS).map((row) => (
+                            <tr key={row.streamId}>
+                              <td>{row.channelName}</td>
+                              <td>{row.guideChannelName}</td>
+                              <td>{Math.round(row.score * 100)}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {(bulkPreview.applied?.length ?? 0) > BULK_PREVIEW_ROWS && (
+                      <p className="setup-hint">
+                        Showing the first {BULK_PREVIEW_ROWS} of {bulkPreview.applied?.length}.
+                      </p>
+                    )}
+                    <button type="button" className="admin-small-btn" onClick={() => void handleBulkApply()} disabled={bulkBusy}>
+                      {bulkBusy ? 'Applying…' : `Apply ${bulkPreview.applied?.length} mapping(s)`}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </section>
 

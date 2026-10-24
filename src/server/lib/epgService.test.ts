@@ -745,3 +745,97 @@ describe('aggregatePlaylists (v0.78.0 — per-playlist guides)', () => {
     ).rejects.toThrow(/Could not load the channel list/)
   })
 })
+
+describe('bulkSuggestionPlan (v0.82.0)', () => {
+  function fakeManualStore(): {
+    store: { get(owner: string, playlistId: string, streamId: number): { guideChannelId: string; guideChannelName: string; setAt: number } | null }
+    set: (streamId: number) => void
+  } {
+    const overrides = new Map<number, { guideChannelId: string; guideChannelName: string; setAt: number }>()
+    return {
+      store: {
+        get: (_owner, _playlistId, streamId) => overrides.get(streamId) ?? null
+      },
+      set: (streamId) => overrides.set(streamId, { guideChannelId: 'manual.example', guideChannelName: 'Manual Pick', setAt: NOW })
+    }
+  }
+
+  it('plans suggestions for the channels the matcher left without live guide data', async () => {
+    const provider = await listen((req, res) => {
+      if (req.url?.startsWith('/xmltv.php')) {
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(
+          guideXml([
+            // The exact-id match: healthy, never suggested for.
+            { id: 'prov-exact', displayName: 'Provider Exact', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'Exact programme' }] },
+            // An ambiguous sibling family: the matcher refuses "Sky Sports" against both (no
+            // margin) - exactly the shape the bulk suggester exists for. The tiebreak offers
+            // the lexicographically first sibling.
+            { id: 'prov-sib-1', displayName: 'Sky Sports 1', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'Sibling 1' }] },
+            { id: 'prov-sib-2', displayName: 'Sky Sports 2', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'Sibling 2' }] }
+          ])
+        )
+        return
+      }
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(
+          JSON.stringify([
+            { stream_id: 1, name: 'Whatever', epg_channel_id: 'prov-exact' },
+            { stream_id: 2, name: 'Sky Sports', epg_channel_id: null }
+          ])
+        )
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+
+    const service = createEpgService({ createUpstreamRequest: createNodeUpstreamRequest, now: fakeClock().now })
+    const credentials = { server: provider, username: 'user', password: 'pass' }
+
+    const plan = await service.bulkSuggestionPlan({ credentials, epgUrls: [], threshold: 0.8 })
+    expect(plan.considered).toBe(1)
+    expect(plan.alreadyMapped).toBe(0)
+    expect(plan.applied).toHaveLength(1)
+    expect(plan.applied[0]).toMatchObject({
+      streamId: 2,
+      channelName: 'Sky Sports',
+      guideChannelId: 'prov-sib-1',
+      guideChannelName: 'Sky Sports 1'
+    })
+  })
+
+  it('never suggests for a channel the operator has already mapped by hand', async () => {
+    const provider = await listen((req, res) => {
+      if (req.url?.startsWith('/xmltv.php')) {
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(
+          guideXml([
+            { id: 'prov-fuzzy', displayName: 'Sky Sports One HD', programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: 'Fuzzy target' }] }
+          ])
+        )
+        return
+      }
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ stream_id: 2, name: 'Sky Sports 1 HD', epg_channel_id: null }]))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+
+    const manual = fakeManualStore()
+    manual.set(2)
+    const service = createEpgService({ createUpstreamRequest: createNodeUpstreamRequest, now: fakeClock().now, manualMappings: manual.store })
+    const plan = await service.bulkSuggestionPlan({
+      credentials: { server: provider, username: 'user', password: 'pass' },
+      epgUrls: [],
+      threshold: 0.8
+    })
+    expect(plan.alreadyMapped).toBe(1)
+    expect(plan.considered).toBe(0)
+    expect(plan.applied).toEqual([])
+  })
+})

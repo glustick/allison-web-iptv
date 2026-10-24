@@ -40,8 +40,8 @@ export interface GuideIndexes {
   byNormalizedDisplayName: Map<string, string[]>
   /** distinctive token → guide channel ids, the fuzzy candidate index */
   byToken: Map<string, string[]>
-  /** guide channel id → its own normalized token set + first token, for scoring */
-  signatures: Map<string, { tokens: string[]; first: string }>
+  /** guide channel id → its own normalized token set + first token + display name, for scoring */
+  signatures: Map<string, { tokens: string[]; first: string; name: string }>
 }
 
 export type MatchStrategy = 'exact-id' | 'normalized-id' | 'exact-name' | 'fuzzy-name' | 'manual'
@@ -161,7 +161,7 @@ export function buildGuideIndexes(guide: XmltvGuide): GuideIndexes {
   const byNormalizedId = new Map<string, string>()
   const byNormalizedDisplayName = new Map<string, string[]>()
   const byToken = new Map<string, string[]>()
-  const signatures = new Map<string, { tokens: string[]; first: string }>()
+  const signatures = new Map<string, { tokens: string[]; first: string; name: string }>()
 
   for (const channel of guide.channels.values()) {
     if (!guide.programmesByChannel.has(channel.id)) continue
@@ -181,7 +181,7 @@ export function buildGuideIndexes(guide: XmltvGuide): GuideIndexes {
 
     const tokens = channelTokens(channel.displayName || channel.id)
     if (tokens.length === 0) continue
-    signatures.set(channel.id, { tokens, first: tokens[0] })
+    signatures.set(channel.id, { tokens, first: tokens[0], name: channel.displayName || channel.id })
     for (const token of new Set(tokens)) {
       const bucket = byToken.get(token)
       if (bucket) {
@@ -266,4 +266,160 @@ export function matchStreamToGuideChannelDetailed(stream: StreamForMatching, ind
   const fuzzy = fuzzyMatch(tokens, indexes)
   if (fuzzy) return { channelId: fuzzy.channelId, strategy: 'fuzzy-name', score: fuzzy.score }
   return { channelId: null, strategy: null }
+}
+
+// --- Suggestions (v0.82.0): the matcher's scoring, offered instead of applied -----------------
+//
+// The matcher refuses to guess when it is not confident (threshold AND margin). For the channels
+// it refuses, the operator can still want the best candidate — offered as a manual mapping they
+// review, never applied silently. The bulk planner scores every refused channel once, so the
+// suggestion path must be postings-based (like fuzzyMatch above), not the mapping picker's
+// score-every-signature walk: that is fine for one stream and a full cross-product for thousands.
+
+/** A suggestion never scores below this — below it, "best candidate" is noise, not a lead. */
+export const SUGGESTION_MIN_SCORE = 0.6
+
+export interface GuideSuggestion {
+  channelId: string
+  /** The guide channel's display name, for the UI without a guide lookup. */
+  name: string
+  score: number
+}
+
+/**
+ * The best fuzzy candidates for one stream, via the token-postings index. Scores use fuzzyMatch's
+ * own formula (Dice + first-token bonus − length penalty), so a suggestion's number is comparable
+ * to what the matcher would report — but there is deliberately no margin rule here: a suggestion
+ * is an offer for a human (or the bulk threshold) to judge, and an ambiguous family ("Sky Sports"
+ * against "… 1" and "… 2") may genuinely carry the right answer in its runner-up.
+ */
+export function suggestGuideChannels(stream: StreamForMatching, indexes: GuideIndexes, limit = 1): GuideSuggestion[] {
+  const streamTokens = channelTokens(stream.name)
+  if (streamTokens.length === 0) return []
+
+  // Candidates: union of the buckets of this stream's distinctive tokens — the same shape and
+  // cutoffs as fuzzyMatch, so suggestion cost per stream is bounded exactly like a match's.
+  const seen = new Set<string>()
+  const candidates: string[] = []
+  for (const token of new Set(streamTokens)) {
+    const bucket = indexes.byToken.get(token)
+    if (!bucket || bucket.length > COMMON_TOKEN_CUTOFF) continue
+    for (const id of bucket) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      candidates.push(id)
+      if (candidates.length >= MAX_FUZZY_CANDIDATES) break
+    }
+    if (candidates.length >= MAX_FUZZY_CANDIDATES) break
+  }
+
+  const scored: GuideSuggestion[] = []
+  for (const id of candidates) {
+    const signature = indexes.signatures.get(id)
+    if (!signature) continue
+    let score = tokenSetScore(streamTokens, signature.tokens)
+    if (signature.first === streamTokens[0]) score += 0.05
+    score -= Math.min(0.1, Math.abs(signature.tokens.length - streamTokens.length) * 0.02)
+    if (score < SUGGESTION_MIN_SCORE) continue
+    scored.push({ channelId: id, name: signature.name, score })
+  }
+  scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name) || a.channelId.localeCompare(b.channelId))
+  return scored.slice(0, Math.max(1, limit))
+}
+
+// --- The bulk planner: ported from the desktop sibling's planBulkSuggestionApply -------------
+//
+// Walks the channel list once, and for every channel the automatic tiers did not resolve — or
+// resolved only to a guide channel that carries no programmes in the window (a dead
+// epg_channel_id, common on this provider) — takes the best suggestion across all loaded sources
+// when it scores at or above the threshold. The output is a PLAN: nothing is written here. The
+// caller (epgService → the bulk-apply route) turns it into ordinary manual mappings, each one
+// individually reviewable and clearable in the mapping picker; a manual mapping is never
+// overwritten, because the operator's own decision outranks any score.
+
+export interface BulkSuggestion {
+  streamId: number
+  channelName: string
+  guideChannelId: string
+  guideChannelName: string
+  score: number
+}
+
+export interface BulkSuggestionPlan {
+  /** Streams the planner actually tried to suggest for. */
+  considered: number
+  /** Streams carrying the operator's own mapping — never touched, never re-scored. */
+  alreadyMapped: number
+  /** Considered streams whose best suggestion never reached the threshold. */
+  belowThreshold: number
+  applied: BulkSuggestion[]
+}
+
+export interface BulkPlanInputs {
+  /** Source URLs, parallel to `indexes`. */
+  sources: string[]
+  /** Per-source guide indexes, parallel to `sources`; null = that source has no usable guide. */
+  indexes: Array<GuideIndexes | null>
+  /** The automatic matcher's resolution (computeMapping's output, manual overrides included). */
+  resolved: Map<number, { guideUrl: string; channelId: string; strategy: MatchStrategy }>
+  /** Stream ids holding the operator's own mapping — skipped outright. */
+  manualStreamIds: Set<number>
+  /** Programmes a guide channel carries in the window: (source index, channelId) → count. */
+  programmeCount: (sourceIndex: number, channelId: string) => number
+  /** Injected yield for the service's event-loop discipline (v0.80.0); null in tests. */
+  onBatch?: (() => Promise<void> | void) | null
+  batchEvery?: number
+}
+
+export async function planBulkSuggestionApply(
+  streams: StreamForMatching[],
+  inputs: BulkPlanInputs,
+  threshold = 0.8
+): Promise<BulkSuggestionPlan> {
+  const effectiveThreshold = Math.min(1, Math.max(SUGGESTION_MIN_SCORE, threshold))
+  const plan: BulkSuggestionPlan = { considered: 0, alreadyMapped: 0, belowThreshold: 0, applied: [] }
+  const batchEvery = Math.max(1, inputs.batchEvery ?? 200)
+  let sinceBatch = 0
+
+  for (const stream of streams) {
+    if (inputs.manualStreamIds.has(stream.stream_id)) {
+      plan.alreadyMapped += 1
+      continue
+    }
+    // A stream the matcher resolved to a guide channel that actually carries programmes is
+    // healthy — nothing to fix, and not counted anywhere (the desktop's own accounting).
+    const resolution = inputs.resolved.get(stream.stream_id)
+    if (resolution) {
+      const sourceIndex = inputs.sources.indexOf(resolution.guideUrl)
+      if (sourceIndex >= 0 && inputs.programmeCount(sourceIndex, resolution.channelId) > 0) continue
+      // else: the match points at a channel with no programmes — dead id; fall through and
+      // suggest against everything the guides actually carry.
+    }
+    plan.considered += 1
+
+    let best: GuideSuggestion | null = null
+    for (const index of inputs.indexes) {
+      if (!index) continue
+      const candidate = suggestGuideChannels(stream, index, 1)[0]
+      if (candidate && (!best || candidate.score > best.score)) best = candidate
+    }
+    if (best && best.score >= effectiveThreshold) {
+      plan.applied.push({
+        streamId: stream.stream_id,
+        channelName: stream.name,
+        guideChannelId: best.channelId,
+        guideChannelName: best.name,
+        score: best.score
+      })
+    } else {
+      plan.belowThreshold += 1
+    }
+
+    sinceBatch += 1
+    if (inputs.onBatch && sinceBatch >= batchEvery) {
+      sinceBatch = 0
+      await inputs.onBatch()
+    }
+  }
+  return plan
 }
