@@ -25,6 +25,32 @@ const UPSTREAM_STALL_CHECK_INTERVAL_MS = 5_000
 // a body that has already started).
 const UPSTREAM_RESPONSE_TIMEOUT_MS = 30_000
 
+// Xtream panel API requests get a far longer response-headers window than the stream-oriented
+// default: panels build the whole JSON document server-side before sending a single response
+// header, and a cold category list has measured 52s against this app's own provider while its
+// warm siblings answered in under four — the 30s default aborted exactly the fetches that were
+// still working (v0.80.0). 120s matches the window providerLists.ts already grants the same
+// panel for search-index builds, measured against the same origin. Streams, segments and
+// playlists keep the snappy default so a dead stream still fails fast for the player.
+export const PANEL_API_RESPONSE_TIMEOUT_MS = 120_000
+
+/**
+ * The per-request timeout overrides an upstream URL's kind calls for. Pure, so the policy is
+ * unit-testable: a URL whose path is the Xtream panel API (`/player_api.php`) is patient;
+ * everything else — live segments, playlists, VOD files — keeps the defaults. Exported for
+ * index.ts, which applies it at the one factory every proxied upstream request flows through.
+ */
+export function upstreamRequestProfileFor(url: string): { responseTimeoutMs?: number } {
+  try {
+    const path = new URL(url).pathname
+    if (path === '/player_api.php') return { responseTimeoutMs: PANEL_API_RESPONSE_TIMEOUT_MS }
+  } catch {
+    // Not a parseable absolute URL — the caller passes through with defaults rather than
+    // guessing; proxyServer only ever hands this factory absolute hrefs.
+  }
+  return {}
+}
+
 /**
  * Node https/http-backed replacement for Electron's net.request (see proxyServer.ts's own
  * ProxyServerDeps.createUpstreamRequest doc comment for why Electron used its own net module

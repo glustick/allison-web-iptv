@@ -260,3 +260,34 @@ export function createXmltvStreamParser(opts?: { now?: number }): XmltvStreamPar
     }
   }
 }
+
+/**
+ * Feeds an already-in-memory guide text to the streaming parser in slices, yielding to the
+ * caller between slices (v0.80.0). The fetch path decodes the whole guide before parsing
+ * exists, and feeding it to the parser in one synchronous loop was the measured ~3.9s
+ * event-loop stall of every refresh — the app answered nothing for the duration. The
+ * disk-hydration path already feeds this same parser interleaved with file I/O, so interleaved
+ * feeding is proven; this brings the fetch path to the same shape. The yield function is
+ * injected so the cadence is unit-testable without an event loop, and the default cadence
+ * (every slice, 4MB) keeps each contiguous block at roughly the per-slice parse cost — tens of
+ * milliseconds on the guides this deployment actually serves.
+ */
+export async function driveXmltvParse(
+  xml: string,
+  opts: { now?: number; sliceBytes?: number; yieldEverySlices?: number },
+  yieldFn: () => Promise<void> | void
+): Promise<XmltvGuide> {
+  const sliceBytes = opts.sliceBytes && opts.sliceBytes > 0 ? Math.floor(opts.sliceBytes) : 4 * 1024 * 1024
+  const yieldEverySlices = Math.max(1, Math.floor(opts.yieldEverySlices ?? 1))
+  const parser = createXmltvStreamParser({ now: opts.now })
+  let slicesSinceYield = 0
+  for (let i = 0; i < xml.length; i += sliceBytes) {
+    parser.write(xml.slice(i, i + sliceBytes))
+    slicesSinceYield += 1
+    if (slicesSinceYield >= yieldEverySlices) {
+      slicesSinceYield = 0
+      await yieldFn()
+    }
+  }
+  return parser.end()
+}

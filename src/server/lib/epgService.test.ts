@@ -381,6 +381,48 @@ describe('createEpgService', () => {
     expect(third.listings).toEqual(first.listings)
   })
 
+  it('concurrent cold starts share one mapping build (the promise cache dedupes, v0.80.0)', async () => {
+    // A guide big enough, and names overlapping enough, that the mapping build spans many
+    // event-loop turns (it yields every 200 streams) — the window in which a second concurrent
+    // request must land on the in-flight promise rather than starting its own build.
+    const guideChannels = Array.from({ length: 3_000 }, (_, i) => ({
+      id: `gc-${i}`,
+      displayName: `Group ${i % 30} Channel ${i}`,
+      programmes: [{ startMs: NOW, stopMs: NOW + HOUR, title: `Programme ${i}` }]
+    }))
+    const streams = Array.from({ length: 3_000 }, (_, i) => ({
+      stream_id: i + 1,
+      name: `Group ${i % 30} Feed ${i}`,
+      epg_channel_id: null
+    }))
+    const provider = await listen((req, res) => {
+      if (req.url?.startsWith('/xmltv.php')) {
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(guideXml(guideChannels))
+        return
+      }
+      if (req.url?.includes('action=get_live_streams')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(streams))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+
+    const service = createEpgService({ createUpstreamRequest: createNodeUpstreamRequest, now: fakeClock().now })
+    const credentials = { server: provider, username: 'user', password: 'pass' }
+
+    const [a, b] = await Promise.all([
+      service.getMatchSummary({ credentials, epgUrls: [] }),
+      service.getMatchSummary({ credentials, epgUrls: [] })
+    ])
+    expect(a.streams).toBe(3_000)
+    // One computation shared: the two callers received the very same stats object, not two
+    // equal-looking ones from two builds racing.
+    expect(b).toBe(a)
+  })
+
   it('parses a pre-compressed .xml.gz guide served without content-encoding', async () => {
     // The shape a real user's source had: a 7MB .gz file (48MB of XMLTV) served as
     // application/octet-stream. Read as UTF-8, the gzip bytes became binary junk that the XML

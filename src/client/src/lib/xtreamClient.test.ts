@@ -69,3 +69,23 @@ describe('API calls', () => {
     expect(called.searchParams.has('password')).toBe(false)
   })
 })
+
+describe('error surfacing (v0.80.0)', () => {
+  it('throws the server’s plain-language JSON error body, not the bare status code', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ error: 'The provider did not respond in time. It may be down — try again shortly.' }), {
+        status: 504,
+        statusText: 'Gateway Timeout'
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new XtreamClient()
+    await expect(client.getLiveCategories()).rejects.toThrow('The provider did not respond in time.')
+  })
+
+  it('falls back to the status line when the body is not this app’s JSON error shape', async () => {
+    const fetchMock = vi.fn(async () => new Response('<html>502 Bad Gateway</html>', { status: 502, statusText: 'Bad Gateway' }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(new XtreamClient().getLiveCategories()).rejects.toThrow('Xtream request failed: 502 Bad Gateway')
+  })
+})

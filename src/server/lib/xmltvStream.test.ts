@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseXmltv } from './xmltv.js'
-import { createXmltvStreamParser } from './xmltvStream.js'
+import { createXmltvStreamParser, driveXmltvParse } from './xmltvStream.js'
 
 // The streaming parser's contract: for every well-formed input, byte-for-byte the same guide
 // parseXmltv produces — regardless of how the document is split into chunks. That is what lets
@@ -179,5 +179,65 @@ describe('createXmltvStreamParser: documented deviations', () => {
     const list = stream.programmesByChannel.get('c') ?? []
     expect(list[0]?.title).toBe('English')
     expect(stream.channels.get('c')?.icon).toBe('one.png')
+  })
+})
+
+describe('driveXmltvParse: the interleaved fetch-path driver (v0.80.0)', () => {
+  it('parses the parity corpus identically to the directly-fed parser', async () => {
+    for (const [name, xml] of Object.entries(GUIDE_FIXTURES)) {
+      const direct = (() => {
+        const parser = createXmltvStreamParser({ now: NOW })
+        parser.write(xml)
+        return parser.end()
+      })()
+      const driven = await driveXmltvParse(xml, { now: NOW, sliceBytes: 13, yieldEverySlices: 2 }, () => {})
+      expect(driven, name).toEqual(direct)
+    }
+  })
+
+  it('yields between slice batches at the asked cadence — exactly floor(slices / cadence) times', async () => {
+    const channels = Array.from({ length: 10 }, (_, i) => `<channel id="c${i}"><display-name>X</display-name></channel>`)
+    const xml = `<tv>${channels.join('')}</tv>`
+    let yields = 0
+    const sliceBytes = 24
+    const driven = await driveXmltvParse(xml, { sliceBytes, yieldEverySlices: 3 }, () => {
+      yields += 1
+    })
+    const sliceCount = Math.ceil(xml.length / sliceBytes)
+    expect(sliceCount).toBeGreaterThan(6) // the cadence math below is only meaningful with several slices
+    expect(yields).toBe(Math.floor(sliceCount / 3))
+    expect(driven.channels.size).toBe(10)
+  })
+
+  it('never yields when the whole document fits in one slice fewer than the cadence', async () => {
+    let yields = 0
+    const guide = await driveXmltvParse(GUIDE_FIXTURES['basic channel and programmes']!, { yieldEverySlices: 5 }, () => {
+      yields += 1
+    })
+    expect(yields).toBe(0)
+    expect(guide.channels.size).toBe(1)
+  })
+
+  it('propagates the parser’s own failures (truncated document) unchanged', async () => {
+    await expect(driveXmltvParse('<tv><channel id="c"><display-name>X', {}, () => {})).rejects.toThrow(
+      /ended mid-element/
+    )
+  })
+
+  it('awaits an async yield function before the next batch is fed', async () => {
+    const order: string[] = []
+    const xml = `<tv>${'<channel id="c1"><display-name>X</display-name></channel>'.repeat(8)}</tv>`
+    await driveXmltvParse(
+      xml,
+      { sliceBytes: 20, yieldEverySlices: 1 },
+      async () => {
+        order.push('yield-start')
+        await Promise.resolve()
+        order.push('yield-end')
+      }
+    )
+    // Every yield completes before the driver continues.
+    expect(order.filter((entry) => entry === 'yield-start').length).toBe(order.filter((entry) => entry === 'yield-end').length)
+    expect(order.length).toBeGreaterThan(0)
   })
 })

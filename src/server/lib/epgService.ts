@@ -14,7 +14,7 @@ import {
   type StreamForMatching
 } from './epgMatching.js'
 import type { XmltvGuide, XmltvProgramme } from './xmltv.js'
-import { createXmltvStreamParser } from './xmltvStream.js'
+import { createXmltvStreamParser, driveXmltvParse } from './xmltvStream.js'
 import { dropCachedGuide, saveCachedGuide, statCachedGuide } from './epgCache.js'
 
 // Server-side EPG aggregation. The EPG used to be assembled entirely in the browser: one bulk
@@ -55,6 +55,12 @@ export function epgRetryDelayMs(failures: number): number {
 // provider or a home link, and treating that as a failure is what surfaced as a "provider EPG
 // error" on one deployment while the provider answered fine when fetched directly.
 const GUIDE_STALL_TIMEOUT_MS = 120_000
+
+/** One turn of the event loop, the interleaving primitive for the parse and mapping phases of a
+ *  refresh (v0.80.0): each contiguous block stays at one slice's / one batch's cost — tens of
+ *  milliseconds — instead of the whole guide's ~3.9s. setImmediate rather than setTimeout(0):
+ *  it runs after the currently-queued I/O events, before the next timer round. */
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 
 // The channel list is a smaller bulk download (~10MB) but comes from the same busy endpoint, so
 // it gets a longer-than-default window too. Both apply only to EPG work; streams keep the snappy
@@ -208,7 +214,11 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
   // the very guide the operator just asked to replace.
   const hydrationBlocked = new Set<string>()
   const channelListCache = new Map<string, ChannelListCacheEntry>()
-  const mappingCache = new Map<string, MappingCacheEntry>()
+  // Since v0.80.0 the cache holds the in-flight Promise, not the entry: the computation is
+  // async (it yields to the event loop), so two concurrent cold requests — a grid navigation
+  // and the config screen's background summary, say — must share one computation rather than
+  // both driving thousands of streams through the matcher.
+  const mappingCache = new Map<string, Promise<MappingCacheEntry>>()
   /** Last computed match summary per account — lets the EPG screen show coverage stats that
    *  were produced by a normal grid load, without recomputing them on every settings poll. */
   const lastSummary = new Map<string, EpgMatchSummary>()
@@ -247,12 +257,14 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
    * slices so the parser's working buffer stays small. Replaces the DOM parse, whose footprint
    * for a single ~170MB guide measured ~1.3GB on this repo's rig — the deployment's guide set
    * grew past that, and every parse was an OOM (see xmltvStream.ts).
+   *
+   * Since v0.80.0 the slices are interleaved with yields to the event loop (driveXmltvParse):
+   * this same loop driven synchronously was the measured ~3.9s contiguous stall of every
+   * refresh, during which the app answered nothing. queueParse already serializes parse jobs,
+   * and its `T | Promise<T>` signature already accommodates the now-async result.
    */
-  function parseXmltvText(xml: string): XmltvGuide {
-    const parser = createXmltvStreamParser({ now: now() })
-    const SLICE = 4 * 1024 * 1024
-    for (let i = 0; i < xml.length; i += SLICE) parser.write(xml.slice(i, i + SLICE))
-    return parser.end()
+  function parseXmltvText(xml: string): Promise<XmltvGuide> {
+    return driveXmltvParse(xml, { now: now() }, yieldToEventLoop)
   }
 
   /** One parse at a time across all sources: the peak is one guide's retained data plus a
@@ -532,14 +544,21 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
 
   /** Stream → guide-channel mapping, memoised per (playlist, account, source set, guide versions):
    *  this is the expensive part (thousands of streams × scoring), so it runs once per guide
-   *  refresh rather than per grid navigation. */
-  function getMapping(
+   *  refresh rather than per grid navigation.
+   *
+   *  Since v0.80.0 the build yields to the event loop every MAPPING_YIELD_EVERY streams: it runs
+   *  right after a guide refresh cleared this cache, and driven contiguously it was the second
+   *  multi-second block of every refresh (the parse is the first — see parseXmltvText). The
+   *  cache holds the in-flight Promise so concurrent cold starts share one build. */
+  const MAPPING_YIELD_EVERY = 200
+
+  async function getMapping(
     credentials: EpgServiceCredentials,
     sources: string[],
     entries: GuideCacheEntry[],
     streams: StreamForMatching[],
     playlistId = ''
-  ): MappingCacheEntry {
+  ): Promise<MappingCacheEntry> {
     const manual = new Map<number, string>()
     if (manualMappings) {
       for (const stream of streams) {
@@ -551,6 +570,27 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     const cached = mappingCache.get(key)
     if (cached) return cached
 
+    const computation = computeMapping(key, credentials, sources, entries, streams, manual, playlistId)
+    // One mapping per account in practice; keep the map small.
+    if (mappingCache.size > 8) mappingCache.clear()
+    mappingCache.set(key, computation)
+    // A failed build must not leave a permanently-rejected promise cached: the next request
+    // retries the build rather than inheriting its failure forever.
+    computation.catch(() => {
+      if (mappingCache.get(key) === computation) mappingCache.delete(key)
+    })
+    return computation
+  }
+
+  async function computeMapping(
+    key: string,
+    credentials: EpgServiceCredentials,
+    sources: string[],
+    entries: GuideCacheEntry[],
+    streams: StreamForMatching[],
+    manual: Map<number, string>,
+    playlistId: string
+  ): Promise<MappingCacheEntry> {
     const startedAt = now()
     const candidates: Array<{ url: string; index: GuideIndexes }> = []
     entries.forEach((entry, i) => {
@@ -569,6 +609,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
     }
     // Which source answered, per source: the same matches, attributed to the guide they came from.
     const matchesBySource = new Map<string, number>()
+    let streamsSinceYield = 0
     for (const stream of streams) {
       // The operator's override first (v0.76.0): a manual mapping wins over every automatic
       // tier, and it resolves against whichever guide source actually carries the target
@@ -601,6 +642,11 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
         matchesBySource.set(candidate.url, (matchesBySource.get(candidate.url) ?? 0) + 1)
         break
       }
+      streamsSinceYield += 1
+      if (streamsSinceYield >= MAPPING_YIELD_EVERY) {
+        streamsSinceYield = 0
+        await yieldToEventLoop()
+      }
     }
 
     const entry: MappingCacheEntry = {
@@ -618,9 +664,6 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
         builtAt: now()
       }
     }
-    // One mapping per account in practice; keep the map small.
-    if (mappingCache.size > 8) mappingCache.clear()
-    mappingCache.set(key, entry)
     // Only the primary's summary feeds the config screen's peek (peekMatchSummary reads '').
     lastSummary.set(`${playlistId}|${credentials.server}|${credentials.username}`, entry.stats)
     return entry
@@ -643,7 +686,7 @@ export function createEpgService(deps: EpgServiceDeps = {}) {
       }),
       ...sources.map((url) => getGuideOrError(url))
     ])
-    const mapping = getMapping(params.credentials, sources, entries, streams, params.playlistId ?? '')
+    const mapping = await getMapping(params.credentials, sources, entries, streams, params.playlistId ?? '')
     return { streams, sources, entries, mapping }
   }
 

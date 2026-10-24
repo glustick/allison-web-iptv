@@ -15,6 +15,32 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.80.0 — the reliability round: the guide refresh stops stalling, and slow categories say so.**
+Two measured problems, one theme. **The refresh stall:** a guide refresh kept the app responsive at
+12-20ms and then froze everything once for **3.9 seconds** while the parser ran — the parser was
+already incremental (v0.73.0's streaming scanner), but the fetch path drove it in one synchronous
+loop, and the mapping rebuild that followed (thousands of streams × token scoring on the first
+request after the cache cleared) was a second contiguous block. Both now interleave:
+`driveXmltvParse` feeds the same 4MB slices with `setImmediate` yields between them (the
+disk-hydration path had proven interleaved feeding safe all along), and `getMapping` yields every
+200 streams with a promise-bearing cache so concurrent cold starts share one build instead of
+racing two (pinned by an identity test that was falsified against a broken cache). The memory
+shape is deliberately unchanged — v0.73.0 already removed the 1.3GB DOM spike; the remaining
+fetch-path transient fits the 6GB heap headroom, and streaming the fetch itself is recorded as
+not-worth-the-complexity while the shape is measured stable. **The slow category:** a cold
+category fetch measured at 52s (its warm siblings under four) died at the 30s response-headers
+timeout — Xtream panels build the whole category JSON before sending a byte — and what reached the
+viewer was an internal-looking "502 Upstream request failed" over stale rows with no loading
+state. `/player_api.php` requests now get a patient 120s window via `upstreamRequestProfileFor`
+(pure, unit-tested; streams and segments keep the fast default), the watchdog's timeout phrasing
+classifies as the friendly 504 sentence, `xtreamClient` throws the server's JSON error message
+instead of the bare status code, and the category click shows a visible state — "Loading
+channels…", escalating to "Still trying — this category is slow to answer." at 15s. Also rode
+along: five stale roadmap entries corrected (the not-broadcasting detector, the quality selector
+(v0.75.0), player-settings persistence, the remembered audio probe (channel_plans facts, cheap
+again since v0.79.1), and manual guide mappings' shipped half (v0.76.0) — only the fuzzy
+suggestion pass genuinely remains). 865 tests (12 new); typecheck, lint and the builds clean.
+
 **v0.79.1 — Sky Sports FHD plays: the probe stopped racing the player, and conversion says so.**
 The reported failure — "Sky Sports+ / Sky Sports FHD doesn't play" — was measured end to end on
 the live provider (2026-10-18). The streams themselves are fine from the host: H.264 1080p50 with
@@ -1894,28 +1920,26 @@ answers what Chrome is missing. The browser feature after that is the live-playb
   prefer native the same way for HLS sources (it already uses a plain `<video src>` for direct files),
   and record what is given up on that path (the in-app audio/subtitle switcher is an hls.js facility;
   native playback delegates track selection to the browser).
-- **Say "this channel isn't broadcasting" instead of looping.** *Open.* The provider currently answers
-  every channel with a repeating placeholder behind a playlist that never advances (measured; see
-  above). The app cannot tell that apart from a broken channel, so it spends its entire recovery ladder
-  on it — reloads, session restarts, and one of the account's two provider connections per attempt. A
-  non-advancing-playlist detector, plus a message that says so, turns a mystery black screen into one
-  sentence. Wants one live browser reproduction first to pin the exact signal hls.js reports — worth
-  measuring rather than guessing at, given how much of this project's history is exactly that.
-- **A quality selector in the player.** *Partly addressed by v0.47.0.* Conversion is now offered
-  rather than taken, so nothing reduces quality without being asked. *Open.* The re-encode tier's cap is an environment variable, so
-  changing it means a redeploy, and since v0.46.3 its default is the honest one: keep the source's
-  resolution. A per-device control (Source / 1080p / 720p) would let a viewer make that trade
-  deliberately, when their own host cannot keep up, instead of the app making it for them. This is the
-  piece of the "player settings that persist" item below that the UHD question actually needs.
-- **Player settings that persist.** *Open (partial).* `TrackControls` lets you switch audio /
-  subtitle tracks live, but the choice resets per session and there is no quality or
-  subtitle-styling surface. Persist the selected tracks per saved profile and add a compact
-  player-settings panel (playback quality, subtitle styling, visible fallback status).
-- **Remember the audio-track probe.** *Open (small).* Since v0.34.0 the player asks the server what
-  audio tracks a stream carries before deciding whether to transcode, so an E-AC-3-first channel does
-  not play silently on Safari. That probe costs a round trip on every play of every channel; the
-  verdict could be remembered per channel the way `lib/transcodeHints.ts` already remembers "this needs
-  converting" — bounded, expiring, per device.
+- **Say "this channel isn't broadcasting" instead of looping.** *Shipped — and it had been for a while;
+  the entry below was stale.* The non-advancing-playlist detector is `lib/playlistStall.ts` plus
+  LivePlayer's LEVEL_UPDATED declaration (the "has not advanced for 30 seconds" sentence, with the
+  playhead-drained precondition and the recovery ladder paused to spare the provider connection) —
+  the same shape the desktop sibling later ported as its 0.12.0. Corrected here so it is not proposed
+  again.
+- **A quality selector in the player.** *Shipped in v0.75.0.* The per-device control this entry asked
+  for is the viewer's Source / 1080p / 720p select in LivePlayer, persisted per device
+  (`lib/playerPrefs.ts`, validated 240–2160), applied only to the re-encode tier — a copy cannot
+  reshape — and a mid-session change restarts that session at the new height. Corrected so it is not
+  proposed again.
+- **Player settings that persist.** *Shipped (partial → corrected).* Audio and subtitle track choices
+  persist per device and re-apply once per stream (`lib/playerPrefs.ts` via `pickTrackIndex`), and the
+  quality ceiling persists with the selector above. What genuinely remains open is only the compact
+  panel's last piece: subtitle styling.
+- **Remember the audio-track probe.** *Shipped — and it had been for a while; the entry below was
+  stale.* The verdict is remembered per channel on the server (`channel_plans` facts, mirrored to the
+  client by `lib/transcodeHints.ts` with a freshness window), so a fresh page load decides from facts
+  instead of probing again — and since v0.79.1 the probe itself is the PMT fast path (~1-3s, no
+  ffmpeg), so even a first-ever play barely pays it. Corrected here so it is not proposed again.
 - **Retry a refused segment with a fresh playlist — the thorough fix for expired signatures.** *Shipped in
   v0.44.0.* Heavy channels (the ~6 Mbps EPL club feeds) relay their first segment and then get **400** for
   the rest of the same playlist: the provider's URLs are signed for roughly 25 seconds, and relaying makes
@@ -2004,12 +2028,11 @@ BBC One HD, Scripps, US local ABC/CW affiliates, NFHS, 24/7 channels):
   (`lib/epgPresets.ts`: epgshare01 UK/IE/AU plus i.mjh.nz Sydney), each carrying the date it was fetched
   and a plain-language note on size and id shape. Corrected so it is not proposed again — the same class
   of correction as the transcode-idle entry above.
-- **Manual channel→guide mapping + optional fuzzy joins.** *Open (partial).* Matching is
-  deliberately conservative (exact id → normalized id → normalized display-name, unambiguous
-  only), so a channel whose name genuinely differs from every guide entry (e.g. "BBC One HD
-  London" vs "BBC One HD") still misses. Add a one-click "map this channel to a guide id"
-  override, and optionally a fuzzy/substring pass offered as a suggestion rather than applied
-  silently.
+- **Manual channel→guide mapping + optional fuzzy joins.** *Half shipped (v0.76.0) — the entry was
+  partially stale.* The one-click "map this channel to a guide id" override this entry asked for is
+  the Map… button and its picker (`guideMappings.ts`, the manual tier wins over every automatic
+  strategy, per playlist since v0.78.0). What genuinely remains open is only the second half: a
+  fuzzy/substring pass offered as a suggestion rather than applied silently.
 
 ### 3. Reliability & operations
 
@@ -2034,19 +2057,30 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
   used since the bandwidth work landed; the admin health endpoint it reads was never the only place
   this number lived. Corrected here so it is not proposed again — the same class of correction the
   note at the top of this file records.
-- **The guide parse blocks the event loop for about four seconds.** *Open (measured).* A refresh keeps the
-  app responsive at 12–20 ms, then stalls once for **3.9 s** while the parser runs. Not enough to explain
-  the 502s of 2026-09-19 — those were an OOM crash loop — but on a slow day it is the difference between a
-  spinner and a timeout. Parsing in chunks, or in a worker thread, removes it.
-- **Parsing a ~97 MB gzipped guide into memory is the wrong shape.** *Open (design).* Node's default heap
-  could not hold it, so the app died in an OOM restart loop that presented as *"the EPG is failing to
-  load"* plus a 502 from the reverse proxy. The immediate fix was a 6 GB heap (v0.40.1), which is
-  headroom rather than a fix: a streaming parse keeping only the channels it will match removes both the
-  memory ceiling and the stall above.
-- **A slow provider response reads as a failure.** *Open.* One category (`USA | Local Univision`) took
-  **52 seconds** from a cold cache while its eight siblings answered in under four. The UI gives up and
-  reports an error instead of *"this category is slow — still trying"*. A longer timeout for category
-  fetches, with the loading state kept alive, is the same shape as the v0.31.0 fix for provider stalls.
+- **The guide parse blocks the event loop for about four seconds.** *Shipped in v0.80.0.* The parser was
+  already incremental — the stall was the fetch path driving it in one synchronous loop. `driveXmltvParse`
+  (xmltvStream.ts) feeds the same 4MB slices interleaved with `setImmediate` yields, so each contiguous
+  block is one slice's cost (tens of ms) instead of the whole guide's 3.9s; the disk-hydration path had
+  already proven interleaved feeding safe. The mapping rebuild that followed each refresh (thousands of
+  streams × token scoring, synchronously on the first request after `mappingCache` cleared) got the same
+  treatment: `getMapping` yields every 200 streams and its cache holds the in-flight Promise, so
+  concurrent cold starts share one build instead of racing two.
+- **Parsing a ~97 MB gzipped guide into memory is the wrong shape.** *Closed as designed-accepted
+  (v0.80.0 decision).* The memory *ceiling* this entry feared was already fixed by v0.73.0's streaming
+  parser — the 1.3GB-per-guide DOM spike is gone; what remains is the fetch path's ~0.7GB transient
+  (raw buffer + decoded string + pruned guide), which fits the 6 GB heap headroom with room to spare.
+  v0.80.0 fixed the stall without touching the memory shape, and the heap setting stays deliberately:
+  restructuring the *fetch* into a streaming pipe (never holding the decoded string whole) is the only
+  remaining step, and it is not worth its complexity while the current shape is measured stable.
+- **A slow provider response reads as a failure.** *Shipped in v0.80.0.* The measured case (`USA | Local
+  Univision`, 52s cold vs <4s warm) died at nodeUpstreamRequest's 30s response-headers timeout — panels
+  build category JSON server-side before sending a byte. `/player_api.php` requests now get a patient
+  120s window (`upstreamRequestProfileFor`, the same budget providerLists.ts already grants the same
+  panel), streams keep the snappy default; the watchdog's phrasing now classifies as the friendly 504
+  instead of an internal-looking 502; and the sidebar's category click shows a visible loading state —
+  "Loading channels…", escalating to "Still trying — this category is slow to answer." at 15s — with the
+  server's plain-language sentence in the error banner when it does fail (xtreamClient surfaces the JSON
+  error body instead of the bare status code).
 - **The host now carries live video bandwidth.** *Shipped in v0.47.1.* Live segments are relayed
   through the app (v0.33.0) rather than fetched by the browser from the provider's CDN, which is what
   removed the provider credentials from the browser and the dependence on the CDN accepting the viewer's

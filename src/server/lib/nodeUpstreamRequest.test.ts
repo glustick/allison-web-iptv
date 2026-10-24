@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { gzipSync } from 'zlib'
 import { PassThrough } from 'stream'
 import type { AddressInfo } from 'net'
-import { createNodeUpstreamRequest } from './nodeUpstreamRequest.js'
+import { createNodeUpstreamRequest, PANEL_API_RESPONSE_TIMEOUT_MS, upstreamRequestProfileFor } from './nodeUpstreamRequest.js'
 
 // Real usage (proxyServer.ts) always eventually does `req.pipe(upstreamReq)` — for the
 // GET/HEAD-only requests this app ever proxies, the incoming client request is already ended
@@ -272,5 +272,30 @@ describe('first-response timeout', () => {
       endRequest(req)
     })
     expect(await collect(res.body)).toBe('first and rest')
+  })
+})
+
+describe('upstreamRequestProfileFor: the per-request timeout policy (v0.80.0)', () => {
+  it('grants the panel API the patient response window — the measured 52s cold category shape', () => {
+    expect(upstreamRequestProfileFor('https://provider.example:8443/player_api.php?username=u&password=p&action=get_live_streams&category_id=147')).toEqual({
+      responseTimeoutMs: PANEL_API_RESPONSE_TIMEOUT_MS
+    })
+    expect(upstreamRequestProfileFor('http://panel.example/player_api.php')).toEqual({
+      responseTimeoutMs: PANEL_API_RESPONSE_TIMEOUT_MS
+    })
+  })
+
+  it('leaves streams, segments, playlists and VOD on the snappy defaults', () => {
+    expect(upstreamRequestProfileFor('https://cdn.example/hls/user/pass/3/8/41136/seg1.ts')).toEqual({})
+    expect(upstreamRequestProfileFor('https://provider.example/live/user/pass/41136.m3u8')).toEqual({})
+    expect(upstreamRequestProfileFor('https://provider.example/movie/user/pass/123.mkv')).toEqual({})
+    expect(upstreamRequestProfileFor('https://provider.example/xmltv.php?username=u')).toEqual({})
+    // A path that merely contains the panel name is not the panel.
+    expect(upstreamRequestProfileFor('https://provider.example/api/player_api.php/v2/list')).toEqual({})
+  })
+
+  it('answers empty (never throws) for input it cannot parse', () => {
+    expect(upstreamRequestProfileFor('not a url at all')).toEqual({})
+    expect(upstreamRequestProfileFor('')).toEqual({})
   })
 })

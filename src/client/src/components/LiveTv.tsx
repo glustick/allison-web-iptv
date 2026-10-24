@@ -211,16 +211,40 @@ export function LiveTv({
 
   // The provider's channel list is only fetched for the views that show it; library views render
   // from the stored entries instead, which is what makes them work even if a category is slow.
+  // Since v0.80.0 the fetch is visible: a cold category can take the provider ~a minute to answer
+  // (measured 52s on one, its warm siblings under four), and a category click that used to sit on
+  // the previous category's rows with nothing happening now says it is loading — and, past 15s,
+  // that this category is slow but still being tried. The stale rows stay underneath on purpose:
+  // they are the last working state, exactly the fallback library views already render.
+  const [channelsLoading, setChannelsLoading] = useState(false)
+  const [channelsSlow, setChannelsSlow] = useState(false)
   useEffect(() => {
     if (selection.type !== 'all' && selection.type !== 'provider' && !picking) return
     const categoryId = selection.type === 'provider' ? selection.id : null
+    setChannelsLoading(true)
+    setChannelsSlow(false)
+    const slowTimer = setTimeout(() => setChannelsSlow(true), 15_000)
+    let active = true
     session.client
       .getLiveStreams(categoryId ?? undefined)
       .then((list) => {
+        if (!active) return
         setProviderChannels(list)
         setLoadError(null)
       })
-      .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load channels'))
+      .catch((err) => {
+        if (!active) return
+        setLoadError(err instanceof Error ? err.message : 'Failed to load channels')
+      })
+      .finally(() => {
+        if (!active) return
+        setChannelsLoading(false)
+        setChannelsSlow(false)
+      })
+    return () => {
+      active = false
+      clearTimeout(slowTimer)
+    }
   }, [session, selection, picking])
 
   useEffect(() => {
@@ -986,6 +1010,12 @@ export function LiveTv({
         {(loadError || prefsError || catchupError) && (
           <div className="login-error" style={{ padding: '8px 16px' }}>
             {loadError ?? prefsError ?? catchupError}
+          </div>
+        )}
+
+        {channelsLoading && !loadError && (
+          <div className="epg-note" style={{ padding: '8px 16px' }}>
+            {channelsSlow ? 'Still trying — this category is slow to answer.' : 'Loading channels…'}
           </div>
         )}
 

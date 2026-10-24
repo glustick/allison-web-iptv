@@ -26,14 +26,32 @@ function decodeBase64Maybe(value: string | undefined | null): string {
 /**
  * Browser-side Xtream client — a deliberately different shape from the desktop app's own
  * xtream.ts, for one real reason: getStreamUrl()/getTimeshiftUrl() there return the RAW
- * upstream provider URL directly, which works in Electron (no CORS enforcement on that kind
- * of request there) but would not survive a real browser's CORS rules for hls.js's own
+ * upstream provider URL directly, which works in Electron (no CORS enforcement on that kind of
+ * request there) but would not survive a real browser's CORS rules for hls.js's own
  * fetch()-based segment/playlist retrieval — see this project's own EFFORT-ASSESSMENT.md.
  * Every URL this client hands to the player is instead a same-origin relative path
  * (/player_api.php, /live/...), which the server's own relay middleware (src/server/index.ts)
  * recognizes and forwards into the ported proxy — so hls.js never makes a genuinely
  * cross-origin request at all.
  */
+
+/**
+ * The message a non-ok response should throw with (v0.80.0). This app's own relay answers
+ * failures with a JSON body carrying a plain-language sentence — "The provider did not respond
+ * in time. It may be down — try again shortly." for the 504 a slow cold category fetch now
+ * surfaces as — and throwing the bare status code discarded it, putting an internal-looking
+ * "Xtream request failed: 502 " in the viewer's error banner instead of the sentence written
+ * for them. Pure over the Response, so the surfacing is unit-testable.
+ */
+export async function xtreamErrorMessage(res: Response): Promise<string> {
+  const fallback = `Xtream request failed: ${res.status} ${res.statusText}`.trim()
+  try {
+    const parsed = (await res.json()) as { error?: unknown }
+    return typeof parsed.error === 'string' && parsed.error.length > 0 ? parsed.error : fallback
+  } catch {
+    return fallback
+  }
+}
 export class XtreamClient {
   /**
    * Deliberately credential-free. The provider password used to be handed to this class and then
@@ -66,7 +84,7 @@ export class XtreamClient {
 
   private async getJson<T>(url: string): Promise<T> {
     const res = await fetch(url)
-    if (!res.ok) throw new Error(`Xtream request failed: ${res.status} ${res.statusText}`)
+    if (!res.ok) throw new Error(await xtreamErrorMessage(res))
     return res.json() as Promise<T>
   }
 

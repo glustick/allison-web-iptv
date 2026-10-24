@@ -774,6 +774,44 @@ describe('createProxyServer', () => {
     expect(res.body).toContain('did not respond in time')
   }, 10000)
 
+  // v0.80.0: a slow cold panel fetch dies inside nodeUpstreamRequest's response-headers
+  // watchdog, whose message ("Upstream did not respond within 30000ms (no response headers)")
+  // never matched this handler's /timed out/ classifier — so the exact failure the patient
+  // panel profile exists for still escaped as an internal-looking 502 whenever it did fire.
+  // The fake upstream errors on every attempt, so the retry ladder exhausts itself and the
+  // final classification under test is the one real requests see.
+  it('classifies the response-headers watchdog timeout (nodeUpstreamRequest’s phrasing) as the friendly 504', async () => {
+    let attempts = 0
+    const fakeUpstream = (): UpstreamClientRequest => {
+      // A real EventEmitter backing, so req.pipe(upstreamReq) finds the listener surface it
+      // expects (once/emit included) — the hand-rolled shape died in the request handler as
+      // "dest.once is not a function" before the error path under test ever ran.
+      // A real EventEmitter backs the listener surface (on/once/emit/removeListener — req.pipe
+      // and its unpipe cleanup need all four), with the request-shape methods assigned on.
+      const impl = new EventEmitter()
+      impl.on('error', () => undefined) // keep emit from throwing before the proxy attaches its own listener
+      Object.assign(impl, {
+        setHeader: (): void => {},
+        followRedirect: (): void => {},
+        abort: (): void => {},
+        write: (): boolean => true,
+        end: (): void => {}
+      })
+      process.nextTick(() => {
+        attempts += 1
+        impl.emit('error', new Error('Upstream did not respond within 30000ms (no response headers)'))
+      })
+      return impl as unknown as UpstreamClientRequest
+    }
+    const proxy = await startProxy(makeDeps({ getProxyTargetBase: () => 'https://panel.example', createUpstreamRequest: fakeUpstream }))
+
+    const res = await fetchViaProxy(proxy, '/player_api.php?action=get_live_streams&category_id=118')
+    expect(attempts).toBeGreaterThanOrEqual(2) // retried, then gave up
+    expect(res.statusCode).toBe(504)
+    expect(res.body).toContain('did not respond in time')
+    expect(res.body).not.toContain('Upstream request failed')
+  }, 10000)
+
   it('rewrites an Xtream live playlist so its segments come back through this proxy', async () => {
     // The provider writes *absolute* CDN URLs into live playlists. Left alone, the browser fetches
     // them directly: the provider credentials travel to the browser, playback depends on the CDN

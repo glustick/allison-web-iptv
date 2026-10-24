@@ -582,8 +582,11 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
         console.error('[proxy] upstream request error:', err)
         // A silent provider is the most common failure here — its panel goes away while DNS and TCP
         // stay perfectly fine — and a bare "502 Upstream request failed" tells the viewer nothing.
-        // 504 plus a sentence the player can show is worth more than a code.
-        const timedOut = /timed out/i.test(err.message)
+        // 504 plus a sentence the player can show is worth more than a code. Both timeout phrasings
+        // count: this handler's own timer says "timed out", while nodeUpstreamRequest's
+        // response-headers watchdog says "did not respond within Nms" — the exact error a slow
+        // cold panel fetch surfaced as before v0.80.0, when it escaped as an internal-looking 502.
+        const timedOut = /timed out|did not respond within/i.test(err.message)
         if (!res.headersSent) {
           res.writeHead(timedOut ? 504 : 502, { 'Content-Type': 'application/json; charset=utf-8' })
         }

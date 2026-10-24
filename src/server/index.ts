@@ -9,7 +9,7 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import { createRequire } from 'module'
 import { createProxyServer, type ProxyServerDeps } from './lib/proxyServer.js'
 import { fetchTextViaUpstream } from './lib/upstreamText.js'
-import { createNodeUpstreamRequest } from './lib/nodeUpstreamRequest.js'
+import { createNodeUpstreamRequest, upstreamRequestProfileFor } from './lib/nodeUpstreamRequest.js'
 import { createTranscodeService, prepareTranscodeDir, resolveTranscodeDir } from './lib/transcodeService.js'
 import { dataDirRecoveryHint, describeDataDirMount } from './lib/dataDirMount.js'
 import { filesystemSpace, isLowSpace , LOW_SPACE_THRESHOLD_BYTES } from './lib/diskSpace.js'
@@ -385,7 +385,11 @@ function sanitizeEpgUrls(value: unknown): string[] | undefined {
 const proxyDeps: ProxyServerDeps = {
   getProxyTargetBase: (req?: IncomingMessage) => getProxyTargetBase(req),
   getProxyBackupBase: (req, primaryTarget) => getProxyBackupBase(req, primaryTarget),
-  createUpstreamRequest: createNodeUpstreamRequest,
+  // The one factory every proxied upstream request flows through — panel API requests (the
+  // sidebar's category lists above all) get the patient response window here, while streams
+  // and segments keep the snappy defaults (see upstreamRequestProfileFor's own comment for the
+  // measured 52s cold category this exists for).
+  createUpstreamRequest: (opts) => createNodeUpstreamRequest({ ...opts, ...upstreamRequestProfileFor(opts.url) }),
   // Node has no persistent, clearable DNS cache the way Chromium does (a plain http/https
   // request re-resolves via the OS resolver each time) — nothing to clear.
   clearHostResolverCache: async () => {},
