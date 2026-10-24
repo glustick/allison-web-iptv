@@ -25,6 +25,9 @@ export interface AuthSessionStore {
   /** Throttled: a session's `lastSeenAt` is written at most once per `minIntervalMs`. */
   touch: (token: string, lastSeenAt: number, minIntervalMs?: number) => void
   remove: (token: string) => void
+  /** Removes by the token's SHA-256 hash directly — the in-memory map is hash-keyed (v0.83.0),
+   *  so its teardown already holds the hash and must not re-hash (or hold raw tokens at all). */
+  removeByHash: (tokenHash: string) => void
   removeForUser: (username: string) => void
   /**
    * Everything not idle-expired. Returns the *raw* token (decrypted) so the in-memory map can be
@@ -64,6 +67,9 @@ export function createAuthSessionStore(options: { dataDir: string; ttlMs: number
     },
     remove(token) {
       remove.run(hashAuthToken(token))
+    },
+    removeByHash(tokenHash) {
+      remove.run(tokenHash)
     },
     removeForUser(username) {
       removeUser.run(username)

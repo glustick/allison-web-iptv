@@ -4,7 +4,20 @@
 // every deploy, so the ring itself is in memory but each entry is *also* written to the container
 // log, which is where you actually look afterwards. Usernames, IPs and user-agents only; never a
 // password, never a token.
-export type AuthOutcome = 'ok' | 'failed' | 'locked' | 'logout' | 'setup' | 'revoked'
+// 'password-changed'/'force-logout'/'user-created'/'user-deleted' record the admin actions that
+// shape logins (v0.83.0) — a reset ends sessions, a deletion ends the account, and none of it
+// was visible anywhere before the audit log gained its reader.
+export type AuthOutcome =
+  | 'ok'
+  | 'failed'
+  | 'locked'
+  | 'logout'
+  | 'setup'
+  | 'revoked'
+  | 'password-changed'
+  | 'force-logout'
+  | 'user-created'
+  | 'user-deleted'
 
 export interface AuthAuditEntry {
   at: string

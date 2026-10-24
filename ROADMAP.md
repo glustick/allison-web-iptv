@@ -15,6 +15,29 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.83.0 — session hardening: a password change ends sessions, and the auth log becomes visible.**
+The "durable session service" item, cut to its real holes (the architecture was already
+service-shaped; the one-login-per-account rule stands untouched). **The core gap:** an admin
+password reset called `usersStore.setPassword` and nothing else — the most common reason to reset
+a credential is that it may be compromised, and the account's live cookie outlived the change.
+`destroySessionsOfUsername` (in-memory teardown + the previously-unwired `removeForUser`) now
+runs on password reset and replaces user deletion's inlined loop. **The auth log gains its
+reader:** four new audit outcomes (`password-changed`, `force-logout`, `user-created`,
+`user-deleted`) record the admin actions that shape logins, and AdminConsole's new Auth log
+section (own 30s poll + Refresh) finally consumes `/api/admin/audit`, which served a
+newest-first list to zero clients since it shipped. **The sessions table gained an Idle expiry
+column** (`lastSeenAt + TTL`, served as `idleExpiresAtMs`). **And one real refactor closes a
+genuine leak:** `GET /api/admin/sessions` used to hand out raw session tokens as row ids, posted
+back to force-logout — the in-memory session and proxy-target maps are now keyed by
+`hashAuthToken(token)` instead, every boundary (getAuthSession, create, destroy, sweep,
+login-retire, force-logout, boot restore, and `getTargetForRequest`'s cookie lookup) hashes once,
+`AuthSession` dropped its raw-token field, and the store gained `removeByHash` so teardown never
+re-hashes. A raw credential now exists only in the cookie and the store's encrypted column —
+pinned by an updated sessionState test that proves a raw-token map key no longer matches. Two
+small leaks rode along: the lazy idle-expire branch now does the full teardown (the proxy target
+used to survive it), and resetting your own password honestly logs you out. 894 tests (3 new);
+typecheck, lint and the builds clean.
+
 **v0.82.0 — bulk guide suggestions: every unmatched channel fixed in one pass.** The genuinely-open
 half of the manual-mapping entry, ported from the desktop sibling's `planBulkSuggestionApply`. The
 EPG settings screen gains a block under the coverage cards: pick a threshold (60–100%, the

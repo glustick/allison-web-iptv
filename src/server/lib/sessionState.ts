@@ -1,3 +1,5 @@
+import { hashAuthToken } from './authSessionStore.js'
+
 export const AUTH_COOKIE_NAME = 'allison_web_iptv_auth'
 
 export function normalizeProxyTargetBase(url: string): string {
@@ -25,8 +27,11 @@ export function getTargetForRequest(
   const cookieHeader = typeof headers.cookie === 'string' ? headers.cookie : ''
   // The auth cookie (set by the app's own username/password login) doubles as the key for
   // per-login proxy targets — one less cookie, and a logged-out browser resolves no target.
+  // v0.83.0: the maps are keyed by the token's hash, so the cookie is hashed before lookup —
+  // same shape the session map itself uses, and the raw token still never leaves the cookie.
   const sessionId = parseCookieValue(cookieHeader, AUTH_COOKIE_NAME)
-  if (sessionId && sessionTargets.has(sessionId)) return normalizeProxyTargetBase(sessionTargets.get(sessionId) ?? '')
+  const sessionKey = sessionId ? hashAuthToken(sessionId) : null
+  if (sessionKey && sessionTargets.has(sessionKey)) return normalizeProxyTargetBase(sessionTargets.get(sessionKey) ?? '')
 
   return defaultTarget ? normalizeProxyTargetBase(defaultTarget) : null
 }

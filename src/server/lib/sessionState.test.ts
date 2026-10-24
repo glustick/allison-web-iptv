@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './sessionState.js'
+import { hashAuthToken } from './authSessionStore.js'
 
 describe('normalizeProxyTargetBase', () => {
   it('trims trailing slashes from the Xtream server URL', () => {
@@ -30,11 +31,17 @@ describe('getTargetForRequest', () => {
     ).toBe('https://override.example:8080')
   })
 
-  it('falls back to the session target before the process default', () => {
-    const targets = new Map([['session-1', 'https://session.example:8080']])
+  it('falls back to the session target before the process default (the map is hash-keyed, v0.83.0)', () => {
+    // The cookie carries the raw token; the maps hash it. A raw-token key must NOT match —
+    // that is the whole point of the hash-keying (raw credentials never live in map keys).
+    const rawToken = 'session-1'
+    const targets = new Map([[hashAuthToken(rawToken), 'https://session.example:8080']])
 
-    expect(getTargetForRequest({ cookie: `${AUTH_COOKIE_NAME}=session-1` }, 'https://default.example:8080', targets)).toBe(
+    expect(getTargetForRequest({ cookie: `${AUTH_COOKIE_NAME}=${rawToken}` }, 'https://default.example:8080', targets)).toBe(
       'https://session.example:8080'
+    )
+    expect(getTargetForRequest({ cookie: `${AUTH_COOKIE_NAME}=${rawToken}` }, 'https://default.example:8080', new Map([[rawToken, 'https://session.example:8080']]))).toBe(
+      'https://default.example:8080'
     )
   })
 

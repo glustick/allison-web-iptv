@@ -14,6 +14,7 @@ const SESSION_COLUMNS: ColumnSpec[] = [
   { key: 'duration', label: 'Duration', defaultWidth: 110, min: 70, max: 300 },
   { key: 'playing', label: 'Now playing', defaultWidth: 200, min: 100, max: 520 },
   { key: 'active', label: 'Last active', defaultWidth: 190, min: 120, max: 420 },
+  { key: 'expiry', label: 'Idle expiry', defaultWidth: 130, min: 90, max: 320 },
   { key: 'actions', label: '', defaultWidth: 110, min: 90, max: 260 }
 ]
 
@@ -25,14 +26,33 @@ const USER_COLUMNS: ColumnSpec[] = [
   { key: 'actions', label: '', defaultWidth: 110, min: 90, max: 260 }
 ]
 
+const AUDIT_COLUMNS: ColumnSpec[] = [
+  { key: 'time', label: 'Time', defaultWidth: 190, min: 120, max: 420 },
+  { key: 'outcome', label: 'Outcome', defaultWidth: 150, min: 90, max: 300 },
+  { key: 'username', label: 'User', defaultWidth: 140, min: 80, max: 360 },
+  { key: 'ip', label: 'IP', defaultWidth: 150, min: 90, max: 320 },
+  { key: 'agent', label: 'User agent', defaultWidth: 320, min: 140, max: 720 }
+]
+
 interface AdminSession {
-  token: string
+  /** The session's token hash — the irreversible identifier the force-logout endpoint takes. */
+  tokenHash: string
   username: string
   role: UserRole
   loginAt: number
   lastSeenAt: number
   durationMs: number
+  /** When the 24h idle clock ends (lastSeenAt + TTL) — the "Idle expiry" column. */
+  idleExpiresAtMs: number
   nowPlaying: { title: string; kind: string } | null
+}
+
+interface AuditEntry {
+  at: string
+  outcome: string
+  username: string
+  ip: string
+  userAgent: string
 }
 
 interface AdminUser {
@@ -43,6 +63,7 @@ interface AdminUser {
 }
 
 const POLL_MS = 5000
+const AUDIT_POLL_MS = 30_000
 
 function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000))
@@ -84,6 +105,7 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
 
   const sessionCols = useResizableColumns('admin-sessions', SESSION_COLUMNS)
   const userCols = useResizableColumns('admin-users', USER_COLUMNS)
+  const auditCols = useResizableColumns('admin-audit', AUDIT_COLUMNS)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -108,6 +130,26 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
     }
   }, [])
 
+  // The auth log is a record, not live state — a slower poll than the sessions table (and a
+  // manual Refresh), so a 5-second cadence is not spent re-reading history nobody is watching.
+  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([])
+  const refreshAudit = useCallback(async (): Promise<void> => {
+    try {
+      const res = await fetch('/api/admin/audit?limit=50')
+      if (!res.ok) return
+      const data = (await res.json()) as { entries?: AuditEntry[] }
+      setAuditEntries(data.entries ?? [])
+    } catch {
+      // The log is supplementary — a failed read leaves the last one on screen.
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshAudit()
+    const poll = window.setInterval(() => void refreshAudit(), AUDIT_POLL_MS)
+    return () => window.clearInterval(poll)
+  }, [refreshAudit])
+
   useEffect(() => {
     void refresh()
     const poll = window.setInterval(() => void refresh(), POLL_MS)
@@ -118,9 +160,9 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
     }
   }, [refresh])
 
-  async function forceLogout(token: string): Promise<void> {
+  async function forceLogout(tokenHash: string): Promise<void> {
     try {
-      const res = await fetch(`/api/admin/sessions/${encodeURIComponent(token)}/logout`, { method: 'POST' })
+      const res = await fetch(`/api/admin/sessions/${encodeURIComponent(tokenHash)}/logout`, { method: 'POST' })
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string }
         throw new Error(data.error ?? 'Could not sign that session out')
@@ -281,11 +323,11 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
             <tbody>
               {sessions.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="admin-empty">No active sessions — users appear here as soon as they sign in</td>
+                  <td colSpan={8} className="admin-empty">No active sessions — users appear here as soon as they sign in</td>
                 </tr>
               )}
               {sessions.map((session) => (
-                <tr key={session.token}>
+                <tr key={session.tokenHash}>
                   <td>{session.username}</td>
                   <td><span className={`role-badge role-${session.role}`}>{session.role}</span></td>
                   <td>{formatTimestamp(session.loginAt)}</td>
@@ -301,7 +343,16 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
                   </td>
                   <td>{formatTimestamp(session.lastSeenAt)}</td>
                   <td>
-                    <button type="button" className="admin-small-btn" onClick={() => void forceLogout(session.token)}>
+                    {session.idleExpiresAtMs > now ? (
+                      <span title="How long this login survives without any activity">
+                        {formatDuration(session.idleExpiresAtMs - now)}
+                      </span>
+                    ) : (
+                      <span className="admin-muted" title="Idle past the limit — the sweep will collect it shortly">expired</span>
+                    )}
+                  </td>
+                  <td>
+                    <button type="button" className="admin-small-btn" onClick={() => void forceLogout(session.tokenHash)}>
                       Sign out
                     </button>
                   </td>
@@ -430,6 +481,61 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
           </div>
         </form>
       </section>
+
+      <section className="admin-section">
+        <div className="epg-section-head">
+          <h2>Auth log</h2>
+          <button type="button" className="admin-small-btn" onClick={() => void refreshAudit()}>
+            Refresh
+          </button>
+        </div>
+        <p className="setup-hint">
+          Sign-ins, sign-outs, failed attempts and every admin action that shapes logins — password
+          resets end that account's sessions, force-logouts and account changes are recorded here as
+          they happen. Newest first, most recent 50.
+        </p>
+        <div className="admin-table-wrap">
+          <table
+            className="admin-table admin-table--fixed"
+            style={{ '--table-font-scale': auditCols.fontScale } as CSSProperties}
+          >
+            <thead>
+              <tr>
+                {AUDIT_COLUMNS.map((column) => (
+                  <th key={column.key} style={{ width: `${auditCols.percent[column.key]}%` }}>
+                    {column.label}
+                    <span
+                      className="col-resize"
+                      onPointerDown={auditCols.startDrag(column.key)}
+                      onDoubleClick={() => auditCols.reset(column.key)}
+                      title="Drag to resize · double-click to reset"
+                    />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {auditEntries.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="admin-empty">No auth events recorded yet</td>
+                </tr>
+              )}
+              {auditEntries.map((entry, index) => (
+                <tr key={`${entry.at}:${index}`}>
+                  <td>{formatTimestamp(Date.parse(entry.at))}</td>
+                  <td>
+                    <span className={`audit-outcome audit-outcome-${entry.outcome}`}>{entry.outcome}</span>
+                  </td>
+                  <td>{entry.username}</td>
+                  <td>{entry.ip}</td>
+                  <td className="audit-agent">{entry.userAgent || <span className="admin-muted">—</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
         <section className="admin-section">
           <div className="epg-section-head">
             <h2>Provider alerts</h2>

@@ -62,7 +62,7 @@ import {
 } from './lib/providerWatch.js'
 import { createAuthAudit } from './lib/authAudit.js'
 import { createAuthAuditStore } from './lib/authAuditStore.js'
-import { createAuthSessionStore } from './lib/authSessionStore.js'
+import { createAuthSessionStore, hashAuthToken } from './lib/authSessionStore.js'
 import { revocableSessionTokens } from './lib/singleSession.js'
 import { stripHopByHopHeaders } from './lib/relayHeaders.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
@@ -125,7 +125,9 @@ export interface NowPlayingInfo {
 }
 
 export interface AuthSession {
-  token: string
+  /** The token's SHA-256 hash — the map's key and the admin surface's only identifier. The raw
+   *  token deliberately never leaves the cookie (v0.83.0: the sessions list used to serve it). */
+  tokenHash: string
   username: string
   role: UserRole
   loginAt: number
@@ -137,6 +139,9 @@ export interface AuthSession {
 // client's activity heartbeat (every ~15s while playing) keeps streaming sessions alive.
 const AUTH_IDLE_TTL_MS = Number(process.env.AUTH_IDLE_TTL_HOURS ?? 24) * 60 * 60 * 1000
 
+// Keyed by hashAuthToken(token), never the raw token: every authenticated request hashes its
+// cookie once, and the admin surfaces (sessions list, force-logout) work on the irreversible
+// hash, so a raw credential can no longer leak into the DOM or a network response.
 const authSessions = new Map<string, AuthSession>()
 
 // Sessions are mirrored into SQLite so a deploy stops signing everybody out. The map stays the hot
@@ -148,8 +153,8 @@ const authSessionStore = createAuthSessionStore({
   ttlMs: AUTH_IDLE_TTL_MS
 })
 
-// Proxy targets keyed by auth-session token (the auth cookie value) — the direct replacement
-// for the old anonymous browser-session map. One login = one upstream context.
+// Proxy targets keyed by the session token's hash (v0.83.0 — was the raw cookie value) — the
+// direct replacement for the old anonymous browser-session map. One login = one upstream context.
 const sessionProxyTargets = new Map<string, string>()
 let defaultProxyTargetBase: string | null = null
 
@@ -163,36 +168,43 @@ function getAuthSession(req: { headers?: IncomingMessage['headers'] }): AuthSess
   const cookieHeader = typeof req.headers?.cookie === 'string' ? req.headers.cookie : undefined
   const token = parseCookieValue(cookieHeader, AUTH_COOKIE_NAME)
   if (!token) return null
-  const session = authSessions.get(token)
+  const tokenHash = hashAuthToken(token)
+  const session = authSessions.get(tokenHash)
   // Throttled inside the store (one write a minute at most), so this does not turn every
   // authenticated request into a database write.
   if (session) authSessionStore.touch(token, Date.now())
   if (!session) return null
   if (Date.now() - session.lastSeenAt > AUTH_IDLE_TTL_MS) {
-    authSessions.delete(token)
-  authSessionStore.remove(token)
+    // The full teardown, not a bare map delete: the proxy target (and, via the store call
+    // inside, the row) used to survive this branch — a small leak the sweep eventually cleaned.
+    destroyAuthSession(tokenHash)
     return null
   }
   return session
 }
 
-function createAuthSession(username: string, role: UserRole): AuthSession {
+/** Creates the session and returns the raw token beside it: the token's only destinations are
+ *  the HttpOnly cookie (here) and the store (which hashes it) — it never enters the map, the
+ *  session object, or any response body. */
+function createAuthSession(username: string, role: UserRole): { session: AuthSession; token: string } {
+  const token = randomUUID()
+  const tokenHash = hashAuthToken(token)
   const session: AuthSession = {
-    token: randomUUID(),
+    tokenHash,
     username,
     role,
     loginAt: Date.now(),
     lastSeenAt: Date.now(),
     nowPlaying: null
   }
-  authSessions.set(session.token, session)
-    authSessionStore.save(session.token, {
-      username: session.username,
-      role: session.role,
-      loginAt: session.loginAt,
-      lastSeenAt: session.lastSeenAt
-    })
-  return session
+  authSessions.set(session.tokenHash, session)
+  authSessionStore.save(token, {
+    username: session.username,
+    role: session.role,
+    loginAt: session.loginAt,
+    lastSeenAt: session.lastSeenAt
+  })
+  return { session, token }
 }
 
 // `Secure` is applied when the request actually arrived over TLS rather than unconditionally:
@@ -212,20 +224,36 @@ function clearAuthCookie(res: ServerResponse, secure: boolean): void {
   )
 }
 
-function destroyAuthSession(token: string): void {
-  authSessions.delete(token)
-  sessionProxyTargets.delete(token)
+function destroyAuthSession(tokenHash: string): void {
+  authSessions.delete(tokenHash)
+  sessionProxyTargets.delete(tokenHash)
   // The row too: without this, a logged-out session lingered on disk until the idle prune and was
   // revived by a restart — the exact "stale login still active" shape reported 2026-09-30.
-  authSessionStore.remove(token)
+  authSessionStore.removeByHash(tokenHash)
+}
+
+/** Ends every session of one username — the password-reset and account-deletion consequence.
+ *  Under the one-login-per-account rule there is normally exactly one, but the loop is the
+ *  honest shape: nothing about the rule guarantees the map is clean (a boot restoring two rows
+ *  for one user from an older database, say). `removeForUser` catches any row not in memory. */
+function destroySessionsOfUsername(username: string): number {
+  let destroyed = 0
+  for (const [tokenHash, session] of authSessions) {
+    if (session.username === username) {
+      destroyAuthSession(tokenHash)
+      destroyed += 1
+    }
+  }
+  authSessionStore.removeForUser(username)
+  return destroyed
 }
 
 // Periodic sweep so abandoned sessions (closed tabs, no more heartbeats) don't accumulate
 // forever; getAuthSession already lazy-expires on every lookup.
 setInterval(() => {
   const now = Date.now()
-  for (const [token, session] of authSessions) {
-    if (now - session.lastSeenAt > AUTH_IDLE_TTL_MS) destroyAuthSession(token)
+  for (const [tokenHash, session] of authSessions) {
+    if (now - session.lastSeenAt > AUTH_IDLE_TTL_MS) destroyAuthSession(tokenHash)
   }
   authSessionStore.prune(now)
 }, 10 * 60 * 1000).unref()
@@ -285,7 +313,7 @@ function getProxyTargetBase(req?: IncomingMessage): string | null {
     const credentials = credentialsFromStored(stored)
     if (!credentials) return null
     const normalized = normalizeProxyTargetBase(credentials.server)
-    sessionProxyTargets.set(session.token, normalized)
+    sessionProxyTargets.set(session.tokenHash, normalized)
     return normalized
   } catch {
     return null
@@ -470,8 +498,8 @@ app.post('/api/auth/setup', (req, res) => {
     const password = validatePassword(req.body?.password)
     const user = usersStore.createUser({ username, password, role: validateRole('admin') })
     usersStore.recordLogin(username)
-    const session = createAuthSession(user.username, user.role)
-    setAuthCookie(res, session.token, isSecureRequest(req))
+    const { session, token } = createAuthSession(user.username, user.role)
+    setAuthCookie(res, token, isSecureRequest(req))
     res.json({ ok: true, user: { username: user.username, role: user.role } })
     authAudit.record({ outcome: 'setup', username, ...auditContext(req) })
   } catch (err) {
@@ -530,17 +558,18 @@ app.post('/api/auth/login', (req, res) => {
     // what fails here, so keep the login itself inside this guard rather than letting an
     // uncaught throw turn into an opaque HTML 500.
     usersStore.recordLogin(user.username)
-    const session = createAuthSession(user.username, user.role)
+    const { session, token } = createAuthSession(user.username, user.role)
     // One account, one active login: retiring the others here is what makes an abandoned tab stop
     // streaming — its next request 401s, the player's session-expired state takes over, and the
-    // transcode idle-reaper collects whatever it was holding.
-    const retired = revocableSessionTokens(authSessions, user.username, session.token)
-    for (const token of retired) destroyAuthSession(token)
+    // transcode idle-reaper collects whatever it was holding. The map is hash-keyed, so the
+    // keep-token is the new session's hash; the retired keys are hashes too.
+    const retired = revocableSessionTokens(authSessions, user.username, session.tokenHash)
+    for (const tokenHash of retired) destroyAuthSession(tokenHash)
     if (retired.length > 0) {
       authAudit.record({ outcome: 'revoked', username: user.username, ...auditContext(req) })
       console.log(`[auth] retired ${retired.length} stale login(s) for ${user.username}`)
     }
-    setAuthCookie(res, session.token, isSecureRequest(req))
+    setAuthCookie(res, token, isSecureRequest(req))
     res.json({ ok: true, user: { username: user.username, role: user.role } })
   } catch (err) {
     console.error('[auth] login failed:', err)
@@ -550,7 +579,7 @@ app.post('/api/auth/login', (req, res) => {
 
 app.post('/api/auth/logout', (req, res) => {
   const session = getAuthSession(req)
-  if (session) destroyAuthSession(session.token)
+  if (session) destroyAuthSession(session.tokenHash)
   authAudit.record({ outcome: 'logout', username: session?.username ?? 'unknown', ...auditContext(req) })
   clearAuthCookie(res, isSecureRequest(req))
   res.json({ ok: true })
@@ -634,25 +663,31 @@ app.get('/api/admin/sessions', requireAuth, requireAdmin, (_req, res) => {
   const sessions = [...authSessions.values()]
     .sort((a, b) => a.loginAt - b.loginAt)
     .map((session) => ({
-      token: session.token,
+      // The irreversible hash, not the raw token (v0.83.0): the admin surface identifies
+      // sessions by it, and a raw credential must never reach the DOM or a response body.
+      tokenHash: session.tokenHash,
       username: session.username,
       role: session.role,
       loginAt: session.loginAt,
       lastSeenAt: session.lastSeenAt,
       durationMs: now - session.loginAt,
+      idleExpiresAtMs: session.lastSeenAt + AUTH_IDLE_TTL_MS,
       nowPlaying: session.nowPlaying
     }))
   res.json({ ok: true, sessions })
 })
 
-// Force-logout a specific login (e.g. someone left a session playing at home).
-app.post('/api/admin/sessions/:token/logout', requireAuth, requireAdmin, (req, res) => {
-  const token = typeof req.params.token === 'string' ? req.params.token : ''
-  if (!authSessions.has(token)) {
+// Force-logout a specific login (e.g. someone left a session playing at home). The identifier
+// is the session's token hash — see the sessions list above.
+app.post('/api/admin/sessions/:tokenHash/logout', requireAuth, requireAdmin, (req, res) => {
+  const tokenHash = typeof req.params.tokenHash === 'string' ? req.params.tokenHash : ''
+  const session = authSessions.get(tokenHash)
+  if (!session) {
     res.status(404).json({ error: 'Session not found (it may have already ended)' })
     return
   }
-  destroyAuthSession(token)
+  destroyAuthSession(tokenHash)
+  authAudit.record({ outcome: 'force-logout', username: session.username, ...auditContext(req) })
   res.json({ ok: true })
 })
 
@@ -667,6 +702,7 @@ app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
       password: req.body?.password,
       role: validateRole(req.body?.role)
     })
+    authAudit.record({ outcome: 'user-created', username: user.username, ...auditContext(req) })
     res.json({ ok: true, user })
   } catch (err) {
     if (err instanceof UserStoreError && !err.storageUnavailable) {
@@ -685,6 +721,12 @@ app.post('/api/admin/users/:username/password', requireAuth, requireAdmin, (req,
   const username = typeof req.params.username === 'string' ? req.params.username : ''
   try {
     usersStore.setPassword(username, req.body?.password)
+    // A password change ends the account's sessions (v0.83.0): the most common reason to reset
+    // one is that the old credential may be compromised, and a live cookie would outlive it.
+    // Resetting your own also ends your own session — the console reloads to the login screen.
+    const ended = destroySessionsOfUsername(username)
+    if (ended > 0) console.log(`[auth] password reset ended ${ended} session(s) for ${username}`)
+    authAudit.record({ outcome: 'password-changed', username, ...auditContext(req) })
     res.json({ ok: true, username })
   } catch (err) {
     if (err instanceof UserStoreError && !err.storageUnavailable) {
@@ -705,9 +747,8 @@ app.delete('/api/admin/users/:username', requireAuth, requireAdmin, (req, res) =
   try {
     const user = usersStore.deleteUser(username)
     // Drop any live logins belonging to the removed account immediately.
-    for (const [token, session] of authSessions) {
-      if (session.username === user.username) destroyAuthSession(token)
-    }
+    destroySessionsOfUsername(user.username)
+    authAudit.record({ outcome: 'user-deleted', username: user.username, ...auditContext(req) })
     res.json({ ok: true, user })
   } catch (err) {
     if (err instanceof UserStoreError && !err.storageUnavailable) {
@@ -868,8 +909,9 @@ async function runNightlyWarm(): Promise<void> {
 function resolveEpgCredentials(req: IncomingMessage): (EpgServiceCredentials & { epgUrls: string[] }) | null {
   const cookieHeader = typeof req.headers?.cookie === 'string' ? req.headers.cookie : undefined
   const token = parseCookieValue(cookieHeader, AUTH_COOKIE_NAME)
-  if (!token || !authSessions.has(token)) return null
-  const session = authSessions.get(token)
+  const tokenHash = token ? hashAuthToken(token) : null
+  if (!tokenHash || !authSessions.has(tokenHash)) return null
+  const session = authSessions.get(tokenHash)
   if (!session) return null
   const stored = usersStore.getIptvCredentials(session.username)
   if (!stored) return null
@@ -1207,7 +1249,7 @@ app.post('/api/session/save', requireAuth, (req, res) => {
     // Point the proxy at the provider right away so the client's first Xtream request works
     // without a separate /api/connect round trip.
     const normalizedServer = normalizeProxyTargetBase(credentials.server)
-    sessionProxyTargets.set(session.token, normalizedServer)
+    sessionProxyTargets.set(session.tokenHash, normalizedServer)
     defaultProxyTargetBase = normalizedServer
     res.json({ ok: true })
   } catch (err) {
@@ -2607,7 +2649,7 @@ app.post('/api/connect', requireAuth, (req, res) => {
   try {
     const session = req.authSession as AuthSession
     const normalizedServer = normalizeProxyTargetBase(server)
-    sessionProxyTargets.set(session.token, normalizedServer)
+    sessionProxyTargets.set(session.tokenHash, normalizedServer)
     defaultProxyTargetBase = normalizedServer
     res.json({ ok: true })
   } catch (err) {
@@ -2858,8 +2900,10 @@ app.get('*', (_req, res) => {
 // store: a deploy recreates the container, and without this everyone would be signed out — which cost
 // real time on 2026-09-17 when a sequence of releases meant signing in again after each one.
 for (const restored of authSessionStore.load(Date.now())) {
-  authSessions.set(restored.token, {
-    token: restored.token,
+  // Keyed by the stored hash; the decrypted raw token is used only to re-derive that hash and
+  // then dropped — the map never holds a raw credential (v0.83.0).
+  authSessions.set(restored.tokenHash, {
+    tokenHash: restored.tokenHash,
     username: restored.session.username,
     role: restored.session.role as UserRole,
     loginAt: restored.session.loginAt,

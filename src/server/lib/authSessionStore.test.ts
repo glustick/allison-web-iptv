@@ -94,3 +94,33 @@ describe('createAuthSessionStore', () => {
     store.close()
   })
 })
+
+describe('removeByHash (v0.83.0 — the in-memory map is hash-keyed)', () => {
+  it('removes by hash without ever holding the raw token', () => {
+    const dir = dataDir()
+    const store = createAuthSessionStore({ dataDir: dir, ttlMs: TTL })
+    store.save('token-a', session)
+    store.save('token-b', session)
+    store.removeByHash(hashAuthToken('token-a'))
+    const remaining = store.load(3_000)
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0].token).toBe('token-b')
+    store.close()
+  })
+
+  it('is the same deletion remove() performs — the two paths agree', () => {
+    const dirA = dataDir()
+    const dirB = dataDir()
+    const viaToken = createAuthSessionStore({ dataDir: dirA, ttlMs: TTL })
+    const viaHash = createAuthSessionStore({ dataDir: dirB, ttlMs: TTL })
+    for (const store of [viaToken, viaHash]) {
+      store.save('tok', session)
+      store.save('other', session)
+    }
+    viaToken.remove('tok')
+    viaHash.removeByHash(hashAuthToken('tok'))
+    const leftA = viaToken.load(3_000).map((r) => r.token)
+    const leftB = viaHash.load(3_000).map((r) => r.token)
+    expect(leftB).toEqual(leftA)
+  })
+})

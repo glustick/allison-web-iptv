@@ -1914,3 +1914,40 @@ body.resizing-col .resize-handle--feeds::after {
   color: #7ea2ff;
   white-space: nowrap;
 }
+
+/* Auth log outcome badges (v0.83.0): green for successes, red for failures/lockouts, amber for
+   endings (logout/revoked/force-logout), neutral for the informational admin actions. */
+.audit-outcome {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #b8bec9;
+}
+
+.audit-outcome-ok,
+.audit-outcome-setup,
+.audit-outcome-user-created {
+  background: rgba(64, 192, 120, 0.16);
+  color: #6fdc9c;
+}
+
+.audit-outcome-failed,
+.audit-outcome-locked {
+  background: rgba(232, 84, 84, 0.16);
+  color: #ff8f8f;
+}
+
+.audit-outcome-logout,
+.audit-outcome-revoked,
+.audit-outcome-force-logout,
+.audit-outcome-user-deleted,
+.audit-outcome-password-changed {
+  background: rgba(240, 176, 64, 0.14);
+  color: #ffcf7d;
+}
+
+.audit-agent {
+  overflow-wrap: anywhere;
+}

@@ -34,3 +34,15 @@ describe('createAuthAudit', () => {
     expect(audit.recent(0)).toHaveLength(1)
   })
 })
+
+describe('admin-action outcomes (v0.83.0)', () => {
+  it('records the admin actions that shape logins, newest first', () => {
+    const audit = createAuthAudit(10)
+    audit.record({ outcome: 'password-changed', username: 'chris', ip: '10.0.0.2', userAgent: 'ua' })
+    audit.record({ outcome: 'force-logout', username: 'autoclaw', ip: '10.0.0.2', userAgent: 'ua' })
+    audit.record({ outcome: 'user-created', username: 'astra', ip: '10.0.0.2', userAgent: 'ua' })
+    audit.record({ outcome: 'user-deleted', username: 'astra', ip: '10.0.0.2', userAgent: 'ua' })
+    const entries = audit.recent(10)
+    expect(entries.map((entry) => entry.outcome)).toEqual(['user-deleted', 'user-created', 'force-logout', 'password-changed'])
+  })
+})
