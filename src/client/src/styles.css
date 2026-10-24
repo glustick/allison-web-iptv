@@ -1727,3 +1727,190 @@ body.resizing-col .resize-handle--feeds::after {
     display: none;
   }
 }
+
+/* --- Multi-view (v0.81.0) — the tiled grid that replaces the single player block. The tiles
+   follow .player-wrap's language (black, relative, overlays inside); the grid itself is a
+   flex-wrap of half-width tiles, so 2 tiles sit side by side and 4 form a 2×2 — the same two
+   layouts the desktop sibling ships, without introducing the codebase's first display:grid. --- */
+
+.multiview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  flex-shrink: 0;
+}
+
+.multiview-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px;
+  flex-shrink: 0;
+}
+
+.multiview-tile {
+  position: relative;
+  background: black;
+  border-radius: 8px;
+  overflow: hidden;
+  width: calc(50% - 4px);
+  min-height: 120px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.multiview-tile--active {
+  border-color: #4f7cff;
+}
+
+.multiview-tile video {
+  width: 100%;
+  max-height: var(--player-max-height, 45vh);
+  display: block;
+  object-fit: contain;
+  background: black;
+}
+
+.multiview-tile--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #7ea2ff;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed #3a4152;
+}
+
+.multiview-tile--empty:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.multiview-tile-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+  pointer-events: none;
+}
+
+.multiview-tile-name {
+  font-size: 12px;
+  color: #e7e9ee;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multiview-tile-actions {
+  display: inline-flex;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.multiview-tile-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 12px;
+  font-size: 12px;
+  color: #ffb4a8;
+  background: rgba(0, 0, 0, 0.75);
+}
+
+/* The picker modal — the same overlay language as the guide-mapping picker. */
+
+.multiview-picker-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+
+.multiview-picker {
+  background: var(--panel, #171a21);
+  border: 1px solid #2a2f3a;
+  border-radius: 10px;
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 8px;
+}
+
+.multiview-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.multiview-picker-filter {
+  flex: 1;
+}
+
+.multiview-picker-scopes select {
+  width: 100%;
+}
+
+.multiview-picker-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 120px;
+}
+
+.multiview-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.multiview-picker-row:hover {
+  background: rgba(79, 124, 255, 0.12);
+}
+
+.multiview-picker-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multiview-picker-name img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.multiview-picker-badge {
+  font-size: 11px;
+  color: #7ea2ff;
+  white-space: nowrap;
+}

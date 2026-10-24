@@ -15,6 +15,39 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.81.0 — multi-view: several live channels as tiles, the desktop's grid brought to the web.**
+A mode of the Live TV page (not a tab — switching tabs unmounts playback by design): the
+resizable player block becomes a 2- or 4-tile grid of small live channels, one tile unmuted at a
+time, and the guide sits under it as always. **The design is owned end to end by the one real
+constraint — the provider allows ~2 concurrent connections, and every tile is a live connection
+through this app's relay.** Consequences, deliberate: entering the grid clears the main player
+(its connection frees instead of competing), playing any channel from the guide tears the grid
+down (⤢ on a tile does the same, through the ordinary select path), **tiles never convert** — a
+channel whose audio needs the server's remux would spend a *second* provider connection on an
+ffmpeg session, worse than a tile that says so and stops (the toolbar carries the standing hint
+about the ~2-connection ceiling) — and the layouts stay the desktop's closed 2|4 set.
+**Pieces:** `lib/multiViewPrefs.ts` (pure + injectable storage, the playerPrefs template — tile
+set and layout persist per device, so a reloaded tab finds its tiles; slots carry name +
+playlistId so a tile renders and plays without its category loaded; resize/toggle helpers
+ported from the desktop's store semantics as pure functions); `lib/useMultiViewTile.ts` — the
+lightweight attach hook (small buffers, muted autoplay, no ladders), with **two lessons from
+the desktop port applied**: the audio toggle sets `video.muted` directly instead of re-attaching
+(the desktop's documented gotcha), and the fatal-error path stops the instance with an honest
+"try it in the main player" sentence; `MultiView.tsx` (toolbar, tile grid in flex-wrap — the
+codebase's first grid-like block without its first `display:grid` — per-tile name/audio/remove/
+play-in-main controls) and `MultiViewPicker.tsx` (favourites first per the operator's own
+desktop spec, then the primary's categories fetched one at a time on demand, then every
+additional playlist's in-memory catalogue; name filter; 200-row visible cap). **Live-verified
+against the real provider in the browser rig:** two Sky Sports HD tiles decode concurrently
+(playheads advancing in lockstep at the live edge, 1280px), slots survive a reload, the audio
+toggle moves between tiles without reloading either stream, layout switches keep the head
+slots, and ⤢ hands off to the main player ("Now playing:" bar and all). The live test itself
+caught and fixed two real bugs before release: the tile config needed LivePlayer's own
+`ignorePlaylistParsingErrors` (this provider's playlist-reconciliation quirk escalates to a
+fatal `levelParsingError` on a flat rendition — both tiles died within seconds without it), and
+`autoPlay` on the tile video (the v0.69.1 load-race lesson: a bare `play()` at attach loses to
+the MSE attach). 875 tests (10 new); typecheck, lint and the builds clean.
+
 **v0.80.0 — the reliability round: the guide refresh stops stalling, and slow categories say so.**
 Two measured problems, one theme. **The refresh stall:** a guide refresh kept the app responsive at
 12-20ms and then froze everything once for **3.9 seconds** while the parser ran — the parser was

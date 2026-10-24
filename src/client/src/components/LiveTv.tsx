@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { LivePlayer } from './LivePlayer'
+import { MultiView } from './MultiView'
 import { EpgGrid } from './EpgGrid'
 import { ReorderableChannelList, type ReorderableRow } from './ReorderableChannelList'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
@@ -116,6 +117,9 @@ export function LiveTv({
   const [newCategoryName, setNewCategoryName] = useState('')
   const [showNewCategory, setShowNewCategory] = useState(false)
   const [pickerSourceId, setPickerSourceId] = useState<string | null>(null)
+  // Multi-view (v0.81.0): the player block becomes a tiled grid. Deliberately a mode of THIS page,
+  // not a tab — switching tabs unmounts playback by design, and tiles are playback.
+  const [multiViewActive, setMultiViewActive] = useState(false)
 
   const { sidebarWidth, startSidebarDrag } = useSidebarWidth()
   const { dimension: playerMaxHeight, startDrag: startPlayerHeightDrag } = useResizableDimension(
@@ -600,6 +604,9 @@ export function LiveTv({
     (channel: LiveStream | null): void => {
       setNowPlaying(channel)
         setCatchup(null)
+      // Choosing to watch one channel properly leaves the tiled grid: tiles are real provider
+      // connections, and the main player is about to hold one itself.
+      if (channel) setMultiViewActive(false)
       if (!channel) return
       // Watching something is what history means here; failures are surfaced but never block play.
       // v0.78.0: the saved ref carries the playlist, so the primary's 668 and the backup's 668
@@ -929,12 +936,41 @@ export function LiveTv({
           title="Drag to resize the sidebar"
         />
 
-        {catchup && !catchupStream && !catchupError && (
+        {catchup && !catchupStream && !catchupError && !multiViewActive && (
           <div className="epg-note" style={{ padding: '8px 16px' }}>
             Preparing the catch-up stream — a few seconds the first time.
           </div>
         )}
-        {streamUrl && nowPlaying && (
+        {multiViewActive ? (
+          <>
+            <MultiView
+              client={session.client}
+              categories={categories}
+              favourites={liveFavourites.map((favourite) => ({
+                streamId: favourite.streamId,
+                name: favourite.name,
+                playlistId: favourite.playlistId
+              }))}
+              playlists={additional.map((entry) => ({ id: entry.id, label: entry.label, channels: entry.channels }))}
+              onPlayInMain={(slot) => {
+                const playlist = slot.playlistId ? additional.find((entry) => entry.id === slot.playlistId) : undefined
+                selectChannel(
+                  synthesizeStream(
+                    slot.streamId,
+                    slot.name,
+                    null,
+                    playlist ? { id: playlist.id, label: playlist.label } : undefined
+                  )
+                )
+              }}
+            />
+            <div
+              className="resize-handle resize-handle--row"
+              onPointerDown={startPlayerHeightDrag}
+              title="Drag to resize the tiles"
+            />
+          </>
+        ) : streamUrl && nowPlaying ? (
           <div className="player-section" style={{ '--player-max-height': `${playerMaxHeight}px` } as CSSProperties}>
             {/* A different source for the same channel: key it so the player reloads. */}
             <LivePlayer
@@ -1005,7 +1041,7 @@ export function LiveTv({
               title="Drag to resize the player"
             />
           </div>
-        )}
+        ) : null}
 
         {(loadError || prefsError || catchupError) && (
           <div className="login-error" style={{ padding: '8px 16px' }}>
@@ -1061,6 +1097,21 @@ export function LiveTv({
               Clear history
             </button>
           )}
+          <button
+            type="button"
+            className={multiViewActive ? 'admin-small-btn active' : 'admin-small-btn'}
+            aria-pressed={multiViewActive}
+            title="Show several live channels as tiles instead of the single player"
+            onClick={() => {
+              const entering = !multiViewActive
+              setMultiViewActive(entering)
+              // The grid holds one provider connection per tile and the provider allows ~2 —
+              // entering frees the main player's connection instead of competing with it.
+              if (entering) setNowPlaying(null)
+            }}
+          >
+            ◧ Multi-view
+          </button>
         </div>
 
         {(selection.type === 'favourites' || selection.type === 'custom') && !picking && libraryView === 'guide' ? (
