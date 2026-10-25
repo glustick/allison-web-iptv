@@ -15,6 +15,29 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.84.0 — revive on return: the always-on tab heals itself.** The measured incident
+(2026-10-25): a deploy recreated the container overnight, the operator's always-on Sky News
+tab exhausted its recovery ladder against the dead server, and then sat dropped for 5+ hours —
+zero requests reached the new container, because every terminal state in the player is inert
+by design and nothing in the client listened for the viewer's return. **The fix:** the player
+now listens for `visibilitychange`/`focus`, and on the tab's return does one of two things —
+a terminal state (fatal error, ladder gave up, not-broadcasting pause, session-keeps-ending)
+auto-**revives** through the Retry button's own code path (`retryPlayback`, which already
+routes an expired login to sign-in), bounded to **3 auto-revives per playback** so an off-air
+channel cannot be hammered by tabbing (the budget and the reload ladder both reset the moment
+fragments flow again); a merely-stalled stream gets **one immediate recovery pass** instead of
+waiting up to 15s of watchdog ticks after the browser unthrottles the tab. The decision logic
+is pure (`lib/reviveOnVisible.ts`, unit-tested); the player shows a visible "Reconnecting…"
+notice when it auto-revives, so the healing is never a mystery. **Verification:** unit tests
+(4 new, decision gates), full suite + typecheck + lint + build clean, and a live browser run
+confirming the listeners fire, the kick correctly no-ops on a healthy stream, and natural
+recovery is undisturbed — the full terminal→revive chain needs a genuine terminal state, which
+the local mock's finite fixture cannot produce (it heals naturally); that final proof belongs
+to the rig's rolling-writer mock, recorded here as the honest boundary. **Roadmap hygiene:**
+the long-stale "a dead producer is not a stall" open item is closed — v0.74.0 shipped exactly
+that detection and replacement for transcode sessions; the entry had simply never been
+corrected.
+
 **v0.83.0 — session hardening: a password change ends sessions, and the auth log becomes visible.**
 The "durable session service" item, cut to its real holes (the architecture was already
 service-shaped; the one-login-per-account rule stands untouched). **The core gap:** an admin
@@ -1964,10 +1987,14 @@ a native player there can hardware-decode HEVC on the same 3090 and needs nothin
   the plain tail exactly as before. The 2026-09-23 case it exists for: a fourteen-second session death
   whose buffered tail ended mid-`Skip(…)` warning while the cause had already been trimmed past the
   window. Corrected so it is not proposed again, the same class of correction as the two above.
-- **A dead producer is not a stall.** *Open.* The client recovery ladder handles a *starving* player; a
-  session whose ffmpeg has exited is a different thing, and the operator saw the result — the buffer
-  draining to zero and staying flat with no message. The session's own state should be a first-class
-  recovery case: detect it, replace it, or say so.
+- **A dead producer is not a stall.** *Shipped in v0.74.0 — and the entry below was stale, left open
+  long after the code landed.* The client recovery ladder handles a *starving* player; a session whose
+  ffmpeg has exited is a different thing. v0.74.0 shipped exactly this: dead transcode sessions are
+  detected (the fatal-network-error shape after retries exhaust) and **replaced with a fresh session
+  id** up to twice, with the third consecutive death surfacing the terminal "session keeps ending"
+  sentence instead of a loop. Corrected here (2026-10-24, while building v0.84.0's revive-on-return
+  beside it) so it is not proposed again — and v0.84.0 closed the remaining gap this entry always
+  implied: even a terminal state now heals itself when the viewer returns to the tab.
 
 *Where to start next session:* the media stats panel (v0.49.0) is the first thing to deploy and use. On
 a machine with the GPU, its WebCodecs line answers whether client-side decoding is real; in Chrome it

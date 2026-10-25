@@ -19,6 +19,7 @@ import { probeStreamTracks } from '../lib/audioTrackProbe'
 import { canDecodeVideoCodec, needsStreamCopyRemux } from '../lib/videoCapability'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
+import { shouldAutoRevive, shouldKickRecovery } from '../lib/reviveOnVisible'
 import { createPlaylistStallTracker } from '../lib/playlistStall'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
@@ -258,11 +259,57 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     // How many dead sessions this run has already replaced silently — three is a provider
     // dropping the channel, not a blip, and deserves the terminal sentence instead of a loop.
     let sessionReplacements = 0
+    // Auto-revives spent since the last successful playback (v0.84.0): a terminal state heals
+    // itself when the tab becomes visible again, bounded so an off-air channel cannot be
+    // hammered by tabbing. Reset where fragments resume, below.
+    let autoReviveAttempts = 0
     // The effect closure would otherwise keep the `error` state from this render forever — the
     // watchdog needs to see fatal give-ups that happen later in this same effect's lifetime.
     let fatalErrorShown = false
 // stalls are counted per stream; two of them mean this one cannot be relayed reliably
 let stallCount = 0
+    // Revive on return (v0.84.0): a terminal state after a hidden-tab incident (a deploy
+    // that recreated the server overnight is the measured case — the ladder exhausts itself
+    // against a dead server and nothing retries without a click) heals itself when the viewer
+    // comes back; a merely-stalled stream gets ONE recovery pass immediately instead of
+    // waiting up to 15s of watchdog ticks after the browser unthrottles the tab.
+    const onVisible = (): void => {
+      if (document.visibilityState !== 'visible') return
+      const terminal = gaveUp || fatalErrorShown
+      if (shouldAutoRevive({ terminal, autoReviveAttempts })) {
+        autoReviveAttempts += 1
+        console.warn('[player] tab visible again after a terminal state — auto-reviving')
+        setStatusNotice('Reconnecting — this stream ended while the tab was away…')
+        void retryPlayback()
+        return
+      }
+      if (
+        shouldKickRecovery({
+          terminal,
+          hasInstance: hlsRef.current !== null,
+          stalled: isPlayheadAtBufferEnd(video) || video.paused
+        })
+      ) {
+        const actions = liveRecoveryActions({
+          now: Date.now(),
+          lastFragmentAt,
+          runStartedAt,
+          playheadAtBufferEnd: isPlayheadAtBufferEnd(video),
+          hasFatalError: fatalErrorShown,
+          ended: video.ended,
+          paused: video.paused,
+          kicksSinceLastFragment
+        })
+        if (actions.kickLoader && hlsRef.current) {
+          kicksSinceLastFragment += 1
+          hlsRef.current.startLoad()
+          console.warn('[player] tab visible again — kicked the hls loader immediately')
+        }
+        if (actions.resumePlayback && video.paused) video.play().catch(() => {})
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
     const recoveryTimer = setInterval(() => {
       if (!hls || gaveUp || fatalErrorShown) return
       const actions = liveRecoveryActions({
@@ -441,6 +488,10 @@ let stallCount = 0
       instance.on(Hls.Events.FRAG_BUFFERED, () => {
         noteFragmentActivity()
         setStatusNotice(null)
+        // Playback provably works again — the auto-revive budget and the reload ladder both
+        // start over, so a later incident gets the full recovery run it deserves.
+        autoReviveAttempts = 0
+        reloadAttemptsRef.current = 0
         // Fragments are arriving and the session is still on the direct source, so this is the last
         // known *working* config for the channel — the other half of what the plan records
         // (lib/transcodeHints.ts, 2026-09-28). A later fallback reports its own outcome, which replaces
@@ -716,6 +767,8 @@ let stallCount = 0
     video.play().catch(() => {})
     return () => {
       clearInterval(recoveryTimer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
       video.removeEventListener('error', onNativeError)
       video.removeEventListener('waiting', handleWaiting)
       video.removeEventListener('playing', handlePlaying)
