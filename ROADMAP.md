@@ -31,9 +31,20 @@ is pure (`lib/reviveOnVisible.ts`, unit-tested); the player shows a visible "Rec
 notice when it auto-revives, so the healing is never a mystery. **Verification:** unit tests
 (4 new, decision gates), full suite + typecheck + lint + build clean, and a live browser run
 confirming the listeners fire, the kick correctly no-ops on a healthy stream, and natural
-recovery is undisturbed — the full terminal→revive chain needs a genuine terminal state, which
-the local mock's finite fixture cannot produce (it heals naturally); that final proof belongs
-to the rig's rolling-writer mock, recorded here as the honest boundary. **Roadmap hygiene:**
+recovery is undisturbed — and that evening the full chain was verified END-TO-END ON THE REAL
+SERVICE, mock limitation and all: signed in on the NAS deployment, real Sky News HD playing and
+advancing, the incident executed at three severities. A 15s `docker restart` was absorbed by
+the player's buffer alone (playhead never stopped); a 20s full container recreation was
+absorbed by hls.js's own retry budget (stream reloaded and continued); a minutes-long outage
+produced the genuine terminal state in ~30s — and with the service back and focus dispatched,
+the console caught `[player] tab visible again after a terminal state — auto-reviving`, the
+error cleared, and **Sky News was playing again within 10 seconds**, confirmed advancing at
+readyState 4. The session cookie survived the recreation (SQLite-backed sessions), so the
+revive needed no re-login. **Stability finding worth keeping:** deploys shorter than ~20-30s
+never reach the recovery ladder at all — the two natural tiers below it absorb them. Polish
+noted for a future pass: focus+visibilitychange arriving together double-fire the revive line
+in one tick (harmless — bounded, idempotent, budget resets on success); a 1s dedup would be
+tidy. **Roadmap hygiene:**
 the long-stale "a dead producer is not a stall" open item is closed — v0.74.0 shipped exactly
 that detection and replacement for transcode sessions; the entry had simply never been
 corrected.
