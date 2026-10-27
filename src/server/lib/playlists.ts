@@ -24,6 +24,13 @@
  *    playlist it means.
  */
 
+/** A usable per-account connection limit, or undefined for "unknown" — 0, negatives, floats and
+ *  garbage all read as unknown, because "no limit information" must never gate as "no limit". */
+function normalizeMaxConnections(value: unknown): number | undefined {
+  const parsed = typeof value === 'string' ? Number(value) : value
+  return typeof parsed === 'number' && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
+}
+
 /** One Xtream profile, with the identity and label a playlist needs to be addressable and shown. */
 export interface Playlist {
   /** Stable, unique within the account, and never derived from the provider — see the note above. */
@@ -33,6 +40,15 @@ export interface Playlist {
   server: string
   username: string
   password: string
+  /**
+   * The provider account's own concurrent-connection limit, captured best-effort at
+   * credential-save time from the auth response's `user_info.max_connections` (v0.86.0).
+   * Absent = unknown — the panel never answered, or answered nothing usable — and unknown never
+   * gates anything (the desktop sibling's own rule for M3U profiles, whose synthesized
+   * max_connections is '0' precisely because "no limit information" must not read as "no
+   * limit"). A positive integer survives the round trip; everything else is dropped on read.
+   */
+  maxConnections?: number
 }
 
 /** The stored blob, versioned so a later shape can be recognised rather than guessed at. */
@@ -58,7 +74,9 @@ export interface ParsedPlaylists {
   migrated: boolean
 }
 
-const PROVIDER_FIELDS = ['server', 'username', 'password'] as const
+// max_connections is provider-account state, not an account setting — it routes to the primary
+// playlist with the credentials it was measured against (v0.86.0).
+const PROVIDER_FIELDS = ['server', 'username', 'password', 'maxConnections'] as const
 
 /** The id a migrated single profile gets — stable, and obviously the original one. */
 export const MIGRATED_PLAYLIST_ID = 'primary'
@@ -109,7 +127,8 @@ export function parsePlaylists(raw: unknown): ParsedPlaylists {
         label: isNonEmptyString(item.label) ? item.label : item.id,
         server: item.server,
         username: isNonEmptyString(item.username) ? item.username : '',
-        password: isNonEmptyString(item.password) ? item.password : ''
+        password: isNonEmptyString(item.password) ? item.password : '',
+        maxConnections: normalizeMaxConnections(item.maxConnections)
       })
     }
     const carried = { ...blob }
@@ -309,7 +328,8 @@ export function replacePlaylists(parsed: ParsedPlaylists, playlists: Playlist[])
       label: entry.label.trim() || id,
       server: entry.server.trim(),
       username: entry.username.trim(),
-      password: entry.password
+      password: entry.password,
+      maxConnections: normalizeMaxConnections(entry.maxConnections)
     })
   }
   return { envelope: { version: 1, playlists: cleaned }, carried: { ...parsed.carried }, migrated: false }

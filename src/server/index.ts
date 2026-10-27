@@ -1213,6 +1213,7 @@ for (const user of usersStore.listUsers()) {
 }
 
 app.post('/api/session/save', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
   const session = req.authSession as AuthSession
     const { server, username, password, epgUrls, alertWebhook, backupServer } = req.body ?? {}
   // A blank password means "leave the stored one alone". The settings screen can no longer read
@@ -1256,6 +1257,25 @@ app.post('/api/session/save', requireAuth, (req, res) => {
                   : existing?.alertWebhook,
             backupServer: effectiveBackupServer
     }
+    // The provider's own connection limit for the primary, kept or probed like a playlist edit
+    // (v0.86.0): unchanged credentials keep the stored value; changed ones re-ask the panel.
+    // Threaded through the patch so applyCredentialPatch routes it to playlist[0] with the
+    // credentials it was measured against. Best-effort — an unanswering panel leaves it unknown.
+    {
+      const storedPrimary = primaryPlaylist(parseStoredPlaylists(session.username).envelope.playlists)
+      const unchanged =
+        storedPrimary !== null &&
+        storedPrimary.server === credentials.server &&
+        storedPrimary.username === credentials.username &&
+        storedPrimary.password === effectivePassword
+      let maxConnections: number | null = unchanged ? storedPrimary?.maxConnections ?? null : null
+      if (maxConnections === null) {
+        maxConnections = await probeMaxConnections(credentials.server, credentials.username, effectivePassword)
+      }
+      if (maxConnections !== null) {
+        ;(credentials as unknown as Record<string, unknown>).maxConnections = maxConnections
+      }
+    }
     saveAccountCredentials(session.username, credentials as unknown as Record<string, unknown>)
 
     // Guide sources are a SYSTEM setting now (lib/systemEpg.ts), so the setup screen's field is
@@ -1280,6 +1300,7 @@ app.post('/api/session/save', requireAuth, (req, res) => {
     console.error('[session] save failed:', err)
     res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
   }
+  })()
 })
 
 app.post('/api/session/clear', requireAuth, (req, res) => {
@@ -1332,6 +1353,24 @@ app.get('/api/version-check', (_req, res) => {
 // Cached briefly: the health page polls, and hammering the provider's auth endpoint on every
 // poll would be rude (and slow).
 let providerProbeCache: { at: number; value: Record<string, unknown> } | null = null
+
+/** The provider account's own concurrent-connection limit, or null when unknowable (v0.86.0).
+ *  Same player_api call probeProvider makes, answered as one number: the auth response's
+ *  user_info.max_connections, normalized to a positive integer. A failed or garbage answer is
+ *  null — "unknown" — and unknown never gates anything (see Playlist.maxConnections). */
+async function probeMaxConnections(server: string, username: string, password: string): Promise<number | null> {
+  const base = server.trim().replace(/\/+$/, '')
+  const url = `${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+  try {
+    const body = await fetchTextViaUpstream(undefined, url, 10_000, undefined, 8_000)
+    const parsed = JSON.parse(body) as { user_info?: { max_connections?: unknown } }
+    const raw = parsed.user_info?.max_connections
+    const value = typeof raw === 'string' ? Number(raw) : raw
+    return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
+  } catch {
+    return null
+  }
+}
 
 async function probeProvider(credentials: SessionCredentials): Promise<Record<string, unknown>> {
   if (providerProbeCache && Date.now() - providerProbeCache.at < 30_000) return providerProbeCache.value
@@ -1857,6 +1896,7 @@ app.get('/api/iptv/playlists', requireAuth, (req, res) => {
 })
 
 app.put('/api/iptv/playlists', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
   const session = req.authSession as AuthSession
   const submitted: unknown = req.body?.playlists
   if (!Array.isArray(submitted)) {
@@ -1897,7 +1937,26 @@ app.put('/api/iptv/playlists', requireAuth, (req, res) => {
   }
 
   try {
-    const replaced = replacePlaylists(current, next)
+    // The provider's own connection limit rides along per playlist (v0.86.0): kept when the
+    // credentials did not change (an unrelated edit — a relabel, a rehide — must not re-ask the
+    // panel), probed fresh when they did. Best-effort by design: a panel that does not answer
+    // leaves the limit unknown, and unknown never gates anything.
+    const withLimits = await Promise.all(
+      next.map(async (entry) => {
+        const stored = current.envelope.playlists.find((playlist) => playlist.id === entry.id)
+        const unchanged =
+          stored !== undefined &&
+          stored.server === entry.server &&
+          stored.username === entry.username &&
+          stored.password === entry.password
+        if (unchanged && stored.maxConnections !== undefined) {
+          return { ...entry, maxConnections: stored.maxConnections }
+        }
+        const probed = await probeMaxConnections(entry.server, entry.username, entry.password)
+        return probed === null ? entry : { ...entry, maxConnections: probed }
+      })
+    )
+    const replaced = replacePlaylists(current, withLimits)
     usersStore.setIptvCredentials(
       session.username,
       encryptSessionCredentials(serializePlaylists(replaced) as unknown as SessionCredentials)
@@ -1916,6 +1975,7 @@ app.put('/api/iptv/playlists', requireAuth, (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Could not save the playlists' })
   }
+  })()
 })
 
 /**

@@ -15,6 +15,25 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.86.0 — the ceiling stops being a guess: the provider's own limit, gated per account.** The
+v0.85.0 budget said "about 2" because two was the honest precision anyone had. This round asks
+the provider: the auth response's `user_info.max_connections` is captured **per playlist, at
+credential-save time, best-effort** (`probeMaxConnections`, the same player_api call
+`probeProvider` makes — kept when the credentials did not change so a relabel never re-asks the
+panel, probed fresh when they did, left unknown when the panel does not answer). It lives on the
+playlist (`Playlist.maxConnections`, normalized: a numeric string counts, 0/negative/float/garbage
+read as unknown — the desktop sibling's own rule that "no limit information" must never gate as
+"no limit"), routes through `applyCredentialPatch` to the primary, and flows out of
+`GET /api/iptv/playlists` for free. **The client spends it per account** (`connectionBudget.ts`):
+a known limit makes the toolbar's sentence exact ("this account allows N concurrent streams" —
+no "about") and **the picker refuses rows of an account already at its own limit** — each tile is
+one genuine provider connection, and this number came from the provider, not from us. Unknown
+limits keep the v0.85.0 behaviour everywhere: standing hint, warning, never a block. Per-account
+usage is counted from the tile set itself (`accountTileUsage` — the main player is cleared while
+the grid is up, so the tiles are the whole story), which is honest where the global ledger is
+not: a two-playlist household genuinely holds two accounts' worth of connections. 924 tests
+(9 new); typecheck, lint and the builds clean.
+
 **v0.85.0 — the connection count, live: the multi-view ceiling becomes a number.** The multi-view
 design (v0.81.0) is owned end to end by one constraint — the provider allows the account about two
 concurrent connections — and until now that constraint was a STANDING hint in the toolbar, because

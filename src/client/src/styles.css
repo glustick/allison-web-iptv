@@ -1951,3 +1951,14 @@ body.resizing-col .resize-handle--feeds::after {
 .audit-agent {
   overflow-wrap: anywhere;
 }
+
+/* A picker row whose account is at its provider-stated limit (v0.86.0): refused, not warned —
+   the number came from the provider. */
+.multiview-picker-row--blocked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.multiview-picker-row--blocked:hover {
+  background: transparent;
+}

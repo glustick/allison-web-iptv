@@ -282,3 +282,53 @@ describe('storedPassword', () => {
     expect(storedPassword(parsed, 'gone')).toBe('')
   })
 })
+
+describe('maxConnections (v0.86.0)', () => {
+  it('round-trips a captured limit per playlist, primary included', () => {
+    const blob = {
+      version: 1,
+      playlists: [
+        { id: 'primary', label: 'Primary', server: 's', username: 'u', password: 'p', maxConnections: 2 },
+        { id: 'p2', label: 'Backup', server: 's2', username: 'u2', password: 'p2', maxConnections: 5 }
+      ]
+    }
+    const parsed = parsePlaylists(blob)
+    expect(parsed.envelope.playlists[0].maxConnections).toBe(2)
+    expect(parsed.envelope.playlists[1].maxConnections).toBe(5)
+    const stored = serializePlaylists(parsed)
+    expect((stored.playlists as Array<{ maxConnections?: number }>)[0].maxConnections).toBe(2)
+    // And back again — the value survives a write/read cycle.
+    expect(parsePlaylists(stored).envelope.playlists[1].maxConnections).toBe(5)
+  })
+
+  it('normalizes: a numeric string counts, zero/negative/float/garbage read as unknown', () => {
+    const blob = {
+      version: 1,
+      playlists: [
+        { id: 'a', server: 's', username: 'u', password: 'p', maxConnections: '3' },
+        { id: 'b', server: 's', username: 'u', password: 'p', maxConnections: 0 },
+        { id: 'c', server: 's', username: 'u', password: 'p', maxConnections: -2 },
+        { id: 'd', server: 's', username: 'u', password: 'p', maxConnections: 2.5 },
+        { id: 'e', server: 's', username: 'u', password: 'p', maxConnections: 'plenty' },
+        { id: 'f', server: 's', username: 'u', password: 'p' }
+      ]
+    }
+    const playlists = parsePlaylists(blob).envelope.playlists
+    expect(playlists.find((p) => p.id === 'a')?.maxConnections).toBe(3)
+    for (const id of ['b', 'c', 'd', 'e', 'f']) {
+      expect(playlists.find((p) => p.id === id)?.maxConnections).toBeUndefined()
+    }
+  })
+
+  it('applyCredentialPatch routes the limit to the primary playlist, not the carried account', () => {
+    const parsed = parsePlaylists({ version: 1, playlists: [{ id: 'primary', label: 'Primary', server: 's', username: 'u', password: 'p' }] })
+    const patched = applyCredentialPatch(parsed, { maxConnections: 2 })
+    expect(patched.envelope.playlists[0].maxConnections).toBe(2)
+    expect(patched.carried.maxConnections).toBeUndefined()
+  })
+
+  it('a legacy blob migrates with no limit, and an absent field stays absent', () => {
+    const migrated = parsePlaylists({ server: 's', username: 'u', password: 'p' })
+    expect(migrated.envelope.playlists[0].maxConnections).toBeUndefined()
+  })
+})

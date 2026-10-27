@@ -2,7 +2,14 @@ import { useEffect, useMemo, useState, type JSX } from 'react'
 import type { XtreamClient } from '../lib/xtreamClient'
 import type { Category, LiveStream } from '../lib/types'
 import type { MultiViewSlot } from '../lib/multiViewPrefs'
-import { CONNECTION_CEILING, tileWouldExceed, type ConnectionSnapshot } from '../lib/connectionBudget'
+import {
+  CONNECTION_CEILING,
+  accountTileUsage,
+  tileGate,
+  tileWouldExceed,
+  type ConnectionSnapshot,
+  type PlaylistLimits
+} from '../lib/connectionBudget'
 
 /**
  * The multi-view tile picker — the desktop sibling's picker re-cut for this app's shapes.
@@ -21,6 +28,11 @@ export interface MultiViewPickerProps {
   playlists: Array<{ id: string; label: string; channels: LiveStream[] }>
   /** The live connection count (null while unknown) — gates the add-at-the-ceiling warning. */
   connections: ConnectionSnapshot | null
+  /** Per-account provider limits ('' = primary, v0.86.0): a KNOWN limit blocks rows of an
+   *  account already at it; unknown accounts keep the warn-only behaviour. */
+  limits: PlaylistLimits
+  /** The current tile set — an account's own tiles are the connections it is holding. */
+  slots: Array<MultiViewSlot | null>
   onAssign: (slot: MultiViewSlot) => void
   onClose: () => void
 }
@@ -44,6 +56,8 @@ export function MultiViewPicker({
   favourites,
   playlists,
   connections,
+  limits,
+  slots,
   onAssign,
   onClose
 }: MultiViewPickerProps): JSX.Element {
@@ -162,11 +176,22 @@ export function MultiViewPicker({
                 : 'No channels match the filter.'}
             </div>
           )}
-          {rows.slice(0, MAX_ROWS).map((row) => (
+          {rows.slice(0, MAX_ROWS).map((row) => {
+            // Judged against the row's OWN account: its tiles so far vs its provider limit.
+            const accountKey = row.playlistId ?? ''
+            const gate = tileGate(accountTileUsage(slots, accountKey), limits[accountKey] ?? null, connections)
+            const blocked = gate === 'block'
+            return (
             <button
               type="button"
               key={row.key}
-              className="multiview-picker-row"
+              className={`multiview-picker-row${blocked ? ' multiview-picker-row--blocked' : ''}`}
+              disabled={blocked}
+              title={
+                blocked
+                  ? `This account already holds ${accountTileUsage(slots, accountKey)} of its ${limits[accountKey]} allowed connections — remove one of its tiles first.`
+                  : undefined
+              }
               onClick={() =>
                 onAssign({ streamId: row.streamId, name: row.name, playlistId: row.playlistId })
               }
@@ -176,8 +201,10 @@ export function MultiViewPicker({
                 {row.name}
               </span>
               {row.playlistLabel ? <span className="multiview-picker-badge">{row.playlistLabel}</span> : null}
+              {blocked ? <span className="multiview-picker-badge">at limit</span> : null}
             </button>
-          ))}
+            )
+          })}
           {rows.length > MAX_ROWS && (
             <div className="epg-note">Showing {MAX_ROWS} of {rows.length} — keep typing to narrow it down.</div>
           )}

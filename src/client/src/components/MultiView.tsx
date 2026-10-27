@@ -9,7 +9,7 @@ import {
   type MultiViewLayout,
   type MultiViewSlot
 } from '../lib/multiViewPrefs'
-import { connectionStatus, useConnectionCount, type ConnectionSnapshot } from '../lib/connectionBudget'
+import { connectionStatus, useConnectionCount, type ConnectionSnapshot, type PlaylistLimits } from '../lib/connectionBudget'
 import { useMultiViewTile } from '../lib/useMultiViewTile'
 import { MultiViewPicker } from './MultiViewPicker'
 
@@ -37,6 +37,9 @@ export interface MultiViewProps {
   categories: Category[]
   favourites: Array<{ streamId: number; name: string; playlistId?: string }>
   playlists: Array<{ id: string; label: string; channels: LiveStream[] }>
+  /** Per-account connection ceilings from the provider (v0.86.0); the toolbar's sentence and the
+   *  picker's block use the account's own number when it is known. */
+  limits: PlaylistLimits
   /** Play a tile's channel in the main player — the grid exits when this fires. */
   onPlayInMain: (slot: MultiViewSlot) => void
 }
@@ -107,14 +110,16 @@ function TileView({
   )
 }
 
-export function MultiView({ client, categories, favourites, playlists, onPlayInMain }: MultiViewProps): JSX.Element {
+export function MultiView({ client, categories, favourites, playlists, limits, onPlayInMain }: MultiViewProps): JSX.Element {
   const [prefs, setPrefs] = useState(() => loadMultiViewPrefs())
   const [activeAudio, setActiveAudio] = useState<number | null>(null)
   const [pickingSlot, setPickingSlot] = useState<number | null>(null)
   // The live count behind the toolbar's sentence and the picker's warning (v0.85.0) — polled
   // only while the grid is mounted, which is the only surface that adds connections in bulk.
   const connections: ConnectionSnapshot | null = useConnectionCount()
-  const connectionNote = connectionStatus(connections)
+  // The primary's own number when the provider stated one: the sentence says it exactly instead
+  // of "about 2" (v0.86.0). '' is the primary's key in the limits map.
+  const connectionNote = connectionStatus(connections, limits[''] ?? null)
 
   // Slot changes derive from the PREVIOUS state inside the updater, never from a render-time
   // closure: several removals landing in one batch (the rig's teardown found this) each built
@@ -203,6 +208,8 @@ export function MultiView({ client, categories, favourites, playlists, onPlayInM
           favourites={favourites}
           playlists={playlists}
           connections={connections}
+          limits={limits}
+          slots={prefs.slots}
           onAssign={(slot) => assign(pickingSlot, slot)}
           onClose={() => setPickingSlot(null)}
         />

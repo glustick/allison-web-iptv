@@ -3,6 +3,7 @@ import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { LivePlayer } from './LivePlayer'
 import { MultiView } from './MultiView'
+import type { PlaylistLimits } from '../lib/connectionBudget'
 import { EpgGrid } from './EpgGrid'
 import { ReorderableChannelList, type ReorderableRow } from './ReorderableChannelList'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
@@ -120,6 +121,10 @@ export function LiveTv({
   // Multi-view (v0.81.0): the player block becomes a tiled grid. Deliberately a mode of THIS page,
   // not a tab — switching tabs unmounts playback by design, and tiles are playback.
   const [multiViewActive, setMultiViewActive] = useState(false)
+  // Per-account provider connection ceilings for the multi-view surfaces (v0.86.0): '' is the
+  // primary. Empty until the playlists fetch answers — empty means "all unknown", which is
+  // exactly the v0.85.0 warn-only behaviour.
+  const [playlistLimits, setPlaylistLimits] = useState<PlaylistLimits>({})
 
   const { sidebarWidth, startSidebarDrag } = useSidebarWidth()
   const { dimension: playerMaxHeight, startDrag: startPlayerHeightDrag } = useResizableDimension(
@@ -164,9 +169,21 @@ export function LiveTv({
     fetch('/api/iptv/playlists')
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return (await res.json()) as { playlists?: Array<{ id: string; label: string }> }
+        return (await res.json()) as {
+          playlists?: Array<{ id: string; label: string; maxConnections?: number }>
+        }
       })
       .then(async (body) => {
+        // Every playlist's provider-stated connection ceiling (v0.86.0), the primary keyed ''.
+        // maxConnections is optional by design — an account the panel never answered for reads
+        // as null, and null never gates anything.
+        if (active) {
+          setPlaylistLimits(
+            Object.fromEntries(
+              (body.playlists ?? []).map((p) => [p.id === 'primary' ? '' : p.id, p.maxConnections ?? null])
+            )
+          )
+        }
         const saved = (body.playlists ?? []).filter((p) => p.id !== 'primary')
         if (!active) return
         setAdditional(saved.map((p) => ({ id: p.id, label: p.label, channels: [], error: null })))
@@ -944,6 +961,7 @@ export function LiveTv({
         {multiViewActive ? (
           <>
             <MultiView
+              limits={playlistLimits}
               client={session.client}
               categories={categories}
               favourites={liveFavourites.map((favourite) => ({
