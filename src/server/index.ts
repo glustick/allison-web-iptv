@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url'
 import express, { type Request, type Response, type NextFunction } from 'express'
 import { createRequire } from 'module'
 import { createProxyServer, type ProxyServerDeps } from './lib/proxyServer.js'
+import { createConnectionLedger } from './lib/connectionLedger.js'
 import { fetchTextViaUpstream } from './lib/upstreamText.js'
 import { createNodeUpstreamRequest, upstreamRequestProfileFor } from './lib/nodeUpstreamRequest.js'
 import { createTranscodeService, prepareTranscodeDir, resolveTranscodeDir } from './lib/transcodeService.js'
@@ -410,6 +411,20 @@ function sanitizeEpgUrls(value: unknown): string[] | undefined {
 }
 
 // --- Ported proxy server, running on its own internal-only port ---------------------------
+// Which streams are actively holding provider connections (v0.85.0) — the live number behind
+// the multi-view surfaces' connection gating. Recorded by the stream routes below (playlist
+// fetches) and by the proxy's segment traffic (by Referer); read by /api/iptv/connections.
+const connectionLedger = createConnectionLedger()
+
+/** The Referer path is only a stream identity when it is one of this app's relay paths (primary
+ *  or playlist-scoped) — an M3U-profile playlist's /__fetch/ Referer or garbage is not a
+ *  connection worth counting. */
+const RELAY_ACTIVITY_PATH = /^\/api(?:\/iptv\/playlists\/[^/]+)?\/(?:stream|timeshift)\//
+
+function recordRelayActivity(appPath: string): void {
+  if (RELAY_ACTIVITY_PATH.test(appPath)) connectionLedger.record(appPath)
+}
+
 const proxyDeps: ProxyServerDeps = {
   getProxyTargetBase: (req?: IncomingMessage) => getProxyTargetBase(req),
   getProxyBackupBase: (req, primaryTarget) => getProxyBackupBase(req, primaryTarget),
@@ -437,7 +452,8 @@ const proxyDeps: ProxyServerDeps = {
       if (!res.headersSent) res.writeHead(500)
       res.end('Transcode serve error')
     })
-  }
+  },
+  onRelayActivity: recordRelayActivity
 }
 const proxyServer = createProxyServer(proxyDeps)
 proxyServer.listen(PROXY_INTERNAL_PORT, '127.0.0.1', () => {
@@ -1019,6 +1035,7 @@ app.get('/api/timeshift/:file', requireAuth, (req, res) => {
   // credentials are injected here rather than travelling through the browser.
   const rewritten = req as unknown as IncomingMessage & { url?: string }
   rewritten.url = upstreamPath
+  connectionLedger.record(req.path)
   relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
 })
 
@@ -1052,6 +1069,7 @@ app.get('/api/iptv/playlists/:playlistId/timeshift/:file', requireAuth, (req, re
   rewritten.headers['x-proxy-target-base'] = playlist.server
   rewritten.headers['x-app-playlist-key'] = req.path
   rewritten.url = upstreamPath
+  connectionLedger.record(req.path)
   relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
 })
 
@@ -1068,6 +1086,10 @@ app.get('/api/stream/:kind/:file', requireAuth, (req, res) => {
     res.status(400).json({ error: 'Unsupported stream path' })
     return
   }
+  // Every playlist reload lands here (a live playlist re-requests every few seconds), and the
+  // segment requests that follow carry this same path as their Referer — one key per playing
+  // stream for the connection ledger.
+  connectionLedger.record(req.path)
   const rewritten = req as unknown as IncomingMessage & { url?: string }
   // The playlist window inside the proxy is keyed by the app-side URL — the same pathname the
   // players' segment requests carry as their Referer, which is what the refused-segment retry
@@ -1959,7 +1981,32 @@ app.get('/api/iptv/playlists/:playlistId/stream/:kind/:file', requireAuth, (req,
     'x-app-playlist-key': req.path
   }
   scoped.url = `/${kind}/${encodeURIComponent(credentials.username)}/${encodeURIComponent(credentials.password)}/${file}`
+  connectionLedger.record(req.path)
   relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
+})
+
+// The live connection count (v0.85.0): how many provider connections this app is holding right
+// now — actively-relayed streams (main player, each multi-view tile, a film, a catch-up
+// programme) plus one per running transcode session, each of which reads a live source. The
+// count is request ACTIVITY, not open tabs: the relay is one-request-one-connection, so a
+// player that stops fetching stops counting. Deliberately no panel probe here — this is the
+// app's own honest arithmetic, answerable instantly and as often as the client wants to ask.
+app.get('/api/iptv/connections', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
+    try {
+      const streams = connectionLedger.active()
+      const transcodes = await transcodeService.stats()
+      res.json({
+        ok: true,
+        streams,
+        streamCount: streams.length,
+        transcodes: transcodes.length,
+        used: streams.length + transcodes.length
+      })
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Connection count failed' })
+    }
+  })()
 })
 
 // --- Channel plans (what each channel needs, remembered) ------------------------------------

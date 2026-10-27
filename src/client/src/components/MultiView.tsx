@@ -9,6 +9,7 @@ import {
   type MultiViewLayout,
   type MultiViewSlot
 } from '../lib/multiViewPrefs'
+import { connectionStatus, useConnectionCount, type ConnectionSnapshot } from '../lib/connectionBudget'
 import { useMultiViewTile } from '../lib/useMultiViewTile'
 import { MultiViewPicker } from './MultiViewPicker'
 
@@ -110,34 +111,40 @@ export function MultiView({ client, categories, favourites, playlists, onPlayInM
   const [prefs, setPrefs] = useState(() => loadMultiViewPrefs())
   const [activeAudio, setActiveAudio] = useState<number | null>(null)
   const [pickingSlot, setPickingSlot] = useState<number | null>(null)
+  // The live count behind the toolbar's sentence and the picker's warning (v0.85.0) — polled
+  // only while the grid is mounted, which is the only surface that adds connections in bulk.
+  const connections: ConnectionSnapshot | null = useConnectionCount()
+  const connectionNote = connectionStatus(connections)
 
-  const update = (next: { layout?: MultiViewLayout; slots?: Array<MultiViewSlot | null> }): void => {
-    setPrefs((prev) => {
-      const layout = next.layout ?? prev.layout
-      const slots = resizeSlots(next.slots ?? prev.slots, layout)
-      const merged = { layout, slots }
-      saveMultiViewPrefs(merged)
-      return merged
-    })
-  }
+  // Slot changes derive from the PREVIOUS state inside the updater, never from a render-time
+  // closure: several removals landing in one batch (the rig's teardown found this) each built
+  // from the same stale snapshot and overwrote each other — only the last click survived.
+  // Persistence rides an effect, so an updater stays pure and a change can't skip its save.
+  useEffect(() => {
+    saveMultiViewPrefs(prefs)
+  }, [prefs])
 
   const setLayout = (layout: MultiViewLayout): void => {
     // A dropped tile's audio goes with it; the surviving indices keep their meaning.
     setActiveAudio((current) => (current !== null && current >= layout ? null : current))
-    update({ layout })
+    setPrefs((prev) => ({ layout, slots: resizeSlots(prev.slots, layout) }))
   }
 
   const assign = (index: number, slot: MultiViewSlot): void => {
-    const slots = [...prefs.slots]
-    slots[index] = slot
-    update({ slots })
+    setPrefs((prev) => {
+      const slots = resizeSlots([...prev.slots], prev.layout)
+      slots[index] = slot
+      return { layout: prev.layout, slots }
+    })
     setPickingSlot(null)
   }
 
   const remove = (index: number): void => {
-    const slots = [...prefs.slots]
-    slots[index] = null
-    update({ slots })
+    setPrefs((prev) => {
+      const slots = resizeSlots([...prev.slots], prev.layout)
+      slots[index] = null
+      return { layout: prev.layout, slots }
+    })
     if (activeAudio === index) setActiveAudio(null)
   }
 
@@ -157,9 +164,7 @@ export function MultiView({ client, categories, favourites, playlists, onPlayInM
             </button>
           ))}
         </span>
-        <span className="epg-note">
-          Each tile is a live connection — the provider allows about 2, so tiles beyond that may starve.
-        </span>
+        <span className="epg-note">{connectionNote.text}</span>
       </div>
       <div className={`multiview-grid multiview-grid--${prefs.layout}`}>
         {prefs.slots.map((slot, index) =>
@@ -197,6 +202,7 @@ export function MultiView({ client, categories, favourites, playlists, onPlayInM
           categories={categories}
           favourites={favourites}
           playlists={playlists}
+          connections={connections}
           onAssign={(slot) => assign(pickingSlot, slot)}
           onClose={() => setPickingSlot(null)}
         />

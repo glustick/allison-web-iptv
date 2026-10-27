@@ -19,7 +19,7 @@ import { probeStreamTracks } from '../lib/audioTrackProbe'
 import { canDecodeVideoCodec, needsStreamCopyRemux } from '../lib/videoCapability'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
-import { shouldAutoRevive, shouldKickRecovery } from '../lib/reviveOnVisible'
+import { shouldAcceptVisibleEvent, shouldAutoRevive, shouldKickRecovery } from '../lib/reviveOnVisible'
 import { createPlaylistStallTracker } from '../lib/playlistStall'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
@@ -273,8 +273,14 @@ let stallCount = 0
     // against a dead server and nothing retries without a click) heals itself when the viewer
     // comes back; a merely-stalled stream gets ONE recovery pass immediately instead of
     // waiting up to 15s of watchdog ticks after the browser unthrottles the tab.
+    // focus + visibilitychange fire together on a real return (measured on the live service)
+    // — one action per second keeps the pair from doing everything twice in one tick.
+    let lastVisibleActionAt: number | null = null
     const onVisible = (): void => {
       if (document.visibilityState !== 'visible') return
+      const nowMs = Date.now()
+      if (!shouldAcceptVisibleEvent(lastVisibleActionAt, nowMs)) return
+      lastVisibleActionAt = nowMs
       const terminal = gaveUp || fatalErrorShown
       if (shouldAutoRevive({ terminal, autoReviveAttempts })) {
         autoReviveAttempts += 1

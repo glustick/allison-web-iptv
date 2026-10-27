@@ -41,3 +41,18 @@ export interface KickState {
 export function shouldKickRecovery(state: KickState): boolean {
   return !state.terminal && state.hasInstance && state.stalled
 }
+
+/** Focus and visibilitychange arrive TOGETHER when a viewer returns to a tab — measured on the
+ *  real service (v0.84.0's E2E): both fired in one tick and the revive ran twice in the same
+ *  millisecond (harmless, bounded, idempotent — but noisy, and double work). One visible-event
+ *  action per second is the whole rule; a genuinely new return is never this close to the last. */
+export const VISIBLE_EVENT_DEDUP_MS = 1000
+
+/** True when a visible event should ACT, given when the last one acted. */
+export function shouldAcceptVisibleEvent(
+  lastAcceptedAt: number | null,
+  now: number,
+  dedupMs: number = VISIBLE_EVENT_DEDUP_MS
+): boolean {
+  return lastAcceptedAt === null || now - lastAcceptedAt >= dedupMs
+}

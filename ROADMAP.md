@@ -15,6 +15,46 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.85.0 — the connection count, live: the multi-view ceiling becomes a number.** The multi-view
+design (v0.81.0) is owned end to end by one constraint — the provider allows the account about two
+concurrent connections — and until now that constraint was a STANDING hint in the toolbar, because
+the live number existed nowhere: every playing surface (main player, each tile, a film, a catch-up
+programme, every ffmpeg session) is relayed through this app, but nothing counted them. **The
+server keeps the count itself now** (`lib/connectionLedger.ts`): a stream counts while requests for
+it flow — playlist reloads recorded at the four relay routes, segment traffic recorded in the proxy
+by its Referer path (the same measured signal the signature-expiry rescue keys its windows on;
+ffmpeg's Referer-less fetches are counted as transcode sessions instead) — and an entry with no
+traffic for 30 seconds stops counting, which is honest arithmetic rather than a heuristic: the
+relay is one-request-one-connection (`agent:false`, v0.71.0), so a paused player with a full
+buffer genuinely holds no provider connection. Running transcode sessions add one each from the
+transcode service's own inventory. **`GET /api/iptv/connections`** answers instantly — streams
+with their idle ages, the transcode count, and `used` — with deliberately no panel probe behind
+it: this is the app's own accounting, pollable as often as a surface wants to ask. **The client
+surfaces it where connections are spent:** the multi-view toolbar's standing sentence becomes the
+live one ("1 live connection in use — room for another tile" / "…at the provider's limit of about
+2; another tile may starve" / "…over the provider's limit…; tiles may be starving now"; polled
+every 15s while the grid is mounted, degrading to the old standing hint whenever the count is
+unknown — a 401 or a hiccup changes nothing), and the tile picker shows a warning line when
+adding would reach past the ceiling — a warning, never a block, the feature's standing design
+rule. The ceiling itself stays the honest constant "about 2" rather than panel data. **The rig's
+teardown pass then caught a real bug in the grid it was testing:** `remove`/`assign` built the
+next slot array from the render-time state closure, so several removals landing in one batch
+overwrote each other — only the last click survived, and the connection count is what made it
+visible (two "removed" tiles kept streaming, still counted). Slot changes are functional updaters
+now, with persistence moved to an effect so an updater stays pure. **Also riding along, the
+v0.84.0 polish:** focus + visibilitychange fire together on a real return (measured on the live
+service) and the revive ran twice in one tick — `shouldAcceptVisibleEvent` (pure) limits the
+player to one visible-event action per second. **Roadmap hygiene:** the guide-mapping entry's
+"genuinely remains open" fuzzy-suggestion half was already closed by v0.82.0's bulk suggestions —
+corrected below. **Rig-verified end to end against a fake provider serving true sliding-window
+live channels:** the count follows a playing stream under its exact key
+(`/api/stream/live/668.m3u8`), an actively-playing live stream keeps its entry fresh while a
+stopped one decays to zero exactly at the 30s window, each tile counts as one connection (1 → 2 →
+3 as tiles attach), the toolbar sentence tracks the live number at and past the ceiling, the
+picker warns at the ceiling, and removing every tile returns the count to zero. 915 tests (17
+new: the ledger, the budget's sentences and gates, the visible-event dedup); typecheck, lint and
+the builds clean.
+
 **v0.84.0 — revive on return: the always-on tab heals itself.** The measured incident
 (2026-10-25): a deploy recreated the container overnight, the operator's always-on Sky News
 tab exhausted its recovery ladder against the dead server, and then sat dropped for 5+ hours —
@@ -2143,11 +2183,14 @@ BBC One HD, Scripps, US local ABC/CW affiliates, NFHS, 24/7 channels):
   (`lib/epgPresets.ts`: epgshare01 UK/IE/AU plus i.mjh.nz Sydney), each carrying the date it was fetched
   and a plain-language note on size and id shape. Corrected so it is not proposed again — the same class
   of correction as the transcode-idle entry above.
-- **Manual channel→guide mapping + optional fuzzy joins.** *Half shipped (v0.76.0) — the entry was
-  partially stale.* The one-click "map this channel to a guide id" override this entry asked for is
-  the Map… button and its picker (`guideMappings.ts`, the manual tier wins over every automatic
-  strategy, per playlist since v0.78.0). What genuinely remains open is only the second half: a
-  fuzzy/substring pass offered as a suggestion rather than applied silently.
+- **Manual channel→guide mapping + optional fuzzy joins.** *Shipped whole — and the entry was
+  stale twice over.* The one-click "map this channel to a guide id" override this entry asked for
+  is the Map… button and its picker (`guideMappings.ts`, the manual tier wins over every automatic
+  strategy, per playlist since v0.78.0) — shipped in v0.76.0. The "second half" this entry still
+  called open — a fuzzy pass offered as a suggestion rather than applied silently — is exactly
+  what v0.82.0's bulk guide suggestions are: every unmatched channel scored against every loaded
+  guide by the matcher's own formula, threshold-gated, previewed, and applied as ordinary manual
+  mappings. Corrected (2026-10-27, while shipping v0.85.0) so it is not proposed again.
 
 ### 3. Reliability & operations
 

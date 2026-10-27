@@ -131,6 +131,10 @@ export interface ProxyServerDeps {
   // Transcoded HLS output lives on local disk, not upstream — index.ts wires this to
   // serveTranscodeFile so /__transcode/ requests never get treated as something to proxy.
   handleTranscodeRequest: (url: string, res: ServerResponse) => void
+  // Called with the Referer's PATH (never the full URL — no query, no credentials) for every
+  // /__fetch/ request that carries one — the segment-activity signal the connection count is
+  // built from (v0.85.0). Optional so existing test wirings compile untouched.
+  onRelayActivity?: (appPath: string) => void
   // 45s in production (see the reasoning at this option's use below) — overridable so tests
   // don't have to wait out a real 45-second timeout to exercise the retry path.
   upstreamTimeoutMs?: number
@@ -392,6 +396,20 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
         res.writeHead(502)
         res.end('Invalid proxied URL')
         return
+      }
+      // Segment traffic is the activity signal behind the connection count (v0.85.0): a served
+      // playlist's references are rewritten to /__fetch/, and each segment request carries the
+      // app-side playlist URL as its Referer — the same signal the refused-segment retry keys
+      // its windows by. ffmpeg-driven fetches (transcode sessions) send no Referer and are
+      // counted as sessions instead, so the callback only ever sees browser playback.
+      const referer = typeof req.headers.referer === 'string' ? req.headers.referer : ''
+      if (referer && deps.onRelayActivity) {
+        try {
+          deps.onRelayActivity(new URL(referer).pathname)
+        } catch {
+          // A Referer that is not a parseable URL (rare, but browsers are creative) carries no
+          // activity signal worth having.
+        }
       }
     } else {
       const requestTarget = typeof req.headers['x-proxy-target-base'] === 'string' ? req.headers['x-proxy-target-base'].trim() : ''

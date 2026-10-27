@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type JSX } from 'react'
 import type { XtreamClient } from '../lib/xtreamClient'
 import type { Category, LiveStream } from '../lib/types'
 import type { MultiViewSlot } from '../lib/multiViewPrefs'
+import { CONNECTION_CEILING, tileWouldExceed, type ConnectionSnapshot } from '../lib/connectionBudget'
 
 /**
  * The multi-view tile picker — the desktop sibling's picker re-cut for this app's shapes.
@@ -18,6 +19,8 @@ export interface MultiViewPickerProps {
   categories: Category[]
   favourites: Array<{ streamId: number; name: string; playlistId?: string }>
   playlists: Array<{ id: string; label: string; channels: LiveStream[] }>
+  /** The live connection count (null while unknown) — gates the add-at-the-ceiling warning. */
+  connections: ConnectionSnapshot | null
   onAssign: (slot: MultiViewSlot) => void
   onClose: () => void
 }
@@ -40,6 +43,7 @@ export function MultiViewPicker({
   categories,
   favourites,
   playlists,
+  connections,
   onAssign,
   onClose
 }: MultiViewPickerProps): JSX.Element {
@@ -141,6 +145,13 @@ export function MultiViewPicker({
             ))}
           </select>
         </div>
+        {tileWouldExceed(connections) && (
+          <div className="epg-note">
+            ⚠ {connections?.used ?? CONNECTION_CEILING} live connections in use — the provider allows about{' '}
+            {CONNECTION_CEILING}. Adding this tile may starve it, or starve the others; the main player stays the
+            safe surface.
+          </div>
+        )}
         <div className="multiview-picker-list">
           {loading && <div className="epg-note">Loading channels…</div>}
           {fetchError && <div className="login-error">{fetchError}</div>}

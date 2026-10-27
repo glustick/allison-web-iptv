@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_AUTO_REVIVES, shouldAutoRevive, shouldKickRecovery } from './reviveOnVisible.js'
+import {
+  MAX_AUTO_REVIVES,
+  VISIBLE_EVENT_DEDUP_MS,
+  shouldAcceptVisibleEvent,
+  shouldAutoRevive,
+  shouldKickRecovery
+} from './reviveOnVisible.js'
 
 // The always-on tab's bounded self-healing (v0.84.0) — the decision logic only; the actions
 // live in LivePlayer and are the Retry button's own code path.
@@ -26,5 +32,21 @@ describe('shouldKickRecovery', () => {
     expect(shouldKickRecovery({ terminal: true, hasInstance: true, stalled: true })).toBe(false)
     expect(shouldKickRecovery({ terminal: false, hasInstance: false, stalled: true })).toBe(false)
     expect(shouldKickRecovery({ terminal: false, hasInstance: true, stalled: false })).toBe(false)
+  })
+})
+
+describe('shouldAcceptVisibleEvent', () => {
+  it('accepts the first event of a run', () => {
+    expect(shouldAcceptVisibleEvent(null, 5000)).toBe(true)
+  })
+
+  it('rejects the paired event of the same return — focus and visibilitychange arrive together', () => {
+    expect(shouldAcceptVisibleEvent(5000, 5000)).toBe(false)
+    expect(shouldAcceptVisibleEvent(5000, 5000 + VISIBLE_EVENT_DEDUP_MS - 1)).toBe(false)
+  })
+
+  it('accepts a genuinely later return', () => {
+    expect(shouldAcceptVisibleEvent(5000, 5000 + VISIBLE_EVENT_DEDUP_MS)).toBe(true)
+    expect(shouldAcceptVisibleEvent(5000, 9000)).toBe(true)
   })
 })
