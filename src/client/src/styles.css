@@ -1962,3 +1962,16 @@ body.resizing-col .resize-handle--feeds::after {
 .multiview-picker-row--blocked:hover {
   background: transparent;
 }
+
+/* The change-password modal reuses the picker overlay; its fields stack. */
+.change-password {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.change-password-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: #b8bec9;
+}

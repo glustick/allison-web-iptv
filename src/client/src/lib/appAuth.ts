@@ -80,6 +80,14 @@ export async function logout(): Promise<void> {
   await fetch('/api/auth/logout', { method: 'POST' })
 }
 
+/** Self-service password change (v0.88.0): verifies the current password server-side, changes
+ *  it, and ends the account's OTHER sign-ins — this one stays. The server's error messages are
+ *  written for display ("Current password is incorrect", the lockout sentence). */
+export async function changePassword(current: string, next: string): Promise<number> {
+  const data = await postJson<{ ok: boolean; retiredSessions: number }>('/api/auth/password', { current, next })
+  return data.retiredSessions ?? 0
+}
+
 // Returns the account's saved IPTV config, or null when this account hasn't configured a
 // provider yet (the client then shows the IPTV config step).
 export async function fetchIptvConfig(): Promise<IptvConfig | null> {

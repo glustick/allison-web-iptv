@@ -601,6 +601,61 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true })
 })
 
+// Self-service password change (v0.88.0). Until now only an admin could change a password —
+// and v0.83.0 made that reset end the account's sessions, which is right for a possibly-
+// compromised reset but wrong as the only path: someone who simply wants a new password had no
+// way to get one, and a non-admin user has no settings surface of any kind. The "current
+// password" check is a password guess against a known account, so it gets the login lockout's
+// own semantics (same limiter, same per-IP + per-account keys); a successful change ends the
+// account's OTHER sign-ins (the changer proved legitimacy by knowing the old password, so this
+// session survives — the opposite of the admin reset, where nobody proved anything).
+app.post('/api/auth/password', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const current = typeof req.body?.current === 'string' ? req.body.current : ''
+  const next = typeof req.body?.next === 'string' ? req.body.next : ''
+  if (!current || !next) {
+    res.status(400).json({ error: 'Current and new passwords are required' })
+    return
+  }
+  const throttleKeys = [`ip:${req.ip ?? req.socket.remoteAddress ?? 'unknown'}`, `user:${session.username.toLowerCase()}`]
+  const blocked = throttleKeys.map((key) => loginLimiter.check(key)).filter((decision) => !decision.allowed)
+  if (blocked.length > 0) {
+    const retryAfter = Math.max(...blocked.map((decision) => decision.retryAfterSeconds ?? 60))
+    res.setHeader('Retry-After', String(retryAfter))
+    authAudit.record({ outcome: 'locked', username: session.username, ...auditContext(req) })
+    res.status(429).json({
+      error: `Too many failed attempts. Try again in ${Math.max(1, Math.ceil(retryAfter / 60))} minute(s).`
+    })
+    return
+  }
+  if (!usersStore.verifyCredentials(session.username, current)) {
+    authAudit.record({ outcome: 'failed', username: session.username, ...auditContext(req) })
+    for (const key of throttleKeys) loginLimiter.recordFailure(key)
+    res.status(401).json({ error: 'Current password is incorrect' })
+    return
+  }
+  try {
+    usersStore.setPassword(session.username, next)
+  } catch (err) {
+    if (err instanceof UserStoreError && !err.storageUnavailable) {
+      res.status(400).json({ error: err.message })
+      return
+    }
+    console.error('[auth] password change failed:', err)
+    res.status(500).json({ error: `Storage error: ${err instanceof Error ? err.message : String(err)}` })
+    return
+  }
+  for (const key of throttleKeys) loginLimiter.recordSuccess(key)
+  // Revoke others, keep current — revocableSessionTokens is the login route's own rule. NOT
+  // destroySessionsOfUsername: its removeForUser would delete the persisted row for THIS
+  // session too, and the changer stays signed in here.
+  const retired = revocableSessionTokens(authSessions, session.username, session.tokenHash)
+  for (const tokenHash of retired) destroyAuthSession(tokenHash)
+  if (retired.length > 0) console.log(`[auth] password change retired ${retired.length} other login(s) for ${session.username}`)
+  authAudit.record({ outcome: 'password-changed', username: session.username, ...auditContext(req) })
+  res.json({ ok: true, retiredSessions: retired.length })
+})
+
 // Activity heartbeat: keeps the login alive and records what the user is currently streaming
 // so the admin console can show it. Sent on playback changes and every ~15s while playing.
 app.post('/api/auth/activity', requireAuth, (req, res) => {

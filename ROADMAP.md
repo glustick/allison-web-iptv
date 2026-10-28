@@ -15,6 +15,30 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.88.0 — self-service password change: a user changes their own password, other sign-ins end.**
+Until now only an admin could change a password — and v0.83.0's reset semantics (end every
+session) are right for a possibly-compromised reset but wrong as the only path: someone who
+simply wanted a new password had no way to get one, and a non-admin user had no settings surface
+of any kind. **The route** (`POST /api/auth/password`, requireAuth): the current password is
+verified through `verifyCredentials` — and a wrong current is a password guess against a known
+account, so it gets the **login lockout's own semantics** (the same limiter, the same per-IP +
+per-account keys, the same lockout/failed audit outcomes); the new password goes through the
+store's own validation; and a successful change ends the account's **other** sign-ins via the
+login route's own `revocableSessionTokens` rule — the changer proved legitimacy by knowing the
+old password, so **this session survives** (the deliberate opposite of the admin reset, where
+nobody proved anything; and NOT `destroySessionsOfUsername`, whose `removeForUser` would delete
+the persisted row for the surviving session too). Audited as v0.83.0's `password-changed`
+outcome — the request's own context distinguishes self-service from admin reset in the trail.
+**The client:** a Change password button in the top bar (both roles — the first settings surface
+a non-admin has ever had), opening a small modal (current / new / confirm) with a pure
+`validatePasswordChange` helper (fill-order messages: current required, min-6, must differ,
+must match — pinned by tests) and a success note that names the other-sessions consequence.
+**Rig-proven end to end:** wrong current → "Current password is incorrect" (401 + limiter
+failure); correct change → `{ok, retiredSessions: N}` with the changer's session still
+authenticated; old password rejected at the next sign-in, new one accepted; the modal's
+client-side validation and a real change both verified in the browser. 931 tests (2 new);
+typecheck, lint and the builds clean.
+
 **v0.87.0 — dead-session detection: the player learns of ffmpeg's death in seconds, not after a
 20-second error ladder.** The last open reliability item, closed with an out-of-band poll. The
 measured gap: when a session's ffmpeg exits, the server's exit handler deletes the session in the
