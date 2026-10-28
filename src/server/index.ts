@@ -2895,6 +2895,19 @@ app.post('/api/transcode/start', requireAuth, (req, res) => {
     })
 })
 
+// The dead-session signal (v0.87.0): the player polls this while it runs off a session's
+// output, and replaces the session the moment the answer turns false — instead of paying
+// hls.js's ~20s fatal-error ladder for the same information. Alive = present in the live map:
+// ffmpeg's exit handler removes the entry in the same tick the process dies.
+app.get('/api/transcode/status', requireAuth, (req, res) => {
+  const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : ''
+  if (sessionId.length === 0) {
+    res.status(400).json({ error: 'Missing sessionId' })
+    return
+  }
+  res.json({ ok: true, alive: transcodeService.isSessionAlive(sessionId) })
+})
+
 app.post('/api/transcode/stop', requireAuth, (req, res) => {
   const sessionId = req.body?.sessionId
   if (typeof sessionId !== 'string') {

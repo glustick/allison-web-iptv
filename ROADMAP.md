@@ -15,6 +15,34 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.87.0 — dead-session detection: the player learns of ffmpeg's death in seconds, not after a
+20-second error ladder.** The last open reliability item, closed with an out-of-band poll. The
+measured gap: when a session's ffmpeg exits, the server's exit handler deletes the session in the
+same tick — but the player used to learn through hls.js's error ladder (each playlist refresh of
+the dead session 404s into a fatal NETWORK_ERROR; hls.js never retries 4xx), burning its full
+four-retry budget (~20s, the v0.43.3 measurement) before the replacement branch fired, plus
+10–25s of replacement warmup: a ~35–50s frozen picture for a fact the server knew instantly.
+**The wrong levers were ruled out first:** answering the dead session's playlist with 5xx is
+strictly slower (hls.js retries 5xx internally), 200+ENDLIST disables recovery entirely (an
+ended stream gets no recovery actions by design), and keeping a frozen playlist on disk
+misroutes to the not-broadcasting detector. **The fix:** `GET /api/transcode/status?sessionId=`
+(`isSessionAlive` — one map lookup; exit deletes the entry synchronously, so "gone" is
+unambiguous), polled every 5s by LivePlayer while a session is active (`lib/sessionHealth.ts`,
+the pure-decision convention — restart/terminal verdicts with every gate pinned by tests), firing
+the ladder's own remedy immediately: the restarting notice, `restartFallback`, and a real budget.
+**Which also fixed a latent bug:** the "third dead session is terminal" cap v0.74.0 declared was
+unreachable — the counter lived inside the attach effect, whose `reloadTick` dependency reset it
+on every successful replacement (each replacement bumps reloadTick), so a dying provider looped
+~45s/cycle forever; the counter is component-level now (`sessionReplacementsRef`, reset only on
+a genuinely different channel), shared by the poll and the ladder. The 20s ladder stays armed
+behind the poll (the hook's flags absorb a double-fire); the audio companion and multi-view
+tiles hold no main session and never enter this path. **Rig-proven with the ROADMAP's own
+reproducer of record:** play a converted channel (Sky Sports Main Event FHD through its EAC3
+session), `kill` the ffmpeg pid, and the client shows the restarting notice within one poll
+interval and is playing again ~5s later — the ladder physically cannot replace before ~20s, so
+the timeline's attribution is unambiguous. Death-to-moving-picture measured ≈ ≤10s, was 35–50s.
+929 tests (5 new); typecheck, lint and the builds clean.
+
 **v0.86.0 — the ceiling stops being a guess: the provider's own limit, gated per account.** The
 v0.85.0 budget said "about 2" because two was the honest precision anyone had. This round asks
 the provider: the auth response's `user_info.max_connections` is captured **per playlist, at

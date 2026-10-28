@@ -480,6 +480,17 @@ describe('serveTranscodeFile', () => {
   })
 })
 
+describe('isSessionAlive (v0.87.0 dead-session signal)', () => {
+  it('is true while the session runs and false the moment it is stopped', async () => {
+    const service = track(makeService({ resolveFfmpegPath: resolverFor(FAKE_FFMPEG) }))
+    await withFakeFfmpegMode('success', () => service.startTranscode('irrelevant-source', false, 's1'))
+    expect(service.isSessionAlive('s1')).toBe(true)
+    expect(service.isSessionAlive('other')).toBe(false)
+    await service.stopTranscode('s1')
+    expect(service.isSessionAlive('s1')).toBe(false)
+  })
+})
+
 describe('stopAll', () => {
   it('stops every currently active session', async () => {
     const service = createTranscodeService({

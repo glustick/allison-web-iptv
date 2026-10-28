@@ -556,6 +556,10 @@ export interface TranscodeService {
     maxHeightOverride?: number | null
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }>
   stopTranscode(sessionId: string): Promise<void>
+  /** Whether a session exists in the live map — the dead-session signal (v0.87.0). ffmpeg's
+   *  'exit' handler deletes the entry synchronously, so "gone" means "the process died" the
+   *  moment it happens; the player polls this instead of waiting out hls.js's error ladder. */
+  isSessionAlive(sessionId: string): boolean
   serveTranscodeFile(url: string, res: ServerResponse): Promise<void>
   // Fire-and-forget by design, matching the one real caller (app 'before-quit'): every active
   // session gets a stopTranscode() kicked off, but quitting doesn't wait on any of them.
@@ -1436,5 +1440,9 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     return { dir: tmpDir, freeBytes: space?.freeBytes ?? null, totalBytes: space?.totalBytes ?? null }
   }
 
-  return { startTranscode, stopTranscode, serveTranscodeFile, stopAll, probeTracks, stats, storage }
+  function isSessionAlive(sessionId: string): boolean {
+    return transcodeSessions.has(sessionId)
+  }
+
+  return { startTranscode, stopTranscode, isSessionAlive, serveTranscodeFile, stopAll, probeTracks, stats, storage }
 }

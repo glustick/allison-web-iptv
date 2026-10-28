@@ -124,6 +124,11 @@ export function useTranscodeFallback(): {
   beginRun: () => void
   /** True while the player is running off a local transcode session rather than the source. */
   hasSession: () => boolean
+  /** The current session's id, for the dead-session liveness poll (v0.87.0) — null when the
+   *  player is on the direct source and there is nothing to ask about. */
+  getSessionId: () => string | null
+  /** True while a fallback request is in flight — the poll must not double-fire the remedy. */
+  isFallbackAwaiting: () => boolean
   /** Tears down the current session (if any) and starts a fresh one — the recovery path for a
    *  transcode whose output stopped advancing, where reloading the same dead session id would
    *  leave the picture frozen forever. */
@@ -383,6 +388,8 @@ export function useTranscodeFallback(): {
     reset,
     beginRun,
     hasSession,
+    getSessionId: () => sessionIdRef.current,
+    isFallbackAwaiting: () => awaitingRef.current,
     restartFallback,
     escalateToVideoTranscode,
     hasTriedVideoTranscode,

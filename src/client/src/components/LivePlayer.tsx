@@ -21,6 +21,7 @@ import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { shouldAcceptVisibleEvent, shouldAutoRevive, shouldKickRecovery } from '../lib/reviveOnVisible'
 import { createPlaylistStallTracker } from '../lib/playlistStall'
+import { isDeadSessionTerminal, shouldRestartDeadSession, SESSION_HEALTH_POLL_MS } from '../lib/sessionHealth'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
 import { MediaStats } from './MediaStats'
@@ -111,12 +112,18 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   const audioPrefAppliedRef = useRef(false)
   const subtitlePrefAppliedRef = useRef(false)
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
-  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, restartFallback, hasTriedVideoTranscode } = useTranscodeFallback()
+  const { getSourceUrl, tryFallback, tryFallbackForSilentAudio, reset, beginRun, hasSession, getSessionId, isFallbackAwaiting, restartFallback, hasTriedVideoTranscode } = useTranscodeFallback()
   // Recovery ladder state, deliberately on the component (not in the effect): the effect is
   // torn down and rebuilt by every reload tick, and an attempt counter that reset with it
   // would loop forever instead of ever escalating.
   const reloadAttemptsRef = useRef(0)
   const lastReloadAtRef = useRef(0)
+  // Dead-session replacements this run, component-level since v0.87.0: the effect-local counter
+  // it replaced reset on every reloadTick bump — and every successful replacement bumps
+  // reloadTick, so the "third is terminal" budget could never reach its own sentence. Same
+  // lifecycle as reloadAttemptsRef: a genuinely different channel resets it, an internal
+  // reload (the replacement itself) must not.
+  const sessionReplacementsRef = useRef(0)
   // Which engine this run uses, and whether native has had its chance. Native wherever the browser
   // has its own HLS pipeline (Safari) — the route a native player takes, and the one that plays the
   // provider's container as-is with hardware decode instead of remuxing everything for MSE (see
@@ -138,11 +145,68 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   useEffect(() => {
     reset()
     reloadAttemptsRef.current = 0
+    sessionReplacementsRef.current = 0
     engineRef.current = null
     nativeFailedRef.current = false
     setWebCodecs(false)
     webCodecsTriedRef.current = false
   }, [channelKey, reset])
+
+  // The dead-session poll (v0.87.0). The server learns a session's ffmpeg died in the same tick
+  // it dies; the player used to learn through hls.js's error ladder — one fatal NETWORK_ERROR per
+  // playlist refresh of the now-404 session, four retries deep (~20s measured) before the
+  // replacement branch fired. Asking the server directly collapses that to one poll interval,
+  // and the remedy is exactly the ladder's own: replace the session, say so, respect a budget.
+  // The ladder stays armed behind it (the hook's flags absorb a double-fire), and the audio
+  // companion + multi-view tiles never enter this path — they hold no main session of ours.
+  useEffect(() => {
+    let stopped = false
+    const timer = setInterval(() => {
+      const sessionId = getSessionId()
+      if (!sessionId) return
+      fetch(`/api/transcode/status?sessionId=${encodeURIComponent(sessionId)}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((body: { alive?: boolean } | null) => {
+          if (stopped || body === null || body.alive !== false) return
+          const verdict = {
+            alive: false,
+            hasSession: hasSession(),
+            awaiting: isFallbackAwaiting(),
+            replacements: sessionReplacementsRef.current
+          }
+          if (isDeadSessionTerminal(verdict)) {
+            // The same sentence the ladder's exhausted branch shows: replacements beyond the
+            // budget are the provider dropping the channel, not a blip.
+            stopped = true
+            clearInterval(timer)
+            console.warn('[player] session died again past the replacement budget — declaring the provider is dropping this channel')
+            reset()
+            setError('The stream session keeps ending — the provider appears to be dropping this channel. Press Retry to try again.')
+            return
+          }
+          if (!shouldRestartDeadSession(verdict)) return
+          sessionReplacementsRef.current += 1
+          console.warn(
+            `[player] session died server-side; replacing it (${sessionReplacementsRef.current} this run, before the error ladder)`
+          )
+          setStatusNotice('The stream session ended — restarting it…')
+          hlsRef.current?.destroy()
+          hlsRef.current = null
+          restartFallback(
+            url,
+            () => setReloadTick((t) => t + 1),
+            (message) => {
+              setError(`Playback stalled and restarting the transcode failed: ${message}`)
+            }
+          )
+        })
+        .catch(() => {})
+    }, SESSION_HEALTH_POLL_MS)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [url, getSessionId, hasSession, isFallbackAwaiting, restartFallback])
 
   useEffect(() => {
     if (webCodecs) return
@@ -258,7 +322,6 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
     const playlistStall = createPlaylistStallTracker()
     // How many dead sessions this run has already replaced silently — three is a provider
     // dropping the channel, not a blip, and deserves the terminal sentence instead of a loop.
-    let sessionReplacements = 0
     // Auto-revives spent since the last successful playback (v0.84.0): a terminal state heals
     // itself when the tab becomes visible again, bounded so an off-air channel cannot be
     // hammered by tabbing. Reset where fragments resume, below.
@@ -655,11 +718,11 @@ let stallCount = 0
               // erroring — the same move the recovery ladder makes, taken at the moment of
               // failure rather than three watchdog cycles later.
               if (hasSession()) {
-                sessionReplacements += 1
+                sessionReplacementsRef.current += 1
                 console.warn(
-                  `[player] transcode session failed its network retries; replacing the session (${sessionReplacements} this run)`
+                  `[player] transcode session failed its network retries; replacing the session (${sessionReplacementsRef.current} this run)`
                 )
-                if (sessionReplacements > 2) {
+                if (isDeadSessionTerminal({ alive: false, hasSession: true, awaiting: false, replacements: sessionReplacementsRef.current })) {
                   // Three dead sessions inside one run of one channel is the provider dropping
                   // the channel, not a blip each time — say so instead of looping restarts
                   // (each restart spends a provider connection and a viewer-visible freeze).
