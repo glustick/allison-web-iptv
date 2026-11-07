@@ -22,6 +22,8 @@ export interface SleepTimer {
   minutes: number
   /** Epoch milliseconds. */
   endsAt: number
+  /** Set when the deadline came from the schedule rather than a preset ("End of programme"). */
+  label?: string
 }
 
 const KEY = 'iptv:sleep-timer'
@@ -33,6 +35,17 @@ export function startSleepTimer(minutes: number, now: number = Date.now()): Slee
   if (!Number.isFinite(minutes) || minutes <= 0 || minutes > MAX_MINUTES) return null
   const whole = Math.round(minutes)
   return { minutes: whole, endsAt: now + whole * 60_000 }
+}
+
+/**
+ * A deadline taken from the guide rather than from a preset (v0.93.0): "stop when this programme
+ * ends". Same validation as a preset — the panel can only offer a programme that is already on air,
+ * but a stored value is still checked, because the guide is not the only writer.
+ */
+export function startUntil(endsAt: number, now: number = Date.now(), label = 'End of programme'): SleepTimer | null {
+  if (!Number.isFinite(endsAt) || endsAt <= now) return null
+  if (endsAt > now + MAX_MINUTES * 60_000) return null
+  return { minutes: Math.max(1, Math.round((endsAt - now) / 60_000)), endsAt, label }
 }
 
 /** Whole seconds left, rounded up (so "1 second left" shows 0:01, not 0:00), never negative. */
@@ -79,7 +92,11 @@ export function readSleepTimer(
       storage.removeItem(KEY)
       return null
     }
-    return { minutes: Math.round(minutes), endsAt }
+    return {
+      minutes: Math.round(minutes),
+      endsAt,
+      ...(typeof parsed.label === 'string' && parsed.label.trim() ? { label: parsed.label.trim().slice(0, 80) } : {})
+    }
   } catch {
     return null
   }

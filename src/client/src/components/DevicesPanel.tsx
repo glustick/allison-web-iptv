@@ -53,6 +53,14 @@ export function DevicesPanel({ onClose }: { onClose: () => void }): JSX.Element 
     void load()
   }, [load])
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   const end = async (tokenHash: string): Promise<void> => {
     setBusy(tokenHash)
     setError(null)

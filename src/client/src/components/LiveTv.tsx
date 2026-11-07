@@ -7,6 +7,7 @@ import type { PlaylistLimits } from '../lib/connectionBudget'
 import { EpgGrid } from './EpgGrid'
 import { NowNextGuide } from './NowNextGuide'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
+import { readLastChannel, writeLastChannel, type LastChannel } from '../lib/lastChannel'
 import { ReorderableChannelList, type ReorderableRow } from './ReorderableChannelList'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { sectionTitle } from '../lib/sectionTitle'
@@ -104,6 +105,10 @@ export function LiveTv({
   // this feature exists.
   const [additional, setAdditional] = useState<Array<{ id: string; label: string; channels: LiveStream[]; error: string | null }>>([])
   const [nowPlaying, setNowPlaying] = useState<LiveStream | null>(null)
+  // The channel before this one, so a viewer can flick back (v0.93.0) — a remote's own button.
+  const [previousChannel, setPreviousChannel] = useState<LiveStream | null>(null)
+  // The last channel this device watched, offered as a chip rather than autoplayed (v0.93.0).
+  const [lastChannel, setLastChannel] = useState<LastChannel | null>(() => readLastChannel())
   // What is on this channel now and next (v0.91.0), from the same per-channel short-EPG call the
   // guide falls back to — requested once per channel, queued behind the hook's own concurrency cap
   // so it cannot stampede the provider when someone zaps through channels.
@@ -639,8 +644,28 @@ export function LiveTv({
     [liveFavourites]
   )
 
+  const nowPlayingRef = useRef<LiveStream | null>(null)
+  useEffect(() => {
+    nowPlayingRef.current = nowPlaying
+  }, [nowPlaying])
+  useEffect(() => {
+    if (!nowPlaying) return
+    const record: LastChannel = {
+      streamId: nowPlaying.stream_id,
+      name: nowPlaying.name,
+      categoryId: nowPlaying.category_id,
+      ...(playlistRefOf(nowPlaying) ? { playlistId: playlistRefOf(nowPlaying) } : {})
+    }
+    writeLastChannel(record)
+    setLastChannel(record)
+  }, [nowPlaying])
+
   const selectChannel = useCallback(
     (channel: LiveStream | null): void => {
+      const current = nowPlayingRef.current
+      if (channel && current && liveChannelKey(current) !== liveChannelKey(channel)) {
+        setPreviousChannel(current)
+      }
       setNowPlaying(channel)
         setCatchup(null)
       // Choosing to watch one channel properly leaves the tiled grid: tiles are real provider
@@ -661,6 +686,11 @@ export function LiveTv({
         .catch((err) => handlePrefsError(err, 'Could not record watch history'))
     },
     [applyPrefs, handlePrefsError]
+  )
+
+  const favouriteKeys = useMemo(
+    () => prefs.favourites.filter((favourite) => favourite.kind === 'live').map((favourite) => `${favourite.playlistId ?? ''}:${favourite.streamId}`),
+    [prefs.favourites]
   )
 
   const toggleFavourite = useCallback(
@@ -1026,6 +1056,7 @@ export function LiveTv({
               }}
               // Catch-up is a stream with a timeline; the live channel is not.
               seekable={Boolean(catchup)}
+              programmes={nowNextProgrammes}
             />
             <div className="now-playing-bar">
               <span>
@@ -1040,6 +1071,16 @@ export function LiveTv({
                   title="Go back to this channel live"
                 >
                   Return to live
+                </button>
+              )}
+              {previousChannel && (
+                <button
+                  type="button"
+                  className="admin-small-btn"
+                  onClick={() => selectChannel(previousChannel)}
+                  title={`Back to ${previousChannel.name}`}
+                >
+                  ◀ Previous
                 </button>
               )}
               <span className="now-playing-actions">
@@ -1144,6 +1185,27 @@ export function LiveTv({
           {selection.type === 'history' && prefs.history.length > 0 && (
             <button type="button" className="admin-small-btn" onClick={() => void handleClearHistory()}>
               Clear history
+            </button>
+          )}
+          {!nowPlaying && !multiViewActive && lastChannel && (
+            <button
+              type="button"
+              className="admin-small-btn"
+              title={`Watch ${lastChannel.name} again`}
+              onClick={() =>
+                selectChannel(
+                  synthesizeStream(
+                    lastChannel.streamId,
+                    lastChannel.name,
+                    lastChannel.categoryId,
+                    lastChannel.playlistId
+                      ? { id: lastChannel.playlistId, label: additional.find((line) => line.id === lastChannel.playlistId)?.label }
+                      : undefined
+                  )
+                )
+              }
+            >
+              ▶ Continue: {lastChannel.name}
             </button>
           )}
           <button

@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react'
+import { useEffect, useState, type JSX } from 'react'
 import { changePassword } from '../lib/appAuth'
 import { validatePasswordChange } from '../lib/passwordChange'
 
@@ -15,6 +15,15 @@ export function ChangePassword({ onClose }: { onClose: () => void }): JSX.Elemen
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
+
+  // Escape closes every modal in the app (v0.93.0) — the one keystroke people try first.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()

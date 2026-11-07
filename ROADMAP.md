@@ -15,6 +15,49 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.93.0 — ten small things, mostly about the remote.** A batch release: ten independent
+enhancements, each deliberately small. What follows is one or two sentences each, in the order they
+matter.
+
+1. **Volume and mute are remembered** (`usePlaybackPrefs`). The ordering is the design: volume is
+   applied immediately, **mute only on the first `playing` event**, because `muted = false` before
+   playback starts is exactly what makes a browser refuse the autoplay this app's attach path
+   depends on. Verified after a reload: 0.3 volume and 1.25× restored, playback still ran.
+2. **Films gained a speed selector** (0.75/1/1.25/1.5×), persisted per device, applied to the
+   element; live has none — a realtime stream has no speed to change.
+3. **Previous channel** in the now-playing bar. Selection is tracked through a ref rather than state,
+   because `selectChannel` is a `useCallback` the play-request effect depends on and adding
+   `nowPlaying` to its dependencies would re-create it on every zap.
+4. **Film ordering** — provider order / A–Z / newest first, per device, `Intl.Collator` for names and
+   two timestamp shapes accepted for `added` (`1700000000` and `YYYY-MM-DD HH:mm:ss`), with an
+   undated film sorting last rather than first. Applied to the loaded catalogue only; favourites and
+   history keep their own order, which is the point of them.
+5. **Search filters with counts** (All / Live / Films / Series), reset on every new query so a stale
+   filter cannot hide fresh results.
+6. **The app reopens on the last tab** (content tabs only — `writeLastTab` refuses `admin` and
+   `system`, which are separate pages rather than places to live).
+7. **The guide has a ★ Favourites toggle**, keys built from the account's favourites in the same
+   composite form the rest of the app uses.
+8. **The sleep timer can end with the programme**, computed from the channel's schedule at the moment
+   the panel opens rather than at mount — the programme that is on now is the one the viewer means.
+9. **A "Continue: <channel>" chip** for the channel watched last session. Deliberately not an
+   autoplay: opening the app to browse should not open a provider connection.
+10. **Escape closes the password and account-activity dialogs**, and the password dialog focuses its
+    first field — the one keystroke people try first.
+
+**Two candidates were dropped during the build, both for honest reasons.** A "watched ✓" marker
+needed a server-side record of completion — v0.92.0's fix clears the resume point, which is the
+evidence a marker would need — so it is a schema change, not a badge. And "next episode" was written
+and tested (`nextEpisode`, with the season-ordering and empty-season cases pinned) and then removed:
+the episode list lives inside a child component and lifting it was more coupling than the feature is
+worth today. A tested module nobody calls is worse than no module.
+
+**Verified**: the shipped player in a browser, at 1.25× and volume 0.3, reloaded — both restored,
+`muted` false, playback advanced. The rest is covered by unit tests (sorting, filters, last tab, last
+channel, sleep deadline) and by typecheck; the guide favourites toggle and the channel chips need a
+provider to exercise and are not claimed as browser-verified. 1012 tests; typecheck, lint and both
+builds clean.
+
 **v0.92.0 — continue watching, and stopping when it is finished.** The visible half is a shelf of
 half-watched films above the Movies list. The half that matters more is a bug that had been there
 since resume points were introduced: **the resume store is written on every progress event,

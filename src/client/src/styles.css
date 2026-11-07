@@ -1696,6 +1696,18 @@ body.resizing-col {
 
 /* Recent searches (v0.90.0). The rows reuse .search-hit so a remembered term looks like a result;
    only the head row is new, because it carries the Clear action beside its label. */
+.search-filters {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1b1f28;
+}
+
+.search-filters .admin-small-btn.active {
+  border-color: #58a6ff;
+  color: #dbeafe;
+}
+
 .search-recent-head {
   display: flex;
   align-items: center;

@@ -60,6 +60,15 @@ describe('player preferences', () => {
     expect(loadPlayerPrefs(storage).subtitleStyle).toEqual(subtitleStyle)
   })
 
+  it('round-trips volume, mute and playback speed, refusing nonsense', () => {
+    const storage = fakeStorage()
+    savePlayerPrefs(prefs({ volume: 0.35, muted: true, playbackRate: 1.25 }), storage)
+    expect(loadPlayerPrefs(storage)).toEqual(prefs({ volume: 0.35, muted: true, playbackRate: 1.25 }))
+    savePlayerPrefs(prefs({ volume: 4, playbackRate: 3 }), storage)
+    expect(loadPlayerPrefs(storage).volume).toBeNull()
+    expect(loadPlayerPrefs(storage).playbackRate).toBe(1)
+  })
+
   it('gives pre-0.89 storage — which has no subtitle style at all — the default rather than a crash', () => {
     // The exact shape v0.88.0 wrote: four fields, no subtitleStyle key.
     const storage = fakeStorage({

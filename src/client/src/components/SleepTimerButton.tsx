@@ -1,5 +1,6 @@
 import { useEffect, useId, useState, type CSSProperties, type JSX } from 'react'
 import { SLEEP_PRESETS, formatCountdown, type SleepTimer } from '../lib/sleepTimer'
+import { clockLabel, pickNowNext, type GuideProgramme } from '../lib/guideNowNext'
 
 const PANEL: CSSProperties = {
   width: 228,
@@ -23,12 +24,17 @@ export function SleepTimerButton({
   timer,
   remaining,
   onStart,
-  onCancel
+  onStartAt,
+  onCancel,
+  programmes
 }: {
   timer: SleepTimer | null
   remaining: number
   onStart: (minutes: number) => void
+  onStartAt: (endsAt: number, label?: string) => void
   onCancel: () => void
+  /** The channel's schedule, when the caller has it — enables "end of this programme". */
+  programmes?: GuideProgramme[]
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const panelId = useId()
@@ -58,6 +64,27 @@ export function SleepTimerButton({
       {open && (
         <div id={panelId} role="group" aria-label="Sleep timer" style={PANEL}>
           <div style={{ fontWeight: 600 }}>Sleep timer</div>
+          {(() => {
+            // Computed when the panel renders, not when the player mounted: the programme that is
+            // on now is the one the viewer means, and it may have changed since the last channel.
+            const current = programmes ? pickNowNext(programmes, Date.now()).current : null
+            if (!current) return null
+            const label = `End of programme (${clockLabel(current.stopMs)})`
+            return (
+              <div style={{ display: 'flex', marginTop: 6 }}>
+                <button
+                  type="button"
+                  className="admin-small-btn"
+                  style={{ padding: '2px 7px', fontSize: 11 }}
+                  aria-pressed={timer?.label === 'End of programme'}
+                  title={`Stop when ${current.title} ends at ${clockLabel(current.stopMs)}`}
+                  onClick={() => onStartAt(current.stopMs, 'End of programme')}
+                >
+                  {label}
+                </button>
+              </div>
+            )
+          })()}
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>
             {SLEEP_PRESETS.map((minutes) => (
               <button

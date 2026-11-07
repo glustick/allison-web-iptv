@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type JSX, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type JSX, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { List, useListRef } from 'react-window'
 import { pct } from '../lib/epgTime'
 import { clampScrollOffset, EPG_PAN_SNAP_MS, offsetAfterArrowKey, panAxis, windowOffsetAfterDrag } from '../lib/epgPan'
@@ -350,9 +350,12 @@ export function EpgGrid({
   onPlayCatchup,
     onRestartProgramme,
   alsoOn,
+  favouriteKeys,
 }: {
   session: Session
   channels: LiveStream[]
+  /** Composite keys (`playlistRef:streamId`) of this account's favourite channels (v0.93.0). */
+  favouriteKeys?: string[]
   activeStreamId?: number
   activePlaylistId?: string
   /** The cross-playlist switch lookup (v0.78.0), built once by the caller over every visible
@@ -406,6 +409,14 @@ export function EpgGrid({
   const [mappingNonce, setMappingNonce] = useState(0)
   const aggregated = useAggregatedEpg(session, windowStart, windowEnd, mappingNonce)
   const { shortEpgByStream, request } = useShortEpgCache(session)
+  // Favourites-only (v0.93.0): the guide is where a hundred channels become a wall, and the handful
+  // someone actually watches is the useful view of it.
+  const [favouritesOnly, setFavouritesOnly] = useState(false)
+  const favouriteSet = useMemo(() => new Set(favouriteKeys ?? []), [favouriteKeys])
+  const shownChannels = useMemo(() => {
+    if (!favouritesOnly) return channels
+    return channels.filter((channel) => favouriteSet.has(`${playlistRefOf(channel) ?? ''}:${channel.stream_id}`))
+  }, [channels, favouritesOnly, favouriteSet])
   // This device's reminders (v0.91.0), kept in step with the watcher and any other tab through
   // the store's own change event rather than by polling localStorage.
   const [reminders, setReminders] = useState<Reminder[]>(() => readReminders())
@@ -636,6 +647,17 @@ export function EpgGrid({
             </div>
           )}
         </div>
+        {(favouriteKeys?.length ?? 0) > 0 && (
+          <button
+            type="button"
+            className={favouritesOnly ? 'admin-small-btn active' : 'admin-small-btn'}
+            aria-pressed={favouritesOnly}
+            title="Show only this account's favourite channels"
+            onClick={() => setFavouritesOnly((value) => !value)}
+          >
+            ★ Favourites
+          </button>
+        )}
         {onOpenEpgSettings && (
           <button
             type="button"
@@ -648,15 +670,15 @@ export function EpgGrid({
         )}
       </div>
       <div className="epg-grid-body">
-        {channels.length === 0 ? (
+        {shownChannels.length === 0 ? (
           <p className="now-playing-bar">{emptyMessage ?? 'No channels to show.'}</p>
         ) : (
           <List<RowProps>
             listRef={listRef}
-            rowCount={channels.length}
+            rowCount={shownChannels.length}
             rowHeight={ROW_HEIGHT}
             rowProps={{
-              channels,
+              channels: shownChannels,
               windowStart,
               windowEnd,
               now,

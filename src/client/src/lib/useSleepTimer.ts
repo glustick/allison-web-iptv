@@ -5,6 +5,7 @@ import {
   remainingSeconds,
   saveSleepTimer,
   startSleepTimer,
+  startUntil,
   type SleepTimer
 } from './sleepTimer'
 
@@ -20,6 +21,8 @@ export function useSleepTimer(onExpire: () => void): {
   timer: SleepTimer | null
   remaining: number
   start: (minutes: number) => void
+  /** Arm the timer to finish at a given moment — the guide's "end of this programme". */
+  startAt: (endsAt: number, label?: string) => void
   cancel: () => void
 } {
   const [timer, setTimer] = useState<SleepTimer | null>(() => readSleepTimer())
@@ -59,11 +62,19 @@ export function useSleepTimer(onExpire: () => void): {
     setRemaining(remainingSeconds(next))
   }, [])
 
+  const startAt = useCallback((endsAt: number, label?: string) => {
+    const next = startUntil(endsAt, Date.now(), label)
+    if (!next) return
+    saveSleepTimer(next)
+    setTimer(next)
+    setRemaining(remainingSeconds(next))
+  }, [])
+
   const cancel = useCallback(() => {
     clearSleepTimer()
     setTimer(null)
     setRemaining(0)
   }, [])
 
-  return { timer, remaining, start, cancel }
+  return { timer, remaining, start, startAt, cancel }
 }

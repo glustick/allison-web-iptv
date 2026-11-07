@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import { search, type SearchHit, type SearchStatus } from '../lib/system'
 import { clearRecentSearches, readRecentSearches, rememberSearch } from '../lib/recentSearches'
+import { SEARCH_FILTERS, countHits, filterHits, type SearchFilter } from '../lib/searchFilter'
 
 // Global search over the provider's whole catalogue. Results are served from the SQLite index, so
 // this keeps working when the provider itself is slow — but an unbuilt index shows its state
@@ -19,6 +20,10 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
   // selection, not on the debounced request: one typing session would otherwise leave "sky",
   // "sky s", "sky sp" behind and bury the four other things worth offering.
   const [recent, setRecent] = useState<string[]>(() => readRecentSearches())
+  // One list, three shelves' worth of results (v0.93.0): narrowing by kind is the fastest way to
+  // the answer once the list is long. Reset on a new query so a filter never hides fresh results
+  // without the viewer having asked for it.
+  const [kindFilter, setKindFilter] = useState<SearchFilter>('all')
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -29,6 +34,7 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
       return
     }
     setSearching(true)
+    setKindFilter('all')
     const timer = window.setTimeout(() => {
       search(trimmed)
         .then((data) => {
@@ -53,6 +59,8 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
   }, [])
 
   const indexReady = (index?.total ?? 0) > 0
+  const counts = countHits(hits)
+  const visibleHits = filterHits(hits, kindFilter)
 
   return (
     <div className="search-bar" ref={containerRef}>
@@ -64,9 +72,9 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
         onChange={(e) => setQuery(e.target.value)}
         onFocus={() => setOpen(true)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && hits[0]) {
+          if (e.key === 'Enter' && visibleHits[0]) {
             setRecent(rememberSearch(query))
-            onPlay(hits[0])
+            onPlay(visibleHits[0])
             setOpen(false)
           }
           if (e.key === 'Escape') setOpen(false)
@@ -107,7 +115,22 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
             </div>
           )}
           {!error && indexReady && hits.length === 0 && !searching && <div className="search-note">No matches.</div>}
-          {hits.map((hit) => (
+          {hits.length > 0 && (
+            <div className="search-filters" role="group" aria-label="Filter results by kind">
+              {SEARCH_FILTERS.map((filter) => (
+                <button
+                  key={filter.id}
+                  type="button"
+                  className={kindFilter === filter.id ? 'admin-small-btn active' : 'admin-small-btn'}
+                  aria-pressed={kindFilter === filter.id}
+                  onClick={() => setKindFilter(filter.id)}
+                >
+                  {filter.label} {counts[filter.id]}
+                </button>
+              ))}
+            </div>
+          )}
+          {visibleHits.map((hit) => (
             <button
               key={`${hit.kind}:${hit.streamId}`}
               type="button"

@@ -4,6 +4,7 @@ import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
 import { ContinueWatchingShelf, type ContinueItem } from './ContinueWatchingShelf'
 import { continueWatching, isFinished, progressPercent as watchPercent } from '../lib/continueWatching'
+import { readLibrarySort, sortFilms, writeLibrarySort, type LibrarySort } from '../lib/librarySort'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { XtreamClient } from '../lib/xtreamClient'
 import { playlistRefOf } from '../lib/types'
@@ -64,6 +65,9 @@ export function Movies({
   const [categories, setCategories] = useState<Category[]>([])
   // Same landing view as live TV: favourites, which explains itself when empty.
   const [selection, setSelection] = useState<Selection>({ type: 'favourites' })
+  // How this device prefers its film list ordered (v0.93.0). Sorting is applied to the loaded
+  // catalogue only — a favourites or history list keeps its own order, which is the point of it.
+  const [librarySort, setLibrarySort] = useState<LibrarySort>(() => readLibrarySort())
   const [movies, setMovies] = useState<VodStream[]>([])
   const [nowPlaying, setNowPlaying] = useState<VodStream | null>(null)
   // The position this playback started from, so the player seeks there once and the UI can show
@@ -337,12 +341,13 @@ export function Movies({
     ? new XtreamClient(nowPlaying.playlistId)
     : session.client
   const streamUrl = nowPlaying ? nowPlayingClient.getStreamUrl('movie', nowPlaying.stream_id, nowPlaying.container_extension) : null
+  const sortedMovies = useMemo(() => sortFilms(movies, librarySort), [movies, librarySort])
   const listRows: Array<{ streamId: number; playlistId?: string; name: string }> =
     selection.type === 'favourites'
       ? movieFavourites.map((favourite) => ({ streamId: favourite.streamId, playlistId: favourite.playlistId || undefined, name: favourite.name }))
       : selection.type === 'history'
         ? historyMovies
-        : movies.map((movie) => ({ streamId: movie.stream_id, playlistId: playlistRefOf(movie), name: movie.name }))
+        : sortedMovies.map((movie) => ({ streamId: movie.stream_id, playlistId: playlistRefOf(movie), name: movie.name }))
   const sectionTitle = selection.type === 'favourites' ? 'Favourite films' : selection.type === 'history' ? 'Watch history' : 'All films'
 
   return (
@@ -438,6 +443,23 @@ export function Movies({
         )}
         <div className="list-toolbar">
           <span className="list-toolbar-title">{sectionTitle}</span>
+          {(selection.type === 'all' || selection.type === 'provider') && (
+            <select
+              className="admin-small-btn"
+              style={{ padding: '3px 6px' }}
+              value={librarySort}
+              title="How this device orders the film list"
+              onChange={(event) => {
+                const next = event.target.value as LibrarySort
+                setLibrarySort(next)
+                writeLibrarySort(next)
+              }}
+            >
+              <option value="default">Provider order</option>
+              <option value="name">A–Z</option>
+              <option value="added">Newest first</option>
+            </select>
+          )}
           {visibleAdditional.length > 0 && (
             <span className="view-toggle" role="group" aria-label="Which playlist's films to browse">
               <button

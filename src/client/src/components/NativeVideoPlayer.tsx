@@ -6,6 +6,8 @@ import { useSessionExpired } from '../lib/sessionWatch'
 import { evaluatePlaybackSample, type PlaybackWatchState } from '../lib/playbackRecovery'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
 import { useSubtitleStyle } from '../lib/useSubtitleStyle'
+import { usePlaybackPrefs } from '../lib/usePlaybackPrefs'
+import { PLAYBACK_RATES } from '../lib/playerPrefs'
 import { useSleepTimer } from '../lib/useSleepTimer'
 import { usePlayerKeys } from '../lib/usePlayerKeys'
 import { ShortcutsHelp } from './ShortcutsHelp'
@@ -80,6 +82,8 @@ export function NativeVideoPlayer({
   // The same preference the live player writes: films carry subtitles too, and the choice belongs
   // to this device's viewer rather than to one surface of the app.
   const [subtitleStyle, setSubtitleStyle] = useSubtitleStyle()
+  // Volume, mute and speed, per device (v0.93.0) — a film is the one place speed makes sense.
+  const { rate, setRate } = usePlaybackPrefs(videoRef, { allowRate: true })
   // The same timer as the live player's — one deadline for the evening, not one per stream.
   const [showShortcuts, setShowShortcuts] = useState(false)
   usePlayerKeys({ seekable: true, videoRef, onHelp: () => setShowShortcuts((value) => !value) })
@@ -310,11 +314,25 @@ export function NativeVideoPlayer({
           alignItems: 'flex-end'
         }}
       >
+        <select
+          className="admin-small-btn"
+          style={{ padding: '4px 8px' }}
+          value={rate}
+          title="Playback speed for this film"
+          onChange={(event) => setRate(Number(event.target.value))}
+        >
+          {PLAYBACK_RATES.map((value) => (
+            <option key={value} value={value}>
+              {value}×
+            </option>
+          ))}
+        </select>
         <SubtitleStyleButton style={subtitleStyle} onChange={setSubtitleStyle} />
         <SleepTimerButton
           timer={sleep.timer}
           remaining={sleep.remaining}
           onStart={sleep.start}
+          onStartAt={sleep.startAt}
           onCancel={sleep.cancel}
         />
         <button

@@ -6,6 +6,34 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.93.0 — ten small things, mostly about the remote)
+
+Ten enhancements, each small enough to explain in a sentence, chosen because they are the ones you
+notice while watching rather than the ones that look good on a feature list.
+
+**Playback.** Volume and mute are remembered per device (`usePlaybackPrefs`) — volume applied
+immediately, **mute only on the first `playing` event**, because un-muting before playback starts is
+what makes a browser refuse an autoplay the attach path depends on. Films gained a **speed selector**
+(0.75× / 1× / 1.25× / 1.5×), persisted; live has none, because the stream is realtime. **Previous
+channel** sits in the now-playing bar — a remote's own button — while the channel you watched last
+session comes back as a **"Continue: <name>" chip** rather than autoplaying: an offer, not a
+takeover.
+
+**Finding things.** Search results gained **kind filters with counts** (All / Live / Films /
+Series), reset on every new query so a filter can never hide fresh results unasked. The film list
+gained **ordering** (provider order / A–Z / newest first), per device, applied only to the loaded
+catalogue — a favourites or history list keeps the order that makes it useful. The guide gained a
+**★ Favourites** toggle for the days when a hundred channels is a wall.
+
+**Small courtesies.** The app **reopens on the tab you were last using** (content tabs only — never
+Admin or System). The **sleep timer can end with the programme** it is playing, labelled with the
+clock time, computed from the guide at the moment the panel opens. **Escape closes** the password and
+account-activity dialogs, and the password dialog focuses its first field.
+
+Verified in a browser on the shipped player: a 30-second clip at 1.25× and volume 0.3, reloaded —
+speed and volume both restored, `muted` false, and playback still started and advanced (the autoplay
+concern above was the reason to check). 1012 tests; typecheck, lint and both builds clean.
+
 ## Current state (v0.92.0 — continue watching, and stopping when it is finished)
 
 A bug fix wearing a feature's clothes. The resume store records a position on **every** progress

@@ -25,7 +25,9 @@ import { isDeadSessionTerminal, shouldRestartDeadSession, SESSION_HEALTH_POLL_MS
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
 import { useSubtitleStyle } from '../lib/useSubtitleStyle'
+import { usePlaybackPrefs } from '../lib/usePlaybackPrefs'
 import { useSleepTimer } from '../lib/useSleepTimer'
+import type { GuideProgramme } from '../lib/guideNowNext'
 import { usePlayerKeys } from '../lib/usePlayerKeys'
 import { ShortcutsHelp } from './ShortcutsHelp'
 import { SubtitleStyleButton } from './SubtitleStyleButton'
@@ -86,7 +88,8 @@ export function LivePlayer({
   url,
   channelKey,
   onStop,
-  seekable = false
+  seekable = false,
+  programmes
 }: {
   url: string
   channelKey: string
@@ -94,6 +97,8 @@ export function LivePlayer({
   onStop?: () => void
   /** Live has no timeline; catch-up does. The caller knows which it handed over. */
   seekable?: boolean
+  /** This channel's schedule, so the sleep timer can offer "end of this programme" (v0.93.0). */
+  programmes?: GuideProgramme[]
 }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   
@@ -124,6 +129,8 @@ export function LivePlayer({
   // Subtitle appearance (v0.89.0), per device and applied at the document root so the cue renderer
   // picks it up without the player having to own a <video> that survives a channel change.
   const [subtitleStyle, setSubtitleStyle] = useSubtitleStyle()
+  // Volume and mute survive a reload (v0.93.0). Live has no speed control: the stream is realtime.
+  usePlaybackPrefs(videoRef, { allowRate: false })
   // Sleep timer (v0.90.0). On expiry the player closes rather than pausing — a paused live
   // channel holds a provider connection for a viewer who is asleep. The pause is the fallback for
   // a caller that passes no onStop.
@@ -1071,7 +1078,9 @@ let stallCount = 0
           timer={sleep.timer}
           remaining={sleep.remaining}
           onStart={sleep.start}
+          onStartAt={sleep.startAt}
           onCancel={sleep.cancel}
+          programmes={programmes}
         />
         <button
           type="button"

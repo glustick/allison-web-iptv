@@ -38,14 +38,29 @@ export interface PlayerPrefs {
    * and it is a preference about the *viewer*, not about the account, so it never syncs.
    */
   subtitleStyle: SubtitleStyle
+  /**
+   * Volume the viewer set, 0–1, or null to leave the element's own default (v0.93.0). Restoring a
+   * volume is safe; restoring *mute* before playback would make browsers refuse an unmuted
+   * autoplay, so `muted` is applied on the first `playing` event instead (see usePlaybackPrefs).
+   */
+  volume: number | null
+  muted: boolean
+  /** Films and episodes only — live has no meaningful speed (v0.93.0). */
+  playbackRate: number
 }
+
+/** The speeds the player offers; anything else read from storage falls back to 1. */
+export const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5] as const
 
 export const DEFAULT_PLAYER_PREFS: PlayerPrefs = {
   audioTrack: null,
   subtitleTrack: null,
   subtitlesOff: false,
   maxHeight: null,
-  subtitleStyle: DEFAULT_SUBTITLE_STYLE
+  subtitleStyle: DEFAULT_SUBTITLE_STYLE,
+  volume: null,
+  muted: false,
+  playbackRate: 1
 }
 
 export function loadPlayerPrefs(storage: Pick<Storage, 'getItem'> | null = safeStorage()): PlayerPrefs {
@@ -62,7 +77,16 @@ export function loadPlayerPrefs(storage: Pick<Storage, 'getItem'> | null = safeS
         typeof parsed.maxHeight === 'number' && Number.isFinite(parsed.maxHeight) && parsed.maxHeight >= 240 && parsed.maxHeight <= 2160
           ? parsed.maxHeight
           : null,
-      subtitleStyle: normalizeSubtitleStyle(parsed.subtitleStyle)
+      subtitleStyle: normalizeSubtitleStyle(parsed.subtitleStyle),
+      volume:
+        typeof parsed.volume === 'number' && Number.isFinite(parsed.volume) && parsed.volume >= 0 && parsed.volume <= 1
+          ? parsed.volume
+          : null,
+      muted: parsed.muted === true,
+      playbackRate:
+        typeof parsed.playbackRate === 'number' && (PLAYBACK_RATES as readonly number[]).includes(parsed.playbackRate)
+          ? parsed.playbackRate
+          : 1
     }
   } catch {
     return DEFAULT_PLAYER_PREFS

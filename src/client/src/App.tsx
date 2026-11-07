@@ -17,6 +17,7 @@ import { SportsView } from './components/SportsView'
 import { ChangePassword } from './components/ChangePassword'
 import { DevicesPanel } from './components/DevicesPanel'
 import { ReminderWatcher } from './components/ReminderWatcher'
+import { readLastTab, writeLastTab } from './lib/lastTab'
 import { formatElapsedTime } from './lib/connectionTiming'
 import {
   connectIptv,
@@ -50,8 +51,13 @@ export default function App(): JSX.Element {
   const [savedConfig, setSavedConfig] = useState<IptvConfig | null>(null)
   const [iptvPhase, setIptvPhase] = useState<IptvPhase>('checking')
   const [autoConnectError, setAutoConnectError] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>(() => tabFromSearch(window.location.search) as Tab)
+  // URL first (a notification or a bookmark), then the tab last used on this device, then Live TV.
+  const [tab, setTab] = useState<Tab>(() => tabFromSearch(window.location.search, readLastTab() ?? 'live') as Tab)
   const [updateMessage, setUpdateMessage] = useState<string | null>(null)
+  // Remembering the tab is a courtesy, not a feature: admin and system are ignored by writeLastTab.
+  useEffect(() => {
+    writeLastTab(tab)
+  }, [tab])
   // A search hit is played by the view that owns that kind, so the request carries a nonce:
   // picking the same result twice must still switch tab and start playback.
   const [playRequest, setPlayRequest] = useState<{ kind: MediaKind; streamId: number; name: string; playlistId?: string; nonce: number } | null>(null)
