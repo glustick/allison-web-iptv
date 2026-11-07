@@ -11,6 +11,7 @@
  * mean it today.
  */
 import type { PlayerTrack } from '../components/TrackControls'
+import { DEFAULT_SUBTITLE_STYLE, normalizeSubtitleStyle, type SubtitleStyle } from './subtitleStyle'
 
 const KEY = 'iptv:player-prefs'
 
@@ -30,13 +31,21 @@ export interface PlayerPrefs {
    * untouched, and a copy cannot reshape anything anyway.
    */
   maxHeight: number | null
+  /**
+   * How the cues themselves look (v0.89.0): size, text colour, the box behind the text, and
+   * whether the glyphs carry an outline. Per device for the same reason the quality ceiling is —
+   * a phone held at arm's length and a projector across a room do not want the same cue size —
+   * and it is a preference about the *viewer*, not about the account, so it never syncs.
+   */
+  subtitleStyle: SubtitleStyle
 }
 
 export const DEFAULT_PLAYER_PREFS: PlayerPrefs = {
   audioTrack: null,
   subtitleTrack: null,
   subtitlesOff: false,
-  maxHeight: null
+  maxHeight: null,
+  subtitleStyle: DEFAULT_SUBTITLE_STYLE
 }
 
 export function loadPlayerPrefs(storage: Pick<Storage, 'getItem'> | null = safeStorage()): PlayerPrefs {
@@ -52,7 +61,8 @@ export function loadPlayerPrefs(storage: Pick<Storage, 'getItem'> | null = safeS
       maxHeight:
         typeof parsed.maxHeight === 'number' && Number.isFinite(parsed.maxHeight) && parsed.maxHeight >= 240 && parsed.maxHeight <= 2160
           ? parsed.maxHeight
-          : null
+          : null,
+      subtitleStyle: normalizeSubtitleStyle(parsed.subtitleStyle)
     }
   } catch {
     return DEFAULT_PLAYER_PREFS

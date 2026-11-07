@@ -220,6 +220,20 @@ body {
   display: block;
 }
 
+/* Subtitle appearance (v0.89.0). The values are written onto :root by lib/subtitleStyle.ts, from
+   the panel's own choices — `::cue` is the only surface a browser's cue renderer exposes, and it
+   accepts a narrow set: colour, background, font size, text shadow. Position is deliberately not
+   among them; a native cue places its own line, and a slider here would change nothing.
+
+   Percent for the size, not px: measured in Chrome on 2026-11-07, 200% doubles the default cue and
+   the default scales with the picture, so the same choice survives a resize and fullscreen. */
+video::cue {
+  color: var(--cue-color, #ffffff);
+  background-color: var(--cue-bg, rgba(0, 0, 0, 0.45));
+  font-size: var(--cue-size, 100%);
+  text-shadow: var(--cue-shadow, none);
+}
+
 /* Drag-to-resize handles (see lib/useResizableDimension.ts) — ported from the desktop app's
    own global.css: an 8px hit area, a directional cursor, and a subtle highlight on hover and
    for the whole drag (the pointer inevitably outruns the handle). The body-level classes keep

@@ -4,8 +4,10 @@ import {
   loadPlayerPrefs,
   pickTrackIndex,
   savePlayerPrefs,
-  trackKey
+  trackKey,
+  type PlayerPrefs
 } from './playerPrefs'
+import { DEFAULT_SUBTITLE_STYLE } from './subtitleStyle'
 import type { PlayerTrack } from '../components/TrackControls'
 
 function track(index: number, lang: string | null, name = ''): PlayerTrack {
@@ -21,28 +23,65 @@ function fakeStorage(initial: Record<string, string> = {}) {
   }
 }
 
+/** The defaults, with only the field a test cares about replaced. */
+function prefs(overrides: Partial<PlayerPrefs> = {}): PlayerPrefs {
+  return { ...DEFAULT_PLAYER_PREFS, ...overrides }
+}
+
 describe('player preferences', () => {
   it('round-trips a choice', () => {
     const storage = fakeStorage()
-    savePlayerPrefs({ audioTrack: 'eng', subtitleTrack: 'swe', subtitlesOff: false, maxHeight: null }, storage)
-    expect(loadPlayerPrefs(storage)).toEqual({ audioTrack: 'eng', subtitleTrack: 'swe', subtitlesOff: false, maxHeight: null })
+    const chosen = prefs({ audioTrack: 'eng', subtitleTrack: 'swe' })
+    savePlayerPrefs(chosen, storage)
+    expect(loadPlayerPrefs(storage)).toEqual(chosen)
   })
 
   it('remembers that subtitles were switched off — that is a choice too', () => {
     const storage = fakeStorage()
-    savePlayerPrefs({ audioTrack: 'eng', subtitleTrack: null, subtitlesOff: true, maxHeight: null }, storage)
+    savePlayerPrefs(prefs({ audioTrack: 'eng', subtitlesOff: true }), storage)
     expect(loadPlayerPrefs(storage).subtitlesOff).toBe(true)
   })
 
   it('round-trips the quality ceiling, and refuses out-of-range values', () => {
     const storage = fakeStorage()
-    savePlayerPrefs({ audioTrack: null, subtitleTrack: null, subtitlesOff: false, maxHeight: 720 }, storage)
+    savePlayerPrefs(prefs({ maxHeight: 720 }), storage)
     expect(loadPlayerPrefs(storage).maxHeight).toBe(720)
     // A hand-edited or stale out-of-range value reads as Source, never as a broken encode.
-    savePlayerPrefs({ audioTrack: null, subtitleTrack: null, subtitlesOff: false, maxHeight: 99999 }, storage)
+    savePlayerPrefs(prefs({ maxHeight: 99999 }), storage)
     expect(loadPlayerPrefs(storage).maxHeight).toBeNull()
-    savePlayerPrefs({ audioTrack: null, subtitleTrack: null, subtitlesOff: false, maxHeight: '720' as unknown as number }, storage)
+    savePlayerPrefs(prefs({ maxHeight: '720' as unknown as number }), storage)
     expect(loadPlayerPrefs(storage).maxHeight).toBeNull()
+  })
+
+  it('round-trips the subtitle style', () => {
+    const storage = fakeStorage()
+    const subtitleStyle = { sizePercent: 150, color: 'yellow' as const, backgroundOpacity: 85, outline: false }
+    savePlayerPrefs(prefs({ subtitleStyle }), storage)
+    expect(loadPlayerPrefs(storage).subtitleStyle).toEqual(subtitleStyle)
+  })
+
+  it('gives pre-0.89 storage — which has no subtitle style at all — the default rather than a crash', () => {
+    // The exact shape v0.88.0 wrote: four fields, no subtitleStyle key.
+    const storage = fakeStorage({
+      'iptv:player-prefs': JSON.stringify({ audioTrack: 'eng', subtitleTrack: null, subtitlesOff: false, maxHeight: 1080 })
+    })
+    expect(loadPlayerPrefs(storage)).toEqual(prefs({ audioTrack: 'eng', maxHeight: 1080 }))
+    expect(loadPlayerPrefs(storage).subtitleStyle).toEqual(DEFAULT_SUBTITLE_STYLE)
+  })
+
+  it('clamps a hand-edited subtitle style rather than trusting it', () => {
+    const storage = fakeStorage({
+      'iptv:player-prefs': JSON.stringify({
+        ...DEFAULT_PLAYER_PREFS,
+        subtitleStyle: { sizePercent: 9000, color: 'chartreuse', backgroundOpacity: -4, outline: 'yes' }
+      })
+    })
+    const style = loadPlayerPrefs(storage).subtitleStyle
+    expect(style.sizePercent).toBe(200)
+    expect(style.color).toBe('white')
+    expect(style.backgroundOpacity).toBe(0)
+    // Only an explicit `false` turns the outline off.
+    expect(style.outline).toBe(true)
   })
 
   it('falls back to the defaults when storage is empty, rubbish, or unavailable', () => {

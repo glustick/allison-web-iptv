@@ -6,6 +6,31 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.89.0 — subtitle appearance, the viewer's own)
+
+*README sections for v0.78.0–v0.88.0 were not written; their release notes are in `ROADMAP.md`,
+newest first.*
+
+Subtitles used to be whatever the browser decided: one size, white on a thin box, readable on a
+monitor and lost on a television across the room. They are now the viewer's own — **size** (75% to
+200% of the size the browser would have used), **text colour** (white, yellow, cyan), the **box**
+behind the text (none, light, solid), and an **outline** that keeps white text legible over a bright
+scene. The **Subtitles** button sits with the player's other overlays, on both surfaces: live TV
+(`LivePlayer`) and films and episodes (`NativeVideoPlayer`). Settings persist **per device**, in the
+same `localStorage` record as the audio/subtitle track and quality choices — a phone held at arm's
+length and a projector across a room do not want the same cue size, and that is a fact about the
+viewer's room rather than about their account. **Proven in a real browser**, not asserted: the panel
+was rendered from the shipped component over a real WebVTT track and its choices repainted a live
+cue (150%, yellow, solid box), and after a reload with no interaction the stored style came back.
+941 tests (10 new); typecheck, lint and both builds clean.
+
+Two deliberate limits, both recorded rather than papered over. **Position is not offered:** the cue
+line belongs to the browser's own renderer, and a "subtitles lower" slider would change nothing while
+looking like it should. **The canvas engine draws no cues at all** (`WebCodecsPlayer` renders decoded
+frames itself), so on a channel the client-side decoder is carrying, subtitle styling has nothing to
+style — the tracks and this panel are there for the native and hls.js paths, which is where every
+subtitled channel in this catalogue actually plays.
+
 ## Current state (v0.77.0 — two providers, one grid)
 
 The multi-playlist feature's browse-and-play phase (the design and its operator decisions have

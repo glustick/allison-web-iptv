@@ -24,6 +24,8 @@ import { createPlaylistStallTracker } from '../lib/playlistStall'
 import { isDeadSessionTerminal, shouldRestartDeadSession, SESSION_HEALTH_POLL_MS } from '../lib/sessionHealth'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
+import { useSubtitleStyle } from '../lib/useSubtitleStyle'
+import { SubtitleStyleButton } from './SubtitleStyleButton'
 import { MediaStats } from './MediaStats'
 import { WebCodecsPlayer } from './WebCodecsPlayer'
 import { TrackControls, type PlayerTrack } from './TrackControls'
@@ -103,6 +105,9 @@ export function LivePlayer({ url, channelKey }: { url: string; channelKey: strin
   // caps the re-encode tier when this browser can only play a channel through it. Read once at
   // mount — the choice is persisted, so it survives reloads and applies to every later session.
   const [qualityMaxHeight, setQualityMaxHeight] = useState<number | null>(() => loadPlayerPrefs().maxHeight)
+  // Subtitle appearance (v0.89.0), per device and applied at the document root so the cue renderer
+  // picks it up without the player having to own a <video> that survives a channel change.
+  const [subtitleStyle, setSubtitleStyle] = useSubtitleStyle()
   const [probeInfo, setProbeInfo] = useState<{ videoCodec: string | null; audioTrackCount: number } | null>(null)
   const [audioTracks, setAudioTracks] = useState<PlayerTrack[]>([])
   const [subtitleTracks, setSubtitleTracks] = useState<PlayerTrack[]>([])
@@ -1036,6 +1041,7 @@ let stallCount = 0
           <option value="1080">Quality: 1080p</option>
           <option value="720">Quality: 720p</option>
         </select>
+        <SubtitleStyleButton style={subtitleStyle} onChange={setSubtitleStyle} />
         <button
           type="button"
           className="admin-small-btn"

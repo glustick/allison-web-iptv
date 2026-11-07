@@ -15,6 +15,36 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.89.0 — subtitle appearance: the cues answer to the viewer, per device.** The last open piece of
+player settings, and the one the panel's compact section has been missing since v0.75.0 shipped the
+quality selector beside it. **The constraint first:** subtitles here are the browser's own cue
+rendering — hls.js hands the WebVTT to the media element and the element paints it — so `video::cue`
+is the only surface that can be styled at all, and it honours a narrow set (colour, background, font
+size, text shadow) and nothing about position. The panel therefore offers exactly what the renderer
+honours and stays silent about the rest, rather than shipping a control that would look right and do
+nothing. **What it offers:** size (75/100/125/150/200%), text colour (white/yellow/cyan), the box
+behind the text (none/light/solid — 0/45/85% black), an outline toggle (a four-point black rim plus a
+soft shadow, because one blurred shadow vanishes against a bright scene), and Reset. **Size is a
+percentage, not a pixel value** — measured in Chrome on 2026-11-07 against a real WebVTT track: 200%
+renders exactly double the default cue, and the default itself scales with the picture, so the same
+choice survives a resize, a fullscreen switch and a different screen; a pixel size would be right on
+exactly one of those. **The state** lives per device in the player-preferences record (`playerPrefs`,
+`subtitleStyle`), read-modify-written so saving a style cannot erase the track or quality choices
+beside it, and it is applied at the **document root** (`applySubtitleStyle`) rather than on one
+`<video>`: the live player, VOD and every multi-view tile read the same four custom properties from
+the stylesheet's single `video::cue` rule, and a remount inherits the choice with no flash of the
+default. **Storage is trusted with a clamp, not obeyed:** an unknown colour reads as white, a number
+outside 75–200 or 0–100 clamps, a non-number falls back to the default rather than writing `NaN%` into
+a custom property (which the browser drops silently, leaving the cue at its old size — the exact
+failure the clamp exists to prevent), and a pre-0.89 record with no `subtitleStyle` key at all reads as
+the default instead of throwing. **Rig-proven:** the shipped panel was rendered over a real WebVTT
+track in Chrome, its choices repainted a live cue at 150% / yellow / solid, and a reload with no
+interaction reapplied the stored style (`--cue-size: 150%`, `--cue-color: #ffe066`); 941 tests (10
+new), typecheck, lint and both builds clean. Two limits recorded rather than hidden: position is the
+native renderer's (and the cue's own line settings), and `WebCodecsPlayer` draws decoded frames to a
+canvas with no cue rendering at all, so styling applies to the native and hls.js paths — which is
+where every subtitled channel in this catalogue plays.
+
 **v0.88.0 — self-service password change: a user changes their own password, other sign-ins end.**
 Until now only an admin could change a password — and v0.83.0's reset semantics (end every
 session) are right for a possibly-compromised reset but wrong as the only path: someone who
@@ -2159,8 +2189,9 @@ answers what Chrome is missing. The browser feature after that is the live-playb
   proposed again.
 - **Player settings that persist.** *Shipped (partial → corrected).* Audio and subtitle track choices
   persist per device and re-apply once per stream (`lib/playerPrefs.ts` via `pickTrackIndex`), and the
-  quality ceiling persists with the selector above. What genuinely remains open is only the compact
-  panel's last piece: subtitle styling.
+  quality ceiling persists with the selector above. What genuinely remains open was the compact
+  panel's last piece — subtitle styling. *Shipped in v0.89.0*: the Subtitles panel beside the quality
+  selector, per device, on both players. Corrected so it is not proposed again.
 - **Remember the audio-track probe.** *Shipped — and it had been for a while; the entry below was
   stale.* The verdict is remembered per channel on the server (`channel_plans` facts, mirrored to the
   client by `lib/transcodeHints.ts` with a freshness window), so a fresh page load decides from facts

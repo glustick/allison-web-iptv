@@ -5,6 +5,8 @@ import { streamNeedsTranscode } from '../lib/transcodeHints'
 import { useSessionExpired } from '../lib/sessionWatch'
 import { evaluatePlaybackSample, type PlaybackWatchState } from '../lib/playbackRecovery'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
+import { useSubtitleStyle } from '../lib/useSubtitleStyle'
+import { SubtitleStyleButton } from './SubtitleStyleButton'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
 const SILENT_AUDIO_CHECK_INTERVAL_MS = 1000
@@ -68,6 +70,9 @@ export function NativeVideoPlayer({
   const audioPrefAppliedRef = useRef(false)
   const subtitlePrefAppliedRef = useRef(false)
   const [subtitleTrack, setSubtitleTrack] = useState(-1)
+  // The same preference the live player writes: films carry subtitles too, and the choice belongs
+  // to this device's viewer rather than to one surface of the app.
+  const [subtitleStyle, setSubtitleStyle] = useSubtitleStyle()
   const { getSourceUrl, tryFallbackForSilentAudio, reset, beginRun } = useTranscodeFallback()
 
   useEffect(() => {
@@ -279,6 +284,20 @@ export function NativeVideoPlayer({
   return (
     <div className="player-wrap">
       <video ref={videoRef} controls />
+      {/* The live player's own overlay position — 10vh down clears the browser's native controls. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: '10vh',
+          right: 8,
+          zIndex: 40,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-end'
+        }}
+      >
+        <SubtitleStyleButton style={subtitleStyle} onChange={setSubtitleStyle} />
+      </div>
       <TrackControls
         audioTracks={audioTracks}
         audioTrack={audioTrack}
