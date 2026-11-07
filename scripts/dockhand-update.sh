@@ -33,15 +33,26 @@ say() { echo "dockhand-update: $*"; }
 ssh_do() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$SSH_HOST" "$@"; }
 
 case "$TAG" in
-  v[0-9]*) ;;
-  *) die "expected a release tag like v0.92.0 (got '$TAG') — 'latest' is accepted only as the default" ;;
+  v[0-9]*|latest) ;;
+  *) die "expected a release tag like v0.92.0, or 'latest' (got '$TAG')" ;;
 esac
 
 say "checking ssh to $SSH_HOST"
 ssh_do 'true' >/dev/null 2>&1 || die "cannot SSH to $SSH_HOST with key-based auth. Set SSH_HOST, or ssh-copy-id first."
 
 say "checking docker access on $SSH_HOST"
-if ! ssh_do 'docker info >/dev/null 2>&1'; then
+DOCKER_OK=0
+if ssh_do 'docker info >/dev/null 2>&1'; then DOCKER_OK=1; fi
+
+if [ "$DRY_RUN" = "1" ] && [ "$DOCKER_OK" = "0" ]; then
+  # A dry run is most useful exactly when the real one cannot proceed, so it reports the blocker
+  # instead of sharing it.
+  say "docker access: NO — a real run would stop here (nothing has been changed)"
+  say "would: back up compose.yaml, pin image to $IMAGE:$TAG, docker compose pull + up -d, then poll $HEALTH_URL"
+  exit 0
+fi
+
+if [ "$DOCKER_OK" = "0" ]; then
   cat >&2 <<EOF
 dockhand-update: the SSH user cannot reach docker.sock on $SSH_HOST.
   One-time fix, on $SSH_HOST:   sudo usermod -aG docker "\$USER"    # then log out and back in
