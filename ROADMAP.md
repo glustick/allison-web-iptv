@@ -15,6 +15,38 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.93.1 — a fixture provider, and the bug it found in twenty minutes.** The verification gap this
+project has carried since the beginning is that every UI feature was checked against a running app
+with **no provider**: channels, guide, reminders, favourites and search had only ever been verified
+by typecheck and unit tests, and the scripts README has said "selectors need one tuning pass against
+a running deployment" for months.
+
+`scripts/fixture-provider.mjs` closes it: a fake Xtream panel serving `player_api.php`, `xmltv.php`
+and a real 12-second HLS stream (generated once with ffmpeg at startup), with four channels across
+two categories and a two-hour schedule around the current time. It binds to `0.0.0.0` for a reason
+worth recording: the app's provider URL guard refuses **loopback** (an SSRF guard, correctly), but
+allows LAN addresses, so a local fixture has to be addressed by the machine's own LAN IP.
+
+**It found a real bug on the first run.** The Now/Next strip rendered binary garbage for the whole
+schedule. `decodeBase64Maybe` (short-EPG titles) decoded unconditionally and fell back only when
+`atob` *threw* — but `atob` strips ASCII whitespace, so a plain title like "World at Noon" became the
+base64-shaped "WorldatNoon" and decoded to mojibake rather than throwing. The guide looked correct
+throughout, because the aggregate path never decodes; only the per-channel path was wrong, and only
+against a panel that sends plain text. The fix requires the decode to *be text*: canonical base64
+shape (length a multiple of four, base64 alphabet only), a **fatal** UTF-8 decode, and no control
+characters. Four tests use the exact strings that broke.
+
+**Browser-verified against the fixture** — the first end-to-end run of any of this: four channels
+listed, one playing through the app's own relay with the playhead advancing (12s at last check), the
+guide rendering all sixteen programmes with working reminder bells (chip 0 → 1, record persisted with
+the right channel and times), the **Continue: Fixture News One** chip after a reload, a favourite
+starred and the guide's ★ toggle appearing, and Now/Next reading "World at Noon 20:30–21:00 · Next
+The Long Read 21:00".
+
+Still not covered: films and series against the fixture (it serves no VOD catalogue yet), search (the
+index needs building from a catalogue), multi-view, and the actual provider's own streams — which is
+the one thing a fixture cannot stand in for. 1016 tests; typecheck, lint and both builds clean.
+
 **v0.93.0 — ten small things, mostly about the remote.** A batch release: ten independent
 enhancements, each deliberately small. What follows is one or two sentences each, in the order they
 matter.

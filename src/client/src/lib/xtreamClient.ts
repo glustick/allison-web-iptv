@@ -13,11 +13,31 @@ import type {
 // title/description base64-encoded (confirmed live against the real account this project's
 // own testing uses: without this, the EPG grid shows garbled base64 text instead of real
 // titles).
-function decodeBase64Maybe(value: string | undefined | null): string {
+/**
+ * Xtream panels encode a short-EPG `title` and `description` as base64 — but not all of them, and
+ * not all of them all the time. This used to decode unconditionally and fall back only when `atob`
+ * *threw*, which was wrong in a way a fixture found immediately (v0.93.1): `atob` strips ASCII
+ * whitespace, so a plain title like "World at Noon" becomes the base64-looking "WorldatNoon" and
+ * decodes to mojibake rather than throwing. The Now/Next strip showed binary garbage for a whole
+ * evening's schedule.
+ *
+ * The rule now is "decode only when the result *is text*": the input must be a canonical base64
+ * shape (length a multiple of four, only the base64 alphabet), and the decoded bytes must be
+ * strictly valid UTF-8 with no control characters. A real title that happens to be base64-shaped
+ * fails the second test; an encoded one passes both. Exported for the test that pins exactly that.
+ */
+export function decodeBase64Maybe(value: string | undefined | null): string {
   if (!value) return ''
+  const compact = value.replace(/\s+/g, '')
+  if (compact.length === 0 || compact.length % 4 !== 0) return value
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) return value
   try {
-    const bytes = Uint8Array.from(atob(value), (c) => c.charCodeAt(0))
-    return new TextDecoder('utf-8').decode(bytes)
+    const bytes = Uint8Array.from(atob(compact), (c) => c.charCodeAt(0))
+    // fatal: invalid UTF-8 throws instead of becoming U+FFFD — the strongest signal that these
+    // bytes were never text to begin with.
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(text)) return value
+    return text
   } catch {
     return value
   }

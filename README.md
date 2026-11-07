@@ -6,6 +6,31 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.93.1 — a fixture found a real bug in twenty minutes)
+
+`scripts/fixture-provider.mjs` is now a thing: a fake Xtream panel with four channels, a two-hour
+schedule and a real HLS stream, so the app can be driven through its actual screens without an
+account. It earned its keep on the first run.
+
+**The bug it found:** the Now/Next strip showed binary garbage for the whole schedule. Short-EPG
+titles are base64 on some panels, and `decodeBase64Maybe` decoded unconditionally, falling back only
+when `atob` *threw* — but `atob` strips ASCII whitespace, so a plain title like "World at Noon"
+became the base64-looking "WorldatNoon" and decoded to mojibake instead of failing. The guide looked
+fine (its aggregate path never decodes), which is exactly why this survived: only the per-channel
+path was affected, and only with a panel that sends plain text.
+
+**The fix** is a stricter rule — decode only when the result *is text*: canonical base64 shape
+(length a multiple of four, base64 alphabet only), then a **fatal** UTF-8 decode (invalid bytes throw
+rather than becoming U+FFFD) and no control characters. Pinned by four tests that use the exact
+strings that broke it.
+
+**Verified in the browser against the fixture**, which is the first time any of this has been:
+four channels listed and playing through the app's own relay (`/api/stream/live/101.m3u8`,
+playhead advancing), the guide rendering every programme with a working reminder bell (chip 0 → 1,
+record persisted), the "Continue: Fixture News One" chip after a reload, a favourite starred and the
+guide's ★ toggle appearing, and Now/Next reading *"World at Noon 20:30–21:00 · Next The Long Read
+21:00"* after the fix. 1016 tests; typecheck, lint and both builds clean.
+
 ## Current state (v0.93.0 — ten small things, mostly about the remote)
 
 Ten enhancements, each small enough to explain in a sentence, chosen because they are the ones you
