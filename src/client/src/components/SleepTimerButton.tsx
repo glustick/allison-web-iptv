@@ -26,7 +26,8 @@ export function SleepTimerButton({
   onStart,
   onStartAt,
   onCancel,
-  programmes
+  programmes,
+  playbackEnd
 }: {
   timer: SleepTimer | null
   remaining: number
@@ -35,6 +36,8 @@ export function SleepTimerButton({
   onCancel: () => void
   /** The channel's schedule, when the caller has it — enables "end of this programme". */
   programmes?: GuideProgramme[]
+  /** When a film or episode ends (v0.94.0) — enables "end of this film". */
+  playbackEnd?: { endsAt: number; label: string }
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const panelId = useId()
@@ -85,6 +88,20 @@ export function SleepTimerButton({
               </div>
             )
           })()}
+          {playbackEnd && (
+            <div style={{ display: 'flex', marginTop: 6 }}>
+              <button
+                type="button"
+                className="admin-small-btn"
+                style={{ padding: '2px 7px', fontSize: 11 }}
+                aria-pressed={timer?.label === playbackEnd.label}
+                title="Stop when what is playing ends"
+                onClick={() => onStartAt(playbackEnd.endsAt, playbackEnd.label)}
+              >
+                {playbackEnd.label} ({clockLabel(playbackEnd.endsAt)})
+              </button>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>
             {SLEEP_PRESETS.map((minutes) => (
               <button

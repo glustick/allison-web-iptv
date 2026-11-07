@@ -15,6 +15,42 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.94.0 — ten more, split between the lists and the player.** Another batch release, each item
+small, with the fixture from v0.93.1 used to check what it can reach.
+
+**Lists.** A **filter box** on films, series and the live library (`lib/listFilter.ts`): accent- and
+case-insensitive, no request, and it reports "N of M" plus a clear action, because a filter that
+hides everything must not look like an empty category. **Series ordering** (`sortSeries`: provider /
+A–Z / newest release, from `releaseDate`) to match the films. A **per-row star** in history and
+custom categories — `rowActions` already existed, so a channel can be favourited from the list rather
+than only from the player. A **rating badge** on film rows, using a field the catalogue has always
+carried. Writing the star exposed a TypeScript narrowing trap: putting `history || custom` first made
+the later `custom` branch `never`, so `rowActions` became one function with explicit early returns.
+
+**Player.** On-screen **−10s / +10s** (the keyboard had them since v0.90.0; a touch screen did not),
+**PiP** in both players, a **"Resumed at 12:34 — start over"** chip, and **"Stop when this film
+ends"** in the sleep panel — `endOfPlaybackDeadline` takes the element's duration and the current
+playback rate, so an hour of film at 1.5× is forty minutes of evening.
+
+**Search** gained arrow-key highlight and Enter-to-play (`lib/searchKeyboard.ts`), with the highlight
+reset whenever the query or the kind filter changes so a stale index can never play the wrong thing,
+and `/` to focus the box from anywhere (`isTypingTarget` decides when that must not fire).
+
+**Now/Next** gained a bell for the following programme, routed through the same reminder store the
+guide uses.
+
+**The fixture grew a VOD catalogue and byte ranges.** Three films across a category, one series with
+two seasons, and — after a false alarm — `Range` support on the served MP4. Without a 206 response a
+browser cannot seek a progressive file: the playhead snaps to zero on every seek, which looks exactly
+like a player bug and is a fixture bug. Worth recording because the first diagnosis was wrong.
+
+**Verified in a browser against the fixture**: three films with rating badges, A–Z reordering them,
+the filter narrowing to "1 of 3", and a film playing through the relay with `−10s / +10s / PiP` on
+the overlay. **Not verified**: the skip buttons' effect (the media element under automation went
+sourceless after a reload), PiP opening, the resume chip, and the film deadline in the sleep panel.
+The note says that plainly rather than implying more. 1029 tests; typecheck, lint and both builds
+clean.
+
 **v0.93.1 — a fixture provider, and the bug it found in twenty minutes.** The verification gap this
 project has carried since the beginning is that every UI feature was checked against a running app
 with **no provider**: channels, guide, reminders, favourites and search had only ever been verified

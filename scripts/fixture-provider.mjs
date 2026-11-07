@@ -42,6 +42,15 @@ execFileSync(FFMPEG, [
   '-loglevel', 'error'
 ])
 
+// A single 60s MP4, served for every film and episode: the VOD player takes a direct file.
+const vodFile = join(mediaDir, 'vod.mp4')
+execFileSync(FFMPEG, [
+  '-y', '-f', 'lavfi', '-i', 'color=c=0x2a1b44:s=640x360:d=60',
+  '-f', 'lavfi', '-i', 'sine=frequency=330:duration=60',
+  '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k',
+  vodFile, '-loglevel', 'error'
+])
+
 // ---- catalogue --------------------------------------------------------------------------
 const now = Date.now()
 const HALF_HOUR = 30 * 60_000
@@ -65,6 +74,51 @@ const channels = [
   added: '1700000000',
   is_adult: '0'
 }))
+
+const films = [
+  { stream_id: 301, name: 'Fixture Film Alpha', category_id: '10', added: '1794000000', year: '2024' },
+  { stream_id: 302, name: 'Fixture Film bravo', category_id: '10', added: '1791000000', year: '2022' },
+  { stream_id: 303, name: 'Fixture Film Charlie', category_id: '10', added: '1780000000', year: '2019' }
+].map((film, index) => ({
+  num: index + 1,
+  name: film.name,
+  stream_type: 'movie',
+  stream_id: film.stream_id,
+  stream_icon: '',
+  rating: '7.5',
+  rating_5based: 3.8,
+  added: film.added,
+  category_id: film.category_id,
+  container_extension: 'mp4',
+  direct_source: ''
+}))
+
+const seriesCatalogue = [
+  {
+    num: 1,
+    name: 'Fixture Series One',
+    series_id: 401,
+    cover: '',
+    plot: 'A fixture series.',
+    cast: '',
+    director: '',
+    genre: 'Drama',
+    releaseDate: '2023-04-01',
+    rating: '8.0',
+    category_id: '20'
+  }
+]
+
+const seriesEpisodes = {
+  '1': [
+    { id: '4011', episode_num: 1, title: 'Fixture S01E01', container_extension: 'mp4', season: 1, info: {} },
+    { id: '4012', episode_num: 2, title: 'Fixture S01E02', container_extension: 'mp4', season: 1, info: {} }
+  ],
+  '2': [
+    { id: '4021', episode_num: 1, title: 'Fixture S02E01', container_extension: 'mp4', season: 2, info: {} },
+    { id: '4022', episode_num: 2, title: 'Fixture S02E02', container_extension: 'mp4', season: 2, info: {} }
+  ]
+}
 
 const titles = {
   101: ['Morning Briefing', 'World at Noon', 'The Long Read', 'Evening Bulletin'],
@@ -103,14 +157,24 @@ function playerApi(action, params) {
     case 'get_short_epg':
       return { epg_listings: epgFor(Number(params.stream_id ?? 101)) }
     case 'get_vod_categories':
+      return [{ category_id: '10', category_name: 'Films', parent_id: 0 }]
     case 'get_series_categories':
-      return []
+      return [{ category_id: '20', category_name: 'Drama', parent_id: 0 }]
     case 'get_vod_streams':
+      return params.category_id ? films.filter((film) => film.category_id === params.category_id) : films
     case 'get_series':
-      return []
-    case 'get_vod_info':
+      return seriesCatalogue
     case 'get_series_info':
-      return {}
+      return {
+        seasons: [
+          { season_number: 1, name: 'Season 1', cover: '' },
+          { season_number: 2, name: 'Season 2', cover: '' }
+        ],
+        episodes: seriesEpisodes,
+        info: { name: 'Fixture Series One', plot: 'A fixture series.' }
+      }
+    case 'get_vod_info':
+      return { info: { name: 'Fixture Film', plot: 'A fixture film.' }, movie_data: films[0] }
     default:
       return {}
   }
@@ -132,7 +196,37 @@ const server = createServer((req, res) => {
     return
   }
 
-  if (url.pathname.startsWith('/live/') || url.pathname.startsWith('/movie/') || url.pathname.startsWith('/series/')) {
+  if (url.pathname.startsWith('/movie/') || url.pathname.startsWith('/series/')) {
+    // Films and episodes are one direct file, whatever id was asked for — served with **byte
+    // ranges**, because a browser cannot seek a progressive MP4 without them: without a 206 the
+    // playhead snaps back to zero on every seek, which looks exactly like a player bug.
+    const body = readFileSync(vodFile)
+    const range = req.headers.range
+    const match = typeof range === 'string' ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null
+    if (match) {
+      const start = match[1] ? Number(match[1]) : 0
+      const end = match[2] ? Math.min(Number(match[2]), body.length - 1) : body.length - 1
+      if (start >= body.length || start > end) {
+        res.writeHead(416, { 'content-range': `bytes */${body.length}` })
+        res.end()
+        return
+      }
+      const slice = body.subarray(start, end + 1)
+      res.writeHead(206, {
+        'content-type': 'video/mp4',
+        'accept-ranges': 'bytes',
+        'content-range': `bytes ${start}-${end}/${body.length}`,
+        'content-length': String(slice.length)
+      })
+      res.end(slice)
+      return
+    }
+    res.writeHead(200, { 'content-type': 'video/mp4', 'accept-ranges': 'bytes', 'content-length': String(body.length) })
+    res.end(body)
+    return
+  }
+
+  if (url.pathname.startsWith('/live/')) {
     const file = url.pathname.split('/').pop() ?? ''
     // Every channel answers with the same playlist; the segments it names are served by basename.
     const local = file.endsWith('.m3u8') ? join(mediaDir, 'index.m3u8') : join(mediaDir, file)
@@ -170,5 +264,7 @@ const server = createServer((req, res) => {
 })
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`fixture-provider: http://127.0.0.1:${PORT} (user ${USER}, pass ${PASS}) — ${channels.length} channels, HLS from ${mediaDir}`)
+  console.log(
+    `fixture-provider: http://127.0.0.1:${PORT} — ${channels.length} channels, ${films.length} films, ${seriesCatalogue.length} series (user ${USER}, pass ${PASS})`
+  )
 })

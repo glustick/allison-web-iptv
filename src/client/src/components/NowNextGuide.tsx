@@ -8,7 +8,14 @@ import { clockLabel, pickNowNext, programmeProgress, type GuideProgramme } from 
  * answers "what am I watching, and what is it cutting into". It re-renders once a minute — enough
  * for the progress bar's resolution, and nothing that competes with playback.
  */
-export function NowNextGuide({ programmes }: { programmes: GuideProgramme[] }): JSX.Element | null {
+export function NowNextGuide({
+  programmes,
+  onRemind
+}: {
+  programmes: GuideProgramme[]
+  /** Set a reminder for the next programme without leaving the player (v0.94.0). */
+  onRemind?: (programme: GuideProgramme) => void
+}): JSX.Element | null {
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -45,6 +52,17 @@ export function NowNextGuide({ programmes }: { programmes: GuideProgramme[] }): 
           <span className="now-next-label">Next</span>
           <span className="now-next-title">{next.title}</span>
           <span className="now-next-time">{clockLabel(next.startMs)}</span>
+          {onRemind && (
+            <button
+              type="button"
+              className="now-next-remind"
+              title={`Remind me when ${next.title} starts`}
+              aria-label={`Remind me when ${next.title} starts`}
+              onClick={() => onRemind(next)}
+            >
+              🔔
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -7,6 +7,7 @@ import { evaluatePlaybackSample, type PlaybackWatchState } from '../lib/playback
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
 import { useSubtitleStyle } from '../lib/useSubtitleStyle'
 import { usePlaybackPrefs } from '../lib/usePlaybackPrefs'
+import { endOfPlaybackDeadline, formatCountdown } from '../lib/sleepTimer'
 import { PLAYBACK_RATES } from '../lib/playerPrefs'
 import { useSleepTimer } from '../lib/useSleepTimer'
 import { usePlayerKeys } from '../lib/usePlayerKeys'
@@ -84,9 +85,26 @@ export function NativeVideoPlayer({
   const [subtitleStyle, setSubtitleStyle] = useSubtitleStyle()
   // Volume, mute and speed, per device (v0.93.0) — a film is the one place speed makes sense.
   const { rate, setRate } = usePlaybackPrefs(videoRef, { allowRate: true })
+  // The element's own duration, for "stop when this ends" (v0.94.0).
+  const [durationSeconds, setDurationSeconds] = useState<number | null>(null)
+  // "Resumed at 12:34 — start over" (v0.94.0): a way back that does not require scrubbing.
+  const [resumeChip, setResumeChip] = useState<boolean>(() => (initialPositionSeconds ?? 0) > 0)
   // The same timer as the live player's — one deadline for the evening, not one per stream.
   const [showShortcuts, setShowShortcuts] = useState(false)
   usePlayerKeys({ seekable: true, videoRef, onHelp: () => setShowShortcuts((value) => !value) })
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const read = (): void => setDurationSeconds(Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null)
+    read()
+    video.addEventListener('loadedmetadata', read)
+    video.addEventListener('durationchange', read)
+    return () => {
+      video.removeEventListener('loadedmetadata', read)
+      video.removeEventListener('durationchange', read)
+    }
+  }, [videoRef])
+
   const sleep = useSleepTimer(() => {
     if (onStop) onStop()
     else videoRef.current?.pause()
@@ -327,6 +345,26 @@ export function NativeVideoPlayer({
             </option>
           ))}
         </select>
+        <button type="button" className="admin-small-btn" style={{ padding: '4px 8px' }} title="Back 10 seconds" onClick={() => {
+          const video = videoRef.current
+          if (video) video.currentTime = Math.max(0, video.currentTime - 10)
+        }}>
+          −10s
+        </button>
+        <button type="button" className="admin-small-btn" style={{ padding: '4px 8px' }} title="Forward 10 seconds" onClick={() => {
+          const video = videoRef.current
+          if (video) video.currentTime = Math.min(video.duration || Infinity, video.currentTime + 10)
+        }}>
+          +10s
+        </button>
+        <button type="button" className="admin-small-btn" style={{ padding: '4px 8px' }} title="Picture in picture" onClick={() => {
+          const video = videoRef.current
+          if (!video) return
+          if (document.pictureInPictureElement) void document.exitPictureInPicture().catch(() => {})
+          else void video.requestPictureInPicture?.().catch(() => {})
+        }}>
+          PiP
+        </button>
         <SubtitleStyleButton style={subtitleStyle} onChange={setSubtitleStyle} />
         <SleepTimerButton
           timer={sleep.timer}
@@ -334,6 +372,14 @@ export function NativeVideoPlayer({
           onStart={sleep.start}
           onStartAt={sleep.startAt}
           onCancel={sleep.cancel}
+          playbackEnd={
+            durationSeconds
+              ? {
+                  endsAt: endOfPlaybackDeadline(videoRef.current?.currentTime ?? 0, durationSeconds, Date.now(), rate) ?? 0,
+                  label: 'End of film'
+                }
+              : undefined
+          }
         />
         <button
           type="button"
@@ -374,6 +420,25 @@ export function NativeVideoPlayer({
           <span>Your session expired — sign in again to keep watching.</span>
           <button type="button" className="admin-small-btn" onClick={() => window.location.reload()}>
             Sign in again
+          </button>
+        </div>
+      )}
+      {resumeChip && !error && (
+        <div className="player-notice" role="status">
+          Resumed at {formatCountdown(initialPositionSeconds ?? 0)} —{' '}
+          <button
+            type="button"
+            className="admin-small-btn"
+            onClick={() => {
+              const video = videoRef.current
+              if (video) video.currentTime = 0
+              setResumeChip(false)
+            }}
+          >
+            Start over
+          </button>
+          <button type="button" className="admin-small-btn" onClick={() => setResumeChip(false)}>
+            Dismiss
           </button>
         </div>
       )}

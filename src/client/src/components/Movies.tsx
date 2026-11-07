@@ -5,6 +5,8 @@ import { NativeVideoPlayer } from './NativeVideoPlayer'
 import { ContinueWatchingShelf, type ContinueItem } from './ContinueWatchingShelf'
 import { continueWatching, isFinished, progressPercent as watchPercent } from '../lib/continueWatching'
 import { readLibrarySort, sortFilms, writeLibrarySort, type LibrarySort } from '../lib/librarySort'
+import { filterByText } from '../lib/listFilter'
+import { ListFilter } from './ListFilter'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { XtreamClient } from '../lib/xtreamClient'
 import { playlistRefOf } from '../lib/types'
@@ -68,6 +70,8 @@ export function Movies({
   // How this device prefers its film list ordered (v0.93.0). Sorting is applied to the loaded
   // catalogue only — a favourites or history list keeps its own order, which is the point of it.
   const [librarySort, setLibrarySort] = useState<LibrarySort>(() => readLibrarySort())
+  // Narrows the list already in memory (v0.94.0) — no request, no leaving the view.
+  const [listFilter, setListFilter] = useState('')
   const [movies, setMovies] = useState<VodStream[]>([])
   const [nowPlaying, setNowPlaying] = useState<VodStream | null>(null)
   // The position this playback started from, so the player seeks there once and the UI can show
@@ -342,12 +346,19 @@ export function Movies({
     : session.client
   const streamUrl = nowPlaying ? nowPlayingClient.getStreamUrl('movie', nowPlaying.stream_id, nowPlaying.container_extension) : null
   const sortedMovies = useMemo(() => sortFilms(movies, librarySort), [movies, librarySort])
-  const listRows: Array<{ streamId: number; playlistId?: string; name: string }> =
+  const filterMovie = useCallback((movie: VodStream) => movie.name, [])
+  const listRows: Array<{ streamId: number; playlistId?: string; name: string; rating?: string }> =
     selection.type === 'favourites'
       ? movieFavourites.map((favourite) => ({ streamId: favourite.streamId, playlistId: favourite.playlistId || undefined, name: favourite.name }))
       : selection.type === 'history'
         ? historyMovies
-        : sortedMovies.map((movie) => ({ streamId: movie.stream_id, playlistId: playlistRefOf(movie), name: movie.name }))
+        : sortedMovies.map((movie) => ({
+            streamId: movie.stream_id,
+            playlistId: playlistRefOf(movie),
+            name: movie.name,
+            rating: movie.rating
+          }))
+  const visibleRows = filterByText(listRows, listFilter, (row) => row.name)
   const sectionTitle = selection.type === 'favourites' ? 'Favourite films' : selection.type === 'history' ? 'Watch history' : 'All films'
 
   return (
@@ -443,6 +454,13 @@ export function Movies({
         )}
         <div className="list-toolbar">
           <span className="list-toolbar-title">{sectionTitle}</span>
+          <ListFilter
+            value={listFilter}
+            onChange={setListFilter}
+            placeholder="Filter films…"
+            shown={visibleRows.length}
+            total={listRows.length}
+          />
           {(selection.type === 'all' || selection.type === 'provider') && (
             <select
               className="admin-small-btn"
@@ -504,12 +522,12 @@ export function Movies({
           />
         )}
         <div className="channel-list">
-          {listRows.length === 0 && (
+          {visibleRows.length === 0 && (
             <p className="list-hint">
               {selection.type === 'favourites' ? 'No favourite films yet — press ☆ while one plays.' : selection.type === 'history' ? 'Nothing watched yet.' : 'No films to show.'}
             </p>
           )}
-          {listRows.map((row) => {
+          {visibleRows.map((row) => {
             const stored = movieResume.get(`${row.playlistId ?? ''}:${row.streamId}`)
             // A finished title has no resume point any more, but a record written by an older build
             // must not paint a 100% badge either.
@@ -526,6 +544,7 @@ export function Movies({
                   onClick={() => play(row.streamId, row.name, resume?.positionSeconds ?? 0, row.playlistId)}
                 >
                   <span>{row.name}</span>
+                  {row.rating && /^\d/.test(row.rating) && <span className="rating-badge">★ {row.rating}</span>}
                   {row.playlistId && row.playlistId !== 'primary' && (
                     <span className="setup-hint" style={{ marginLeft: 6, fontSize: '0.68rem', opacity: 0.75 }}>
                       {additional.find((e) => e.id === row.playlistId)?.label ?? row.playlistId}

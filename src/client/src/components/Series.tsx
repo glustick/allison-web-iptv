@@ -3,6 +3,9 @@ import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
 import { isFinished } from '../lib/continueWatching'
+import { sortSeries, type SeriesSort } from '../lib/librarySort'
+import { filterByText } from '../lib/listFilter'
+import { ListFilter } from './ListFilter'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { formatClock } from './Movies'
 import { XtreamClient } from '../lib/xtreamClient'
@@ -152,6 +155,8 @@ export function Series({
   const [categories, setCategories] = useState<Category[]>([])
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null)
   const [seriesList, setSeriesList] = useState<SeriesItem[]>([])
+  const [seriesSort, setSeriesSort] = useState<SeriesSort>('default')
+  const [listFilter, setListFilter] = useState('')
   const [openSeries, setOpenSeries] = useState<SeriesItem | null>(null)
   // Series favourites: prefs already stores them (kind 'series'); this tab just never showed them.
   const [nowPlaying, setNowPlaying] = useState<{ episode: SeriesEpisode; playlistId?: string } | null>(null)
@@ -545,6 +550,18 @@ export function Series({
           <div className="channel-list">
             <div className="list-toolbar">
               <span className="list-toolbar-title">Series</span>
+              <ListFilter value={listFilter} onChange={setListFilter} placeholder="Filter series…" />
+              <select
+                className="admin-small-btn"
+                style={{ padding: '3px 6px' }}
+                value={seriesSort}
+                title="How this device orders the series list"
+                onChange={(event) => setSeriesSort(event.target.value as SeriesSort)}
+              >
+                <option value="default">Provider order</option>
+                <option value="name">A–Z</option>
+                <option value="newest">Newest release</option>
+              </select>
               {visibleAdditional.length > 0 && (
                 <span className="view-toggle" role="group" aria-label="Which playlist's series to browse">
                   <button
@@ -577,9 +594,15 @@ export function Series({
                 </span>
               )}
             </div>
-            {(selection.type === 'favourites'
-              ? seriesFavourites.map((f) => ({ series_id: f.streamId, name: f.name, playlistId: f.playlistId } as SeriesItem))
-              : seriesList
+            {filterByText(
+              sortSeries(
+                selection.type === 'favourites'
+                  ? seriesFavourites.map((f) => ({ series_id: f.streamId, name: f.name, playlistId: f.playlistId }) as SeriesItem)
+                  : seriesList,
+                seriesSort
+              ),
+              listFilter,
+              (item) => item.name
             ).map((item) => (
               <button
                 key={`${playlistRefOf(item) ?? ''}:${item.series_id}`}

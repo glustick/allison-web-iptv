@@ -1696,6 +1696,66 @@ body.resizing-col {
 
 /* Recent searches (v0.90.0). The rows reuse .search-hit so a remembered term looks like a result;
    only the head row is new, because it carries the Clear action beside its label. */
+.list-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+}
+
+.list-filter-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: #e7e9ee;
+  background: #12151c;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+}
+
+.list-filter-input::placeholder {
+  color: #6f7682;
+}
+
+.list-filter-count {
+  font-size: 11px;
+  color: #9aa1ad;
+  white-space: nowrap;
+}
+
+.rating-badge {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #f0b72f;
+  white-space: nowrap;
+}
+
+.search-hit.highlighted {
+  background: #171b25;
+  color: #ffffff;
+  outline: 1px solid #4f7cff;
+  outline-offset: -1px;
+}
+
+.now-next-remind {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 50%;
+  border: 1px solid #2a2f3d;
+  background: rgba(12, 16, 24, 0.85);
+  color: inherit;
+  cursor: pointer;
+}
+
+.now-next-remind:hover {
+  border-color: #4f7cff;
+}
+
 .search-filters {
   display: flex;
   gap: 6px;

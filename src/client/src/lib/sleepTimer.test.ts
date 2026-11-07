@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   clearSleepTimer,
+  endOfPlaybackDeadline,
   formatCountdown,
   readSleepTimer,
   remainingSeconds,
@@ -73,5 +74,22 @@ describe('sleep timer', () => {
     ).toBeNull()
     const hostile = { getItem: () => { throw new Error('nope') }, removeItem: () => {} }
     expect(readSleepTimer(NOW, hostile)).toBeNull()
+  })
+})
+
+describe('the end of what is playing', () => {
+  const NOW = 1_700_000_000_000
+
+  it('is the remaining time at normal speed', () => {
+    expect(endOfPlaybackDeadline(600, 1800, NOW, 1)).toBe(NOW + 1200 * 1000)
+  })
+
+  it('shrinks at faster speeds', () => {
+    expect(endOfPlaybackDeadline(600, 1800, NOW, 1.5)).toBe(NOW + 800 * 1000)
+  })
+
+  it('has no deadline without a duration, and none once it is over', () => {
+    expect(endOfPlaybackDeadline(600, null, NOW, 1)).toBeNull()
+    expect(endOfPlaybackDeadline(1800, 1800, NOW, 1)).toBe(NOW)
   })
 })

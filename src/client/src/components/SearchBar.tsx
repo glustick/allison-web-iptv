@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type JSX } from 'react'
 import { search, type SearchHit, type SearchStatus } from '../lib/system'
 import { clearRecentSearches, readRecentSearches, rememberSearch } from '../lib/recentSearches'
 import { SEARCH_FILTERS, countHits, filterHits, type SearchFilter } from '../lib/searchFilter'
+import { nextHighlight } from '../lib/searchKeyboard'
+import { isTypingTarget } from '../lib/playerKeys'
 
 // Global search over the provider's whole catalogue. Results are served from the SQLite index, so
 // this keeps working when the provider itself is slow — but an unbuilt index shows its state
@@ -24,7 +26,27 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
   // the answer once the list is long. Reset on a new query so a filter never hides fresh results
   // without the viewer having asked for it.
   const [kindFilter, setKindFilter] = useState<SearchFilter>('all')
+  // Which result Enter would play (v0.94.0) — arrow keys move it, and it resets whenever the
+  // results change so a stale highlight can never play the wrong thing.
+  const [highlight, setHighlight] = useState(-1)
+  const inputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // "/" focuses the search box from anywhere, the way every list-driven app does it (v0.94.0).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return
+      if (isTypingTarget(event.target)) return
+      event.preventDefault()
+      inputRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  useEffect(() => {
+    setHighlight(-1)
+  }, [query, kindFilter])
 
   useEffect(() => {
     const trimmed = query.trim()
@@ -65,6 +87,7 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
   return (
     <div className="search-bar" ref={containerRef}>
       <input
+        ref={inputRef}
         type="search"
         className="search-input"
         placeholder="Search channels, films and series…"
@@ -72,9 +95,17 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
         onChange={(e) => setQuery(e.target.value)}
         onFocus={() => setOpen(true)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && visibleHits[0]) {
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            if (visibleHits.length === 0) return
+            e.preventDefault()
+            setHighlight((current) => nextHighlight(current, e.key === 'ArrowDown' ? 1 : -1, visibleHits.length))
+            return
+          }
+          if (e.key === 'Enter') {
+            const chosen = visibleHits[highlight >= 0 ? highlight : 0]
+            if (!chosen) return
             setRecent(rememberSearch(query))
-            onPlay(visibleHits[0])
+            onPlay(chosen)
             setOpen(false)
           }
           if (e.key === 'Escape') setOpen(false)
@@ -130,11 +161,11 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
               ))}
             </div>
           )}
-          {visibleHits.map((hit) => (
+          {visibleHits.map((hit, index) => (
             <button
               key={`${hit.kind}:${hit.streamId}`}
               type="button"
-              className="search-hit"
+              className={index === highlight ? 'search-hit highlighted' : 'search-hit'}
               onClick={() => {
                 setRecent(rememberSearch(query))
                 onPlay(hit)

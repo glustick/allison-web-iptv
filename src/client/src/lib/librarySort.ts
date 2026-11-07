@@ -69,6 +69,30 @@ export function sortFilms<T extends { name: string; added?: string }>(films: T[]
   return copy
 }
 
+export type SeriesSort = 'default' | 'name' | 'newest'
+
+/**
+ * Series ordering (v0.94.0). The catalogue carries `releaseDate` rather than the panel's `added`,
+ * so "newest" means newest *release* — which is what a viewer means by "newest series" anyway.
+ */
+export function sortSeries<T extends { name: string; releaseDate?: string }>(series: T[], sort: SeriesSort): T[] {
+  if (sort === 'default') return series
+  const copy = series.slice()
+  if (sort === 'name') {
+    copy.sort((a, b) => collator.compare(a.name, b.name))
+    return copy
+  }
+  copy.sort((a, b) => {
+    const left = a.releaseDate ? Date.parse(a.releaseDate) : Number.NaN
+    const right = b.releaseDate ? Date.parse(b.releaseDate) : Number.NaN
+    if (Number.isNaN(left) && Number.isNaN(right)) return 0
+    if (Number.isNaN(left)) return 1
+    if (Number.isNaN(right)) return -1
+    return right - left
+  })
+  return copy
+}
+
 function safeStorage(): Storage | null {
   try {
     return typeof localStorage === 'undefined' ? null : localStorage

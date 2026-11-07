@@ -8,6 +8,10 @@ import { EpgGrid } from './EpgGrid'
 import { NowNextGuide } from './NowNextGuide'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
 import { readLastChannel, writeLastChannel, type LastChannel } from '../lib/lastChannel'
+import { filterByText } from '../lib/listFilter'
+import { readReminders, reminderId, upsertReminder, writeReminders } from '../lib/reminders'
+import type { GuideProgramme } from '../lib/guideNowNext'
+import { ListFilter } from './ListFilter'
 import { ReorderableChannelList, type ReorderableRow } from './ReorderableChannelList'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { sectionTitle } from '../lib/sectionTitle'
@@ -109,6 +113,8 @@ export function LiveTv({
   const [previousChannel, setPreviousChannel] = useState<LiveStream | null>(null)
   // The last channel this device watched, offered as a chip rather than autoplayed (v0.93.0).
   const [lastChannel, setLastChannel] = useState<LastChannel | null>(() => readLastChannel())
+  // Narrows a library list that is already in memory (v0.94.0).
+  const [listFilter, setListFilter] = useState('')
   // What is on this channel now and next (v0.91.0), from the same per-channel short-EPG call the
   // guide falls back to — requested once per channel, queued behind the hook's own concurrency cap
   // so it cannot stampede the provider when someone zaps through channels.
@@ -688,6 +694,34 @@ export function LiveTv({
     [applyPrefs, handlePrefsError]
   )
 
+  // One-click reminder for what is coming next on the channel being watched (v0.94.0).
+  const remindNext = useCallback(
+    (programme: GuideProgramme): void => {
+      if (!nowPlaying) return
+      const playlistId = playlistRefOf(nowPlaying) || undefined
+      const id = reminderId(nowPlaying.stream_id, playlistId, programme.startMs)
+      const existing = readReminders()
+      if (existing.some((reminder) => reminder.id === id)) return
+      writeReminders(
+        upsertReminder(
+          existing,
+          {
+            id,
+            streamId: nowPlaying.stream_id,
+            playlistId,
+            channelName: nowPlaying.name,
+            title: programme.title,
+            startMs: programme.startMs,
+            stopMs: programme.stopMs,
+            firedAt: 0
+          },
+          Date.now()
+        )
+      )
+    },
+    [nowPlaying]
+  )
+
   const favouriteKeys = useMemo(
     () => prefs.favourites.filter((favourite) => favourite.kind === 'live').map((favourite) => `${favourite.playlistId ?? ''}:${favourite.streamId}`),
     [prefs.favourites]
@@ -1124,7 +1158,7 @@ export function LiveTv({
             </div>
             {/* What this channel is showing, and what follows (v0.91.0). Hidden during catch-up:
                 the live channel's schedule is not what is on screen then. */}
-            {!catchup && <NowNextGuide programmes={nowNextProgrammes} />}
+            {!catchup && <NowNextGuide programmes={nowNextProgrammes} onRemind={remindNext} />}
             <div
               className="resize-handle resize-handle--row"
               onPointerDown={startPlayerHeightDrag}
@@ -1252,16 +1286,26 @@ export function LiveTv({
           />
         </>
         ) : (selection.type === 'favourites' || selection.type === 'history' || selection.type === 'custom') && !picking ? (
+          <>
+          <ListFilter
+            value={listFilter}
+            onChange={setListFilter}
+            placeholder="Filter channels…"
+            shown={filterByText(libraryRows, listFilter, (row) => row.name).length}
+            total={libraryRows.length}
+          />
           <ReorderableChannelList
-            rows={libraryRows}
+            rows={filterByText(libraryRows, listFilter, (row) => row.name)}
             reorderable={selection.type !== 'history'}
             activeKey={nowPlaying ? liveChannelKey(nowPlaying) : undefined}
             emptyMessage={
-              selection.type === 'favourites'
-                ? 'No favourites yet — press ☆ on a channel while it plays.'
-                : selection.type === 'history'
-                  ? 'Nothing watched yet.'
-                  : 'Empty category — use Add channels to pick channels from any category.'
+              listFilter.trim()
+                ? `No channels match “${listFilter.trim()}”.`
+                : selection.type === 'favourites'
+                  ? 'No favourites yet — press ☆ on a channel while it plays.'
+                  : selection.type === 'history'
+                    ? 'Nothing watched yet.'
+                    : 'Empty category — use Add channels to pick channels from any category.'
             }
             onPlay={(row) => {
               const ref = row.storedPlaylistId || ''
@@ -1271,41 +1315,77 @@ export function LiveTv({
               selectChannel(found ?? synthesizeStream(row.streamId, row.name, null, ref ? { id: ref } : undefined))
             }}
             onReorder={handleLibraryReorder}
-            rowActions={(row) =>
-              selection.type === 'favourites' ? (
-                <button
-                  type="button"
-                  className="admin-small-btn"
-                  title="Remove from favourites"
-                  onClick={() => {
-                    void setFavourite(
-                      { kind: 'live', streamId: row.storedStreamId ?? row.streamId, playlistId: row.storedPlaylistId || undefined, name: row.name },
-                      false
-                    )
-                      .then((favourites) => applyPrefs({ ...prefs, favourites }))
-                      .catch((err) => handlePrefsError(err, 'Could not update favourites'))
-                  }}
-                >
-                  ✕
-                </button>
-              ) : selection.type === 'custom' && selectedCustom ? (
-                <button
-                  type="button"
-                  className="admin-small-btn danger"
-                  title="Remove from this category"
-                  onClick={() =>
-                    void handleRemoveFromCategory({
-                      stream_id: row.streamId,
-                      name: row.name,
-                      playlistId: row.storedPlaylistId || undefined
-                    } as LiveStream)
-                  }
-                >
-                  ✕
-                </button>
-              ) : null
-            }
+            rowActions={(row) => {
+              const ref = row.storedPlaylistId || ''
+              const channel = channels.find(
+                (entry) => entry.stream_id === row.streamId && (playlistRefOf(entry) ?? '') === ref
+              )
+              // A star from the list itself (v0.94.0): the row is where you notice a channel worth
+              // keeping, and the player is not the only place a favourite can be set.
+              const star =
+                channel && selection.type !== 'favourites' ? (
+                  <button
+                    type="button"
+                    className={isFavourite(channel) ? 'prefs-action active' : 'prefs-action'}
+                    title={isFavourite(channel) ? 'Remove from favourites' : 'Add to favourites'}
+                    aria-pressed={isFavourite(channel)}
+                    onClick={() => void toggleFavourite(channel)}
+                  >
+                    {isFavourite(channel) ? '★' : '☆'}
+                  </button>
+                ) : null
+
+              if (selection.type === 'favourites') {
+                return (
+                  <button
+                    type="button"
+                    className="admin-small-btn"
+                    title="Remove from favourites"
+                    onClick={() => {
+                      void setFavourite(
+                        {
+                          kind: 'live',
+                          streamId: row.storedStreamId ?? row.streamId,
+                          playlistId: row.storedPlaylistId || undefined,
+                          name: row.name
+                        },
+                        false
+                      )
+                        .then((favourites) => applyPrefs({ ...prefs, favourites }))
+                        .catch((err) => handlePrefsError(err, 'Could not update favourites'))
+                    }}
+                  >
+                    ✕
+                  </button>
+                )
+              }
+
+              if (selection.type === 'custom' && selectedCustom) {
+                return (
+                  <>
+                    {star}
+                    <button
+                      type="button"
+                      className="admin-small-btn danger"
+                      title="Remove from this category"
+                      onClick={() =>
+                        void handleRemoveFromCategory({
+                          stream_id: row.streamId,
+                          name: row.name,
+                          playlistId: row.storedPlaylistId || undefined
+                        } as LiveStream)
+                      }
+                    >
+                      ✕
+                    </button>
+                  </>
+                )
+              }
+
+              return star
+            }}
           />
+          </>
         ) : picking && selectedCustom ? (
           <div className="channel-picker">
             <div className="channel-picker-head">

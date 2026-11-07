@@ -48,6 +48,23 @@ export function startUntil(endsAt: number, now: number = Date.now(), label = 'En
   return { minutes: Math.max(1, Math.round((endsAt - now) / 60_000)), endsAt, label }
 }
 
+/**
+ * When the thing on screen will end (v0.94.0) — the film's own deadline, so "stop at the end" works
+ * for a 95-minute feature without the viewer doing arithmetic. Speed is taken into account: at
+ * 1.5x, forty minutes of film have twenty-six minutes left.
+ */
+export function endOfPlaybackDeadline(
+  currentSeconds: number,
+  durationSeconds: number | null,
+  now: number = Date.now(),
+  rate = 1
+): number | null {
+  if (typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return null
+  const speed = Number.isFinite(rate) && rate > 0 ? rate : 1
+  const remaining = Math.max(0, durationSeconds - Math.max(0, currentSeconds))
+  return now + Math.round((remaining / speed) * 1000)
+}
+
 /** Whole seconds left, rounded up (so "1 second left" shows 0:01, not 0:00), never negative. */
 export function remainingSeconds(timer: SleepTimer, now: number = Date.now()): number {
   return Math.max(0, Math.ceil((timer.endsAt - now) / 1000))

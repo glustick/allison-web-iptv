@@ -6,6 +6,32 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.94.0 — ten more, split between the lists and the player)
+
+**The lists.** A **filter box** on all three browsable lists (films, series and the live library):
+case- and accent-insensitive, no request, and it says "1 of 3" rather than looking like an empty
+category. **Series ordering** (provider / A–Z / newest release) to match films. A **star on every
+row** in history and custom categories, so a channel can be favourited without playing it first. And
+a **rating badge** on film rows, because the catalogue already carried it and nobody could see it.
+
+**The player.** On-screen **−10s / +10s** buttons (the keyboard had them; a touch screen did not),
+a **PiP** button in both players, a **"Resumed at 12:34 — start over"** chip when a film opens at a
+position, and **"Stop when this film ends"** in the sleep panel — computed from the element's own
+duration and the current speed, so 1.5× arrives sooner.
+
+**Search.** Arrow keys move a highlight through the results and Enter plays it; `/` focuses the box
+from anywhere, the way every list-driven app does it.
+
+**Now/Next** gained a bell: set a reminder for what follows without leaving the player.
+
+**Verified against the fixture in a browser**: three films listing with their ratings, A–Z ordering
+reordering them correctly, the filter narrowing to "1 of 3", and a film playing through the relay
+with the overlay showing −10s / +10s / PiP. **Not verified**: the skip buttons' effect on the
+playhead, PiP actually opening, the resume chip, and the sleep panel's film deadline — the media
+element under automation proved unreliable to drive (a sourceless `<video>` after a reload), and
+saying so is better than implying a click was watched. 1029 tests; typecheck, lint and both builds
+clean.
+
 ## Current state (v0.93.1 — a fixture found a real bug in twenty minutes)
 
 `scripts/fixture-provider.mjs` is now a thing: a fake Xtream panel with four channels, a two-hour

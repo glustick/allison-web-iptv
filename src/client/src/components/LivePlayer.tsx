@@ -1073,6 +1073,14 @@ let stallCount = 0
           <option value="1080">Quality: 1080p</option>
           <option value="720">Quality: 720p</option>
         </select>
+        <button type="button" className="admin-small-btn" style={{ padding: '4px 8px' }} title="Picture in picture" onClick={() => {
+          const video = videoRef.current
+          if (!video) return
+          if (document.pictureInPictureElement) void document.exitPictureInPicture().catch(() => {})
+          else void video.requestPictureInPicture?.().catch(() => {})
+        }}>
+          PiP
+        </button>
         <SubtitleStyleButton style={subtitleStyle} onChange={setSubtitleStyle} />
         <SleepTimerButton
           timer={sleep.timer}
