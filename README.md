@@ -1909,6 +1909,13 @@ Apply it by pasting the above into your stack manager and deploying, or from a C
 docker compose up -d --force-recreate
 ```
 
+**From this Mac**, `scripts/dockhand-update.sh v0.92.0` does the same thing against the
+Dockhand-managed stack on `laptopserver`: it pins the image in that stack's `compose.yaml` (keeping
+a timestamped backup beside it), pulls, recreates, and waits for `/api/health` to report the new
+version before saying it is done. It needs key-based SSH to the host and permission to talk to
+`docker.sock` there — without the latter it stops **before changing anything** and prints the
+one-line fix. `DRY_RUN=1` prints the plan and touches nothing.
+
 Notes on the three environment variables and the parts that matter:
 
 - **`SESSION_SECRET`** — required, 16+ characters, generate with `openssl rand -hex 24`.

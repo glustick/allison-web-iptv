@@ -2474,6 +2474,18 @@ bloat — 89 images / 55 GB, 40 GB reclaimable.)*
   every segment while it plays (that is what makes it scrubbable), so a 2h20 feature holds 10 GB+
   for its runtime. Decide whether to bound that — cap the retained window and give up far-back
   scrubbing, or accept it now that the disk cannot actually fill.
+- **The deploy script is no longer missing.** *Rebuilt 2026-11-07 (v0.92.0 scripts).* The original
+  `scripts/dockhand-update.sh` was lost in the move to the AGENT share and the scripts README had
+  carried "not rebuilt" since. The rebuild deliberately does **not** speak to Dockhand's HTTP API —
+  that API is undocumented here and answers 401 without a session — but goes to the host over SSH
+  and lets `docker compose` do the same work, with no token stored anywhere. It pins the tag in the
+  stack's compose file (timestamped backup first), recreates, polls the app's own `/api/health` for
+  the new version, and prunes dangling images with a bound. Its failure paths are tested (no SSH,
+  no docker.sock, bad tag, unreachable host — each stops before changing anything). Its **mutation
+  path is not**: `chris` on `laptopserver` is not in the `docker` group, so today it stops at the
+  permission check and prints the one-time fix. That is the same blocker that leaves the live app on
+  v0.88.0 while five releases sit in the registry.
+
 - **Image bloat.** *Shipped 2026-09-17.* Every release leaves its predecessor behind — 48 images /
   44.7 GB on the NAS before anyone noticed, the same drift that caused the earlier disk-full incident
   (89 images / 55 GB). `scripts/dockhand-update.sh` now prunes unused images after a successful deploy,
