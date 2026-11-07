@@ -15,6 +15,75 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.91.0 — reminders, and what is on now.** Two features that make the guide useful after the
+choice has been made, plus the first real measurement of Safari — which is why this note is longer
+than two features deserve.
+
+**Programme reminders.** A bell on any programme that has not started yet. The store
+(`lib/reminders.ts`) reuses the sleep timer's decision for the same reason: a reminder is a
+**deadline**, not a decrementing counter, so a suspended tab or a reload rejoins it instead of
+drifting. The record carries `firedAt`, so a reload cannot fire it twice, and `pruneReminders` drops
+programmes that ended more than five minutes ago — a reminder missed for days is noise, not news.
+`dueReminders` fires within a minute of the start and **not after the programme has ended**, which
+is the case that would otherwise ambush someone opening the app the next morning. Per device
+(`localStorage`), because a reminder describes the screen you are watching, and the store dispatches
+its own change event so the guide's panel, the watcher and any other tab stay in step without
+polling each other.
+
+**The bell is a sibling of the block, not a child.** `EpgGrid` renders each programme as a
+`<button>`; nesting a bell inside it would be invalid HTML, and browsers disagree about which button
+a click belongs to — so the bell is a separate absolutely positioned element at the block's right
+edge, rendered only for future programmes and only when the block is wide enough to hold it
+(`width >= 5` percent), with `onPointerDown` stopped so it cannot start a pan. Clicking it asks for
+notification permission at that moment, which is a user gesture and the only time browsers accept
+the request.
+
+**The watcher lives in the app shell, not the guide** (`ReminderWatcher`): a reminder set in the
+guide is exactly the one you will be watching something else when it fires. It ticks every 15
+seconds, re-checks on every reminder write (so setting one for a programme that is already starting
+fires immediately), marks the reminder fired **before** showing the banner, and offers **Watch** —
+which routes through the same `playRequest` path as a search hit, so it works from any tab. The
+browser notification is a bonus, never the mechanism: permission may be denied, and the in-app
+banner is the one that always appears.
+
+**Now / next under the live player** (`lib/guideNowNext.ts`, `NowNextGuide`): the current programme
+with a progress bar and what follows, from the same per-channel `get_short_epg` call the guide
+already falls back to — requested once per channel through `useShortEpgCache`'s concurrency cap, so
+zapping cannot stampede the provider. `pickNowNext` is pure and treats the edges as the truth: the
+start boundary is on air, the end boundary is over, and a **gap reports no current programme**
+rather than inventing one to fill it. Hidden during catch-up, where the live channel's schedule is
+not what is on screen.
+
+**Safari, measured at last — and the answer is not the one the roadmap assumed.** The quality item
+("verify on Safari, not only Chrome") had been open since 2026-09-17 on the grounds that two real
+bugs were invisible in Chrome. With screen capture permitted, real Safari windows were opened
+against hand-off pages and photographed (`screencapture -l <window id>`, the window found through a
+CoreGraphics listing — remote automation is still disabled, and AppleScript control times out).
+Three results:
+
+1. **Native HLS playback works.** A 40-second H.264 HLS stream (ffmpeg, TS segments) played to the
+   end in Safari: `t=40.0s`, `readyState=4`, 960x540, no hls.js anywhere.
+2. **Our subtitle styling renders in Safari exactly as in Chrome.** The same four custom properties
+   the app writes (`--cue-size`, `--cue-color`, `--cue-bg`, `--cue-shadow`) produced a 150%, yellow,
+   boxed cue in Safari's own cue renderer — the v0.89.0 feature is no longer Chrome-only.
+3. **HEVC decodes in Safari, but not in the HEVC HLS I could produce.** A plain MP4 of the same
+   libx265 output plays (t=11.4s, 960x540, picture visible). The HLS versions do not — MPEG-TS or
+   fMP4, with or without an audio track, with or without a master playlist declaring
+   `CODECS="hvc1..."`: Safari fetches the playlist, the init segment and the first segment (all 200s
+   in the server log), then stops with `readyState=1` and `size=0x0`. The fixture is not the
+   explanation: ffmpeg decodes every one of those streams cleanly, and the init segment carries the
+   Apple-required `hvc1` sample entry.
+
+**What that does and does not settle.** It is *consistent* with the operator's report that HEVC
+channels fail in Safari (v0.48.2's "cannot decode hevc"), and it rules out "Safari has no HEVC" as
+the cause. What it cannot distinguish is whether **ffmpeg's HEVC HLS packaging** is at fault or
+whether the provider's own HEVC streams fail the same way — the one test that would answer that is
+the provider's own segment, played in Safari, which needs the real credentials and belongs on the
+deployment rather than in a synthetic fixture. The item is recorded with that sharper question
+instead of a comfortable conclusion.
+
+987 tests (16 new); typecheck, lint and both builds clean.
+
 **v0.90.0 — four conveniences for watching: a sleep timer, keyboard control, recent searches, and
 account activity.** One release, four independently useful pieces, each with its own reason for the
 shape it took.
@@ -2470,10 +2539,16 @@ v0.12.0.
   with one console line and no other symptom. Every server-side check passed while that was true. A
   script that loads the app in a real browser and asserts a `blob:` worker can be created **and answer**
   turns a silent multi-hour failure into a one-line result.
-- **Verify on Safari, not only Chrome.** *Open.* The harnesses drive Chrome; the user's browser is
-  Safari, and two of the four real bugs on 2026-09-17 were **invisible in Chrome** — the raw-TS path and
-  the audio fallback, both of which Chromium handles better. The user's console has found two bugs no
-  server-side check could. Anything asserted about playback should say which browser proved it.
+- **Verify on Safari, not only Chrome.** *Partly closed 2026-11-07 (v0.91.0).* The harnesses drive
+  Chrome; the user's browser is Safari, and two of the four real bugs on 2026-09-17 were **invisible
+  in Chrome**. Measured in real Safari by screen capture: native HLS playback works (a 40s H.264
+  stream played to the end), and **the v0.89.0 subtitle styling renders in Safari** — both were
+  Chrome-only claims until now. What remains open is narrower and sharper: **HEVC HLS does not play
+  in Safari in any packaging ffmpeg could produce** (TS and fMP4, with and without audio, with and
+  without a master playlist — playlist, init and first segment all fetched, then no picture), while
+  a plain HEVC MP4 of the same encoder plays fine. So it is either ffmpeg's packaging or the
+  provider's own streams; deciding needs **one real provider segment played in Safari**, which
+  belongs on the deployment. Anything asserted about playback should say which browser proved it.
 - **Keep extending the real-server test pattern.** *Ongoing.* `proxyServer.test.ts` and
   `nodeUpstreamRequest.test.ts` spin up a real `http.Server`; extend that to the transcode and
   EPG fetch paths where live behaviour has diverged from reasoning before.

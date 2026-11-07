@@ -16,6 +16,7 @@ import { Series } from './components/Series'
 import { SportsView } from './components/SportsView'
 import { ChangePassword } from './components/ChangePassword'
 import { DevicesPanel } from './components/DevicesPanel'
+import { ReminderWatcher } from './components/ReminderWatcher'
 import { formatElapsedTime } from './lib/connectionTiming'
 import {
   connectIptv,
@@ -332,6 +333,21 @@ export default function App(): JSX.Element {
       </div>
       {changingPassword && <ChangePassword onClose={() => setChangingPassword(false)} />}
       {showDevices && <DevicesPanel onClose={() => setShowDevices(false)} />}
+      {/* Global on purpose: a reminder set in the guide most often fires while something else is
+          on screen, so the watcher lives in the shell and the banner can start the channel from
+          any tab. */}
+      <ReminderWatcher
+        onWatch={(reminder) => {
+          setPlayRequest({
+            kind: 'live',
+            streamId: reminder.streamId,
+            name: reminder.channelName,
+            playlistId: reminder.playlistId,
+            nonce: Date.now()
+          })
+          setTab('live')
+        }}
+      />
       {!session && (
         <div className="admin-only-notice">
           No IPTV provider is configured for this account, so Live TV, Movies and Series are

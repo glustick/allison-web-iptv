@@ -5,6 +5,8 @@ import { LivePlayer } from './LivePlayer'
 import { MultiView } from './MultiView'
 import type { PlaylistLimits } from '../lib/connectionBudget'
 import { EpgGrid } from './EpgGrid'
+import { NowNextGuide } from './NowNextGuide'
+import { useShortEpgCache } from '../lib/useShortEpgCache'
 import { ReorderableChannelList, type ReorderableRow } from './ReorderableChannelList'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { sectionTitle } from '../lib/sectionTitle'
@@ -102,6 +104,26 @@ export function LiveTv({
   // this feature exists.
   const [additional, setAdditional] = useState<Array<{ id: string; label: string; channels: LiveStream[]; error: string | null }>>([])
   const [nowPlaying, setNowPlaying] = useState<LiveStream | null>(null)
+  // What is on this channel now and next (v0.91.0), from the same per-channel short-EPG call the
+  // guide falls back to — requested once per channel, queued behind the hook's own concurrency cap
+  // so it cannot stampede the provider when someone zaps through channels.
+  const { shortEpgByStream, request: requestShortEpg } = useShortEpgCache(session)
+  useEffect(() => {
+    if (!nowPlaying) return
+    requestShortEpg({ stream_id: nowPlaying.stream_id, playlistId: playlistRefOf(nowPlaying) || undefined })
+  }, [nowPlaying, requestShortEpg])
+  const nowNextProgrammes = useMemo(() => {
+    if (!nowPlaying) return []
+    const ref = playlistRefOf(nowPlaying)
+    const key = ref ? `${ref}:${nowPlaying.stream_id}` : String(nowPlaying.stream_id)
+    return (shortEpgByStream[key] ?? [])
+      .map((programme) => ({
+        startMs: Number(programme.start_timestamp) * 1000,
+        stopMs: Number(programme.stop_timestamp) * 1000,
+        title: programme.title
+      }))
+      .filter((programme) => Number.isFinite(programme.startMs) && Number.isFinite(programme.stopMs))
+  }, [nowPlaying, shortEpgByStream])
   // Set when what is playing is a past programme rather than the live channel.
   const [catchup, setCatchup] = useState<{ startMs: number; stopMs: number; title: string } | null>(null)
   // Catch-up is raw MPEG-TS: hls.js parses playlists and Safari cannot decode MPEG-TS at all, so
@@ -1059,6 +1081,9 @@ export function LiveTv({
                 )}
               </span>
             </div>
+            {/* What this channel is showing, and what follows (v0.91.0). Hidden during catch-up:
+                the live channel's schedule is not what is on screen then. */}
+            {!catchup && <NowNextGuide programmes={nowNextProgrammes} />}
             <div
               className="resize-handle resize-handle--row"
               onPointerDown={startPlayerHeightDrag}

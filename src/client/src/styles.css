@@ -579,6 +579,206 @@ body.resizing-row {
   white-space: nowrap;
 }
 
+/* Programme reminders (v0.91.0). The bell is a sibling of the block, not a child: a button inside
+   a button is invalid HTML and browsers disagree about which one a click belongs to. It is
+   positioned against the block's right edge, and only rendered for programmes that have not
+   started yet and blocks wide enough to hold it. */
+/* Now / next under the live player (v0.91.0). A thin strip: the programme's name is the point, the
+   progress bar answers "how long has this been on", and neither competes with the picture. */
+.now-next {
+  padding: 6px 12px 8px;
+  background: #0f1219;
+  border-top: 1px solid #1b1f28;
+  font-size: 12px;
+  color: #e7e9ee;
+}
+
+.now-next-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.now-next-next {
+  opacity: 0.8;
+}
+
+.now-next-label {
+  flex: 0 0 auto;
+  width: 34px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9aa1ad;
+}
+
+.now-next-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now-next-empty {
+  color: #9aa1ad;
+}
+
+.now-next-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: #9aa1ad;
+}
+
+.now-next-bar {
+  height: 3px;
+  margin: 4px 0 4px 42px;
+  border-radius: 2px;
+  background: #1b2030;
+  overflow: hidden;
+}
+
+.now-next-bar-fill {
+  height: 100%;
+  background: #4f7cff;
+}
+
+.epg-remind {
+  position: absolute;
+  top: 6px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  border-radius: 50%;
+  border: 1px solid #2a2f3d;
+  background: rgba(12, 16, 24, 0.85);
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.epg-remind:hover {
+  opacity: 1;
+  border-color: #4f7cff;
+}
+
+.epg-remind.is-set {
+  opacity: 1;
+  border-color: #f0b72f;
+  background: rgba(240, 183, 47, 0.18);
+}
+
+.epg-reminder-wrap {
+  position: relative;
+}
+
+.epg-remind-chip {
+  background: none;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  color: #e7e9ee;
+  font-size: 12px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.epg-remind-chip:hover {
+  border-color: #4f7cff;
+}
+
+.epg-reminder-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(320px, 82vw);
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 30;
+  padding: 8px 10px;
+  background: #12151c;
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.epg-reminder-head {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9aa1ad;
+  margin-bottom: 6px;
+}
+
+.epg-reminder-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  border-bottom: 1px solid #1b1f28;
+}
+
+.epg-reminder-row:last-child {
+  border-bottom: none;
+}
+
+.epg-reminder-title {
+  font-size: 12px;
+  color: #e7e9ee;
+}
+
+.epg-reminder-meta {
+  font-size: 11px;
+  color: #9aa1ad;
+}
+
+.epg-reminder-row .admin-small-btn {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+/* The banner a reminder becomes. Bottom-right, above every panel, and it is the one path that
+   always works — the browser Notification beside it may be denied. */
+.reminder-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(460px, calc(100vw - 32px));
+  padding: 12px 14px;
+  background: #12151c;
+  border: 1px solid #2a2f3a;
+  border-left: 3px solid #f0b72f;
+  border-radius: 8px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  color: #e7e9ee;
+}
+
+.reminder-banner-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.reminder-banner-meta {
+  font-size: 12px;
+  color: #9aa1ad;
+}
+
+.reminder-banner-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .epg-now-indicator {
   position: absolute;
   top: 0;

@@ -1,19 +1,19 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type JSX,
-  type PointerEvent as ReactPointerEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type JSX, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { List, useListRef } from 'react-window'
 import { pct } from '../lib/epgTime'
 import { clampScrollOffset, EPG_PAN_SNAP_MS, offsetAfterArrowKey, panAxis, windowOffsetAfterDrag } from '../lib/epgPan'
 import { catchupForProgramme, restartRequestForProgramme } from '../lib/catchup'
 import type { Session } from '../lib/appAuth'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
+import {
+  REMINDERS_EVENT,
+  dropReminder,
+  readReminders,
+  reminderId,
+  upsertReminder,
+  writeReminders,
+  type Reminder
+} from '../lib/reminders'
 import { useAggregatedEpg, type AggregatedEpgData } from '../lib/useAggregatedEpg'
 import { GuideMappingPicker } from './GuideMappingPicker'
 import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
@@ -131,6 +131,9 @@ interface RowProps {
   /** Where else this channel lives (v0.78.0) — the manual "also on →" switch, one action per
    *  other playlist carrying it. Absent (or no matches) renders nothing. */
   alsoOn?: (channel: { name: string }, ownRef?: string) => AlsoOnMatch[]
+  /** This device's reminders for the bell state on each future block (v0.91.0). */
+  reminders: Reminder[]
+  onToggleReminder: (channel: LiveStream, programme: { startMs: number; stopMs: number; title: string }) => void
   didPan: () => boolean
 }
 
@@ -154,6 +157,8 @@ function EpgRow({
     onRestartProgramme,
   onMapChannel,
   alsoOn,
+  reminders,
+  onToggleReminder,
   didPan
 }: { index: number; style: CSSProperties } & RowProps): JSX.Element {
   const channel = channels[index]
@@ -254,9 +259,12 @@ function EpgRow({
           // request with now as the end). Double-click rather than click, because clicking a live
           // programme has to keep playing the channel.
           const restart = !isPast && onRestartProgramme ? restartRequestForProgramme(channel, p, now) : null
+          const playlistRef = playlistRefOf(channel) || undefined
+          const remindId = reminderId(channel.stream_id, playlistRef, p.startMs)
+          const reminded = reminders.some((r) => r.id === remindId)
           return (
+            <Fragment key={p.key}>
             <button
-              key={p.key}
               className={`epg-block${isPast ? ' epg-block--past' : ''}${catchup ? ' epg-block--catchup' : ''}`}
               style={{ left: `${left}%`, width: `${width}%` }}
               title={`${formatTime(p.startMs)} – ${formatTime(p.stopMs)}\n${p.title}${p.description ? '\n' + p.description : ''}${catchup ? '\n▶ Play from catch-up' : ''}${restart ? '\nDouble-click to start from the beginning' : ''}`}
@@ -296,6 +304,24 @@ function EpgRow({
             >
               <span className="epg-block-label">{p.title}</span>
             </button>
+            {p.startMs > now && width >= 5 && (
+              <button
+                type="button"
+                className={`epg-remind${reminded ? ' is-set' : ''}`}
+                style={{ left: `calc(${left + width}% - 22px)` }}
+                aria-pressed={reminded}
+                title={reminded ? `Reminder set for ${p.title} — click to remove` : `Remind me when ${p.title} starts`}
+                aria-label={reminded ? `Remove reminder for ${p.title}` : `Remind me when ${p.title} starts`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onToggleReminder(channel, { startMs: p.startMs, stopMs: p.stopMs, title: p.title })
+                }}
+              >
+                🔔
+              </button>
+            )}
+            </Fragment>
           )
         })}
         {showNowLine && <div className="epg-now-indicator" style={{ left: `${nowPct}%` }} />}
@@ -380,6 +406,46 @@ export function EpgGrid({
   const [mappingNonce, setMappingNonce] = useState(0)
   const aggregated = useAggregatedEpg(session, windowStart, windowEnd, mappingNonce)
   const { shortEpgByStream, request } = useShortEpgCache(session)
+  // This device's reminders (v0.91.0), kept in step with the watcher and any other tab through
+  // the store's own change event rather than by polling localStorage.
+  const [reminders, setReminders] = useState<Reminder[]>(() => readReminders())
+  const [showReminders, setShowReminders] = useState(false)
+  useEffect(() => {
+    const refresh = (): void => setReminders(readReminders())
+    window.addEventListener(REMINDERS_EVENT, refresh)
+    return () => window.removeEventListener(REMINDERS_EVENT, refresh)
+  }, [])
+  const toggleReminder = useCallback(
+    (channel: LiveStream, programme: { startMs: number; stopMs: number; title: string }): void => {
+      const playlistId = playlistRefOf(channel) || undefined
+      const id = reminderId(channel.stream_id, playlistId, programme.startMs)
+      const existing = readReminders()
+      const isSet = existing.some((reminder) => reminder.id === id)
+      const next = isSet
+        ? dropReminder(existing, id)
+        : upsertReminder(
+            existing,
+            {
+              id,
+              streamId: channel.stream_id,
+              playlistId,
+              channelName: channel.name,
+              title: programme.title,
+              startMs: programme.startMs,
+              stopMs: programme.stopMs,
+              firedAt: 0
+            },
+            Date.now()
+          )
+      writeReminders(next)
+      setReminders(next)
+      // Asked at the moment the bell is clicked — a user gesture, which is what browsers require.
+      if (!isSet && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        void Notification.requestPermission()
+      }
+    },
+    []
+  )
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 30_000)
@@ -532,6 +598,44 @@ export function EpgGrid({
         {aggregated.status === 'loading' && aggregated.data === null && (
           <div className="epg-time-header-controls">Loading guide…</div>
         )}
+        <div className="epg-reminder-wrap">
+          <button
+            type="button"
+            className="epg-remind-chip"
+            aria-expanded={showReminders}
+            onClick={() => setShowReminders((value) => !value)}
+            title="Programme reminders on this device"
+          >
+            🔔 {reminders.length}
+          </button>
+          {showReminders && (
+            <div className="epg-reminder-list">
+              <div className="epg-reminder-head">Reminders</div>
+              {reminders.length === 0 && (
+                <p className="list-hint">No reminders yet — click the bell on a future programme.</p>
+              )}
+              {reminders.map((reminder) => (
+                <div className="epg-reminder-row" key={reminder.id}>
+                  <span className="epg-reminder-title">{reminder.title}</span>
+                  <span className="epg-reminder-meta">
+                    {formatTime(reminder.startMs)} · {reminder.channelName}
+                  </span>
+                  <button
+                    type="button"
+                    className="admin-small-btn"
+                    onClick={() => {
+                      const next = dropReminder(readReminders(), reminder.id)
+                      writeReminders(next)
+                      setReminders(next)
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         {onOpenEpgSettings && (
           <button
             type="button"
@@ -566,6 +670,8 @@ export function EpgGrid({
                             onRestartProgramme,
               onMapChannel: (channel: LiveStream) => setMappingChannel(channel),
               alsoOn,
+              reminders,
+              onToggleReminder: toggleReminder,
               onTimelinePointerDown: startPan,
               onTimelinePointerMove: movePan,
               onTimelinePointerUp: endPan,

@@ -6,6 +6,38 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.91.0 — reminders, and what's on now)
+
+Two things that make the guide useful *after* you have chosen something. **Programme reminders**: a
+bell on any programme that has not started, stored per device, firing an in-app banner (plus a
+browser notification when permission allows) a minute before it starts, with **Watch** to jump
+straight there from whatever tab is open. **Now / next under the live player**: the current
+programme with a progress bar and what follows, from the same short-EPG call the guide falls back
+to — one request per channel, queued behind the existing concurrency cap.
+
+A reminder is a **deadline**, like the sleep timer, so a suspended tab or a reload rejoins it
+rather than drifting; it carries `firedAt` so a reload cannot fire it twice, and the store prunes
+programmes that ended more than five minutes ago rather than firing days later at whoever opens the
+app next. The bell is a **sibling** of the programme block, not a child — a button inside a button
+is invalid HTML and browsers disagree about which one a click belongs to — positioned at the
+block's right edge and only rendered for future programmes in blocks wide enough to hold it. It is
+hidden during catch-up, where the live channel's schedule is not what is on screen.
+
+**Safari, finally measured** (the roadmap's open quality item): with screen capture now permitted,
+a real Safari window was driven by hand-off pages and photographed. Three results, one of them
+unwelcome. Native HLS playback works — a 40-second H.264 stream played to the end (t=40.0s,
+readyState 4). Our **subtitle styling renders in Safari exactly as in Chrome** — 150%, yellow,
+boxed, driven by the same `::cue` custom properties. And **HEVC decodes in Safari**, but a plain
+MP4 of it plays (t=11.4s, 960x540) while **the same encoder's HEVC HLS does not play in any
+packaging I could produce** — MPEG-TS or fMP4, with or without audio, with or without a master
+playlist: Safari fetches the playlist, the init segment and the first segment (all 200s in the
+server log), then stops with no dimensions and `readyState=1`. That is consistent with the
+provider's own HEVC failing in Safari, but it is not proof — the remaining question is whether
+ffmpeg's HEVC HLS packaging is at fault or whether the provider's streams fail the same way. The
+roadmap records it as the sharper question it now is, rather than as an answer.
+
+971 tests, typecheck, lint and both builds clean.
+
 ## Current state (v0.90.0 — four conveniences for watching)
 
 A round of four small things a viewer notices, rather than one large thing: **a sleep timer**,
