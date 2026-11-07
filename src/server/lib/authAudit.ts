@@ -16,6 +16,9 @@ export type AuthOutcome =
   | 'revoked'
   | 'password-changed'
   | 'force-logout'
+  // A viewer ending one of their own logins from the devices panel (v0.90.0) — distinct from
+  // 'force-logout', which is an admin ending somebody else's.
+  | 'session-ended'
   | 'user-created'
   | 'user-deleted'
 
@@ -30,12 +33,18 @@ export interface AuthAuditEntry {
 export interface AuthAudit {
   record(entry: Omit<AuthAuditEntry, 'at'> & { at?: Date }): void
   recent(limit?: number): AuthAuditEntry[]
+  /**
+   * One account's own trail (v0.90.0) — what the account-activity panel shows its owner. The
+   * full trail stays admin-only; this is the same rows, filtered to the caller.
+   */
+  recentFor(username: string, limit?: number): AuthAuditEntry[]
 }
 
 /** Where entries outlive the process. Optional, so the ring can be unit-tested on its own. */
 export interface AuthAuditPersistence {
   append(entry: AuthAuditEntry): void
   recent(limit: number): AuthAuditEntry[]
+  recentFor(username: string, limit: number): AuthAuditEntry[]
 }
 
 export function createAuthAudit(limit = 200, persistence?: AuthAuditPersistence): AuthAudit {
@@ -74,6 +83,22 @@ export function createAuthAudit(limit = 200, persistence?: AuthAuditPersistence)
         }
       }
       return entries.slice(-Math.min(wanted, entries.length || 1)).reverse()
+    },
+    recentFor(username, count = 20) {
+      const wanted = Math.max(1, Math.min(count, 100))
+      if (persistence) {
+        try {
+          return persistence.recentFor(username, wanted)
+        } catch (err) {
+          console.error('[auth] could not read the audit trail:', err instanceof Error ? err.message : String(err))
+        }
+      }
+      // No durable copy: filter the ring. The ring is short (200), so the window this can look
+      // back through is short too — an honest consequence of running without the store.
+      return entries
+        .filter((entry) => entry.username.toLowerCase() === username.toLowerCase())
+        .slice(-wanted)
+        .reverse()
     }
   }
 }

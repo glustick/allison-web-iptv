@@ -6,7 +6,11 @@ import { useSessionExpired } from '../lib/sessionWatch'
 import { evaluatePlaybackSample, type PlaybackWatchState } from '../lib/playbackRecovery'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
 import { useSubtitleStyle } from '../lib/useSubtitleStyle'
+import { useSleepTimer } from '../lib/useSleepTimer'
+import { usePlayerKeys } from '../lib/usePlayerKeys'
+import { ShortcutsHelp } from './ShortcutsHelp'
 import { SubtitleStyleButton } from './SubtitleStyleButton'
+import { SleepTimerButton } from './SleepTimerButton'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
 const SILENT_AUDIO_CHECK_INTERVAL_MS = 1000
@@ -37,7 +41,8 @@ export function NativeVideoPlayer({
   url,
   titleKey,
   initialPositionSeconds,
-  onProgress
+  onProgress,
+  onStop
 }: {
   url: string
   titleKey: string
@@ -46,6 +51,8 @@ export function NativeVideoPlayer({
   /** Called with the current position/duration as playback proceeds, on pause, on seek and at
    *  the end — the caller persists it; the player decides nothing about storage. */
   onProgress?: (positionSeconds: number, durationSeconds: number | null) => void
+  /** Ends playback entirely — the sleep timer's own stop path, and the caller's. */
+  onStop?: () => void
 }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   
@@ -73,6 +80,13 @@ export function NativeVideoPlayer({
   // The same preference the live player writes: films carry subtitles too, and the choice belongs
   // to this device's viewer rather than to one surface of the app.
   const [subtitleStyle, setSubtitleStyle] = useSubtitleStyle()
+  // The same timer as the live player's — one deadline for the evening, not one per stream.
+  const [showShortcuts, setShowShortcuts] = useState(false)
+  usePlayerKeys({ seekable: true, videoRef, onHelp: () => setShowShortcuts((value) => !value) })
+  const sleep = useSleepTimer(() => {
+    if (onStop) onStop()
+    else videoRef.current?.pause()
+  })
   const { getSourceUrl, tryFallbackForSilentAudio, reset, beginRun } = useTranscodeFallback()
 
   useEffect(() => {
@@ -297,7 +311,24 @@ export function NativeVideoPlayer({
         }}
       >
         <SubtitleStyleButton style={subtitleStyle} onChange={setSubtitleStyle} />
+        <SleepTimerButton
+          timer={sleep.timer}
+          remaining={sleep.remaining}
+          onStart={sleep.start}
+          onCancel={sleep.cancel}
+        />
+        <button
+          type="button"
+          className="admin-small-btn"
+          style={{ padding: '4px 8px' }}
+          aria-expanded={showShortcuts}
+          title="Keyboard shortcuts"
+          onClick={() => setShowShortcuts((value) => !value)}
+        >
+          ?
+        </button>
       </div>
+      <ShortcutsHelp open={showShortcuts} seekable onClose={() => setShowShortcuts(false)} />
       <TrackControls
         audioTracks={audioTracks}
         audioTrack={audioTrack}

@@ -998,6 +998,12 @@ export function LiveTv({
                   ? `${liveChannelKey(nowPlaying)}@${catchup.startMs}`
                   : liveChannelKey(nowPlaying)
               }
+              onStop={() => {
+                setCatchup(null)
+                setNowPlaying(null)
+              }}
+              // Catch-up is a stream with a timeline; the live channel is not.
+              seekable={Boolean(catchup)}
             />
             <div className="now-playing-bar">
               <span>

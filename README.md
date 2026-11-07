@@ -6,6 +6,36 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.90.0 — four conveniences for watching)
+
+A round of four small things a viewer notices, rather than one large thing: **a sleep timer**,
+**keyboard control**, **recent searches**, and **account activity**. Each is per device where that
+is the honest scope, and each is proven in a real browser rather than asserted.
+
+**The sleep timer** (Sleep, beside Subtitles) arms 15/30/45/60/90 minutes and counts down on the
+button itself. It stores a **deadline**, not a decrementing counter — so a suspended tab or a
+reload rejoins the countdown instead of drifting — and expiry **closes playback** rather than
+pausing: a paused live channel leaves hls.js refreshing a playlist and the server holding a
+provider connection for a viewer who is asleep. A deadline that passed while the tab was closed is
+cleared on the next visit, never fired at someone who has just started a film.
+
+**Keyboard control** — Space/K play-pause, ←/→ ten seconds (films and catch-up only: live has no
+timeline, so the keys do nothing there rather than pretending), ↑/↓ volume, M mute, F fullscreen,
+? the shortcut list. Modified keystrokes are never stolen (Cmd+← is the browser's own back
+gesture), and nothing fires while someone is typing in the search box.
+
+**Recent searches** — the search bar offers this device's last five queries when the field is
+empty, with Clear. Recorded when a search is **acted on**, not on every debounced request: one
+typing session would otherwise leave "sky", "sky s", "sky sp" behind and bury everything useful.
+
+**Account activity** — the top bar's Activity panel shows where this account is signed in and its
+own recent sign-in history: signed in, wrong password, locked out, ended by a newer sign-in, ended
+by an admin. The audit trail has recorded these since v0.83.0 but only an admin could read it; the
+person who most needs to see five failed attempts from an unknown address is the account's owner.
+The list is deliberately short — the operator's one-login-per-account rule means there is normally
+exactly one active sign-in — so the panel's value is the history beside it, and it says so.
+971 tests; typecheck, lint and both builds clean.
+
 ## Current state (v0.89.0 — subtitle appearance, the viewer's own)
 
 *README sections for v0.78.0–v0.88.0 were not written; their release notes are in `ROADMAP.md`,

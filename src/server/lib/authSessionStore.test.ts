@@ -18,7 +18,14 @@ afterEach(() => {
 })
 
 const TTL = 24 * 60 * 60 * 1000
-const session = { username: 'chris', role: 'admin', loginAt: 1_000, lastSeenAt: 2_000 }
+const session = {
+  username: 'chris',
+  role: 'admin',
+  loginAt: 1_000,
+  lastSeenAt: 2_000,
+  userAgent: 'Mozilla/5.0 (Macintosh) Chrome/131.0',
+  ip: '192.168.0.9'
+}
 
 describe('createAuthSessionStore', () => {
   it('survives a restart — which is the whole point', () => {
@@ -81,6 +88,23 @@ describe('createAuthSessionStore', () => {
     expect(store.load(3_000)).toHaveLength(2)
     store.removeForUser('chris')
     expect(store.load(3_000).map((r) => r.session.username)).toEqual(['autoclaw'])
+    store.close()
+  })
+
+  it('remembers where a login came from, and reads an upgraded row as unknown', () => {
+    const dir = dataDir()
+    const store = createAuthSessionStore({ dataDir: dir, ttlMs: TTL })
+    store.save('with-origin', session)
+    const loaded = store.load(3_000)[0].session
+    expect(loaded.userAgent).toBe('Mozilla/5.0 (Macintosh) Chrome/131.0')
+    expect(loaded.ip).toBe('192.168.0.9')
+
+    // A row written before v0.90.0 — or one saved without an origin — carries empty strings, which
+    // the panel must show as "unknown" rather than as a blank device name.
+    store.save('no-origin', { ...session, userAgent: null, ip: null })
+    const bare = store.load(3_000).find((row) => row.token === 'no-origin')!.session
+    expect(bare.userAgent).toBeNull()
+    expect(bare.ip).toBeNull()
     store.close()
   })
 

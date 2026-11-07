@@ -352,6 +352,7 @@ export function Movies({
               titleKey={`movie:${playlistRefOf(nowPlaying) ?? ''}:${nowPlaying.stream_id}`}
               initialPositionSeconds={startAt}
               onProgress={handleProgress}
+              onStop={() => setNowPlaying(null)}
             />
             <div className="now-playing-bar">
               <span>

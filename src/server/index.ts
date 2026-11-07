@@ -134,6 +134,10 @@ export interface AuthSession {
   loginAt: number
   lastSeenAt: number
   nowPlaying: NowPlayingInfo | null
+  /** Where the login came from (v0.90.0) — the devices panel's whole content. Null for a row
+   *  written before the columns existed. */
+  userAgent: string | null
+  ip: string | null
 }
 
 // Idle timeout: a login survives up to this long without any authenticated request. The
@@ -187,7 +191,11 @@ function getAuthSession(req: { headers?: IncomingMessage['headers'] }): AuthSess
 /** Creates the session and returns the raw token beside it: the token's only destinations are
  *  the HttpOnly cookie (here) and the store (which hashes it) — it never enters the map, the
  *  session object, or any response body. */
-function createAuthSession(username: string, role: UserRole): { session: AuthSession; token: string } {
+function createAuthSession(
+  username: string,
+  role: UserRole,
+  origin: { userAgent: string | null; ip: string | null } = { userAgent: null, ip: null }
+): { session: AuthSession; token: string } {
   const token = randomUUID()
   const tokenHash = hashAuthToken(token)
   const session: AuthSession = {
@@ -196,14 +204,20 @@ function createAuthSession(username: string, role: UserRole): { session: AuthSes
     role,
     loginAt: Date.now(),
     lastSeenAt: Date.now(),
-    nowPlaying: null
+    nowPlaying: null,
+    // Capped, not trusted: a user-agent is attacker-controlled text that ends up in a database
+    // column and in a table, and nothing about naming a device needs 4 KB of it.
+    userAgent: origin.userAgent ? origin.userAgent.slice(0, 300) : null,
+    ip: origin.ip ?? null
   }
   authSessions.set(session.tokenHash, session)
   authSessionStore.save(token, {
     username: session.username,
     role: session.role,
     loginAt: session.loginAt,
-    lastSeenAt: session.lastSeenAt
+    lastSeenAt: session.lastSeenAt,
+    userAgent: session.userAgent,
+    ip: session.ip
   })
   return { session, token }
 }
@@ -514,7 +528,10 @@ app.post('/api/auth/setup', (req, res) => {
     const password = validatePassword(req.body?.password)
     const user = usersStore.createUser({ username, password, role: validateRole('admin') })
     usersStore.recordLogin(username)
-    const { session, token } = createAuthSession(user.username, user.role)
+    const { session, token } = createAuthSession(user.username, user.role, {
+      userAgent: req.get('user-agent') ?? null,
+      ip: req.ip ?? null
+    })
     setAuthCookie(res, token, isSecureRequest(req))
     res.json({ ok: true, user: { username: user.username, role: user.role } })
     authAudit.record({ outcome: 'setup', username, ...auditContext(req) })
@@ -574,7 +591,10 @@ app.post('/api/auth/login', (req, res) => {
     // what fails here, so keep the login itself inside this guard rather than letting an
     // uncaught throw turn into an opaque HTML 500.
     usersStore.recordLogin(user.username)
-    const { session, token } = createAuthSession(user.username, user.role)
+    const { session, token } = createAuthSession(user.username, user.role, {
+      userAgent: req.get('user-agent') ?? null,
+      ip: req.ip ?? null
+    })
     // One account, one active login: retiring the others here is what makes an abandoned tab stop
     // streaming — its next request 401s, the player's session-expired state takes over, and the
     // transcode idle-reaper collects whatever it was holding. The map is hash-keyed, so the
@@ -599,6 +619,56 @@ app.post('/api/auth/logout', (req, res) => {
   authAudit.record({ outcome: 'logout', username: session?.username ?? 'unknown', ...auditContext(req) })
   clearAuthCookie(res, isSecureRequest(req))
   res.json({ ok: true })
+})
+
+// Your own sign-ins (v0.90.0). Until now only an admin could see the sessions table, so a
+// non-admin had no way to answer "where am I still signed in?" — and with one-login-per-account
+// a session on a forgotten device is exactly the thing that would have silently ended the one
+// they are using. This is the same data the admin table shows, scoped to the caller: their own
+// logins only, with the caller's own marked so the panel can say "this device".
+app.get('/api/auth/sessions', requireAuth, (req, res) => {
+  const self = req.authSession as AuthSession
+  const sessions = [...authSessions.values()]
+    .filter((session) => session.username === self.username)
+    .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+    .map((session) => ({
+      // The hash, never the token — the same identifier the admin table uses, and the only one
+      // that has ever been allowed near a response body.
+      tokenHash: session.tokenHash,
+      loginAt: session.loginAt,
+      lastSeenAt: session.lastSeenAt,
+      userAgent: session.userAgent,
+      ip: session.ip,
+      current: session.tokenHash === self.tokenHash
+    }))
+  res.json({ ok: true, sessions })
+})
+
+// This account's own sign-in history (v0.90.0). The audit log has recorded these since v0.83.0,
+// but only an admin could read it — so the person who most needs to see "five failed attempts from
+// an address I do not know" was the one person who could not. Filtered to the caller, newest first.
+app.get('/api/auth/activity', requireAuth, (req, res) => {
+  const self = req.authSession as AuthSession
+  res.json({ ok: true, entries: authAudit.recentFor(self.username, 20) })
+})
+
+// End one of your OWN sign-ins. A hash belonging to somebody else is answered as "not found"
+// rather than "forbidden": the id is a hash, but it is still not this caller's business whether
+// another account has a session with that id.
+app.post('/api/auth/sessions/:tokenHash/logout', requireAuth, (req, res) => {
+  const self = req.authSession as AuthSession
+  const tokenHash = typeof req.params.tokenHash === 'string' ? req.params.tokenHash : ''
+  const target = authSessions.get(tokenHash)
+  if (!target || target.username !== self.username) {
+    res.status(404).json({ error: 'That sign-in has already ended' })
+    return
+  }
+  const wasCurrent = target.tokenHash === self.tokenHash
+  destroyAuthSession(target.tokenHash)
+  authAudit.record({ outcome: 'session-ended', username: self.username, ...auditContext(req) })
+  // Ending the session you are using is a sign-out; the client reloads into the login screen.
+  if (wasCurrent) clearAuthCookie(res, isSecureRequest(req))
+  res.json({ ok: true, current: wasCurrent })
 })
 
 // Self-service password change (v0.88.0). Until now only an admin could change a password —
@@ -3083,7 +3153,9 @@ for (const restored of authSessionStore.load(Date.now())) {
     role: restored.session.role as UserRole,
     loginAt: restored.session.loginAt,
     lastSeenAt: restored.session.lastSeenAt,
-    nowPlaying: null
+    nowPlaying: null,
+    userAgent: restored.session.userAgent,
+    ip: restored.session.ip
   })
 }
 if (authSessions.size > 0) console.log(`[auth] restored ${authSessions.size} session(s) from disk`)

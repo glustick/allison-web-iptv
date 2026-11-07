@@ -17,6 +17,10 @@ export function createAuthAuditStore(options: { dataDir: string }): AuthAuditPer
   const select = db.db.prepare(
     'SELECT at, outcome, username, ip, user_agent AS userAgent FROM auth_audit ORDER BY id DESC LIMIT ?'
   )
+  // Case-insensitive on username: it is stored as typed at sign-in, and "Chris" must find "chris".
+  const selectFor = db.db.prepare(
+    'SELECT at, outcome, username, ip, user_agent AS userAgent FROM auth_audit WHERE lower(username) = lower(?) ORDER BY id DESC LIMIT ?'
+  )
 
   return {
     append(entry) {
@@ -25,6 +29,9 @@ export function createAuthAuditStore(options: { dataDir: string }): AuthAuditPer
     },
     recent(limit) {
       return select.all(limit) as AuthAuditEntry[]
+    },
+    recentFor(username, limit) {
+      return selectFor.all(username, limit) as AuthAuditEntry[]
     }
   }
 }

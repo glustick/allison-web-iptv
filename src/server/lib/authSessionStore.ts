@@ -18,6 +18,9 @@ export interface StoredSession {
   role: string
   loginAt: number
   lastSeenAt: number
+  /** Where the login came from (v0.90.0). Null when the row predates the columns. */
+  userAgent: string | null
+  ip: string | null
 }
 
 export interface AuthSessionStore {
@@ -46,7 +49,7 @@ export function hashAuthToken(token: string): string {
 export function createAuthSessionStore(options: { dataDir: string; ttlMs: number }): AuthSessionStore {
   const handle = openDatabase(options.dataDir)
   const insert = handle.db.prepare(
-    'INSERT OR REPLACE INTO auth_sessions (token_hash, token_enc, username, role, login_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT OR REPLACE INTO auth_sessions (token_hash, token_enc, username, role, login_at, last_seen_at, user_agent, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   )
   const touch = handle.db.prepare(
     'UPDATE auth_sessions SET last_seen_at = ? WHERE token_hash = ? AND last_seen_at < ?'
@@ -54,13 +57,22 @@ export function createAuthSessionStore(options: { dataDir: string; ttlMs: number
   const remove = handle.db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?')
   const removeUser = handle.db.prepare('DELETE FROM auth_sessions WHERE username = ?')
   const select = handle.db.prepare(
-    'SELECT token_hash AS tokenHash, token_enc AS tokenEnc, username, role, login_at AS loginAt, last_seen_at AS lastSeenAt FROM auth_sessions WHERE last_seen_at >= ?'
+    'SELECT token_hash AS tokenHash, token_enc AS tokenEnc, username, role, login_at AS loginAt, last_seen_at AS lastSeenAt, user_agent AS userAgent, ip FROM auth_sessions WHERE last_seen_at >= ?'
   )
   const prune = handle.db.prepare('DELETE FROM auth_sessions WHERE last_seen_at < ?')
 
   return {
     save(token, session) {
-      insert.run(hashAuthToken(token), encryptSecret(token), session.username, session.role, session.loginAt, session.lastSeenAt)
+      insert.run(
+        hashAuthToken(token),
+        encryptSecret(token),
+        session.username,
+        session.role,
+        session.loginAt,
+        session.lastSeenAt,
+        session.userAgent ?? '',
+        session.ip ?? ''
+      )
     },
     touch(token, lastSeenAt, minIntervalMs = 60_000) {
       touch.run(lastSeenAt, hashAuthToken(token), lastSeenAt - minIntervalMs)
@@ -75,7 +87,16 @@ export function createAuthSessionStore(options: { dataDir: string; ttlMs: number
       removeUser.run(username)
     },
     load(now) {
-      type Row = { tokenHash: string; tokenEnc: string; username: string; role: string; loginAt: number; lastSeenAt: number }
+      type Row = {
+        tokenHash: string
+        tokenEnc: string
+        username: string
+        role: string
+        loginAt: number
+        lastSeenAt: number
+        userAgent: string | null
+        ip: string | null
+      }
       const rows = select.all(now - options.ttlMs) as Row[]
       const out: { token: string; tokenHash: string; session: StoredSession }[] = []
       for (const row of rows) {
@@ -88,7 +109,14 @@ export function createAuthSessionStore(options: { dataDir: string; ttlMs: number
           continue
         }
         out.push({ token, tokenHash: row.tokenHash, session: {
-          username: row.username, role: row.role, loginAt: row.loginAt, lastSeenAt: row.lastSeenAt
+          username: row.username,
+          role: row.role,
+          loginAt: row.loginAt,
+          lastSeenAt: row.lastSeenAt,
+          // A row written before v0.90.0 has an empty string; the panel should say "unknown",
+          // not render an empty label.
+          userAgent: row.userAgent || null,
+          ip: row.ip || null
         } })
       }
       return out

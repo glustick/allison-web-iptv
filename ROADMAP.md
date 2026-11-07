@@ -15,6 +15,70 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.90.0 — four conveniences for watching: a sleep timer, keyboard control, recent searches, and
+account activity.** One release, four independently useful pieces, each with its own reason for the
+shape it took.
+
+**The sleep timer** is a **deadline**, not a countdown that gets decremented: a decrementing timeout
+drifts, stalls while the tab is throttled, and is wrong by minutes after a phone has been face-down
+for an hour, whereas `endsAt` arithmetic is the same before and after a suspension — and a reload
+rejoins the countdown. It is stored per device and **global to the app**, not per player: "stop
+watching in half an hour" is about the evening, not about one stream, and a channel change must not
+quietly cancel it (which is exactly what a per-player `useState` would have done, since a new
+channel remounts the player). Expiry **closes playback** rather than pausing the element — a paused
+live channel leaves hls.js refreshing a playlist and the server holding a provider connection for a
+viewer who is asleep — so the player takes an `onStop` from each parent and the timer calls it; both
+players fall back to `pause()` when a caller has no stop path. A deadline that passed while the tab
+was closed is **cleared, not fired**: the failure that prevents is a timer armed before bed ending a
+film someone deliberately started the next evening. Countdown on the button (`Sleep 29:41`), presets
+of 15/30/45/60/90, Cancel in the panel.
+
+**Keyboard control** lives in `lib/playerKeys.ts` as a pure mapping, because the interesting cases
+are refusals: a shortcut firing while someone types in the search box deletes a character instead of
+pausing, and a seek on a live channel is a lie — there is no timeline. So typing targets are
+excluded, modified keystrokes are never stolen (Cmd+← is the browser's own back gesture), and ←/→
+are gated on `seekable` — true for films and for catch-up, which is a stream with a timeline, false
+for a live channel. Space/K toggle, ←/→ ±10s clamped into the media, ↑/↓ volume, M mute, F
+fullscreen, ? the list (`ShortcutsHelp`, also a button — a permanent legend would be clutter on a
+television). The canvas engine keeps no `<video>`, so the hook does nothing there rather than
+half-applying a shortcut: audio without picture would be worse than nothing.
+
+**Recent searches** (`lib/recentSearches.ts`) is per device and in `localStorage`, like every other
+convenience here — a search is a moment's intent, not a fact about the account. The important
+decision is *when* it records: on a result being **acted on** (clicked or Enter), never on the
+debounced request, because recording every request fills the list with prefixes ("sky", "sky s",
+"sky sp") from one typing session and buries the four things worth offering. Deduped
+case-insensitively, whitespace collapsed, capped at five. A store that refuses the write returns the
+old list rather than claiming a row that will vanish on the next reload — a bug the first version
+had and its own test caught.
+
+**Account activity** is the round's one server-side piece, and its scope changed during the build for
+a reason worth recording. It began as a devices manager — "end a sign-in you do not recognise" — until
+the operator's own v0.83.0 rule made that hollow: **one sign-in per account**, so the list can only
+ever hold one row. What the rule *does* create is the question *was that me?*, and the audit trail
+has held the answer since v0.83.0 — but only an admin could read it, so the person who most needs to
+see five failed attempts against their own password was the one person who could not. The panel is
+therefore two lists: the one active sign-in (browser, platform, address, when, with Sign out), and
+this account's own last 20 audit entries, labelled in plain language (`lib/authActivity.ts`) with the
+one-login rule's "Ended by a newer sign-in" kept distinct from an admin's "Ended by an admin".
+`GET /api/auth/sessions` and `POST /api/auth/sessions/:hash/logout` are scoped to the caller — a hash
+belonging to someone else answers 404, not 403, since it is not this caller's business that another
+account has a session with that id — and `GET /api/auth/activity` reads `authAudit.recentFor(username)`,
+a new per-user read over the durable audit table. Login now records `user_agent` and `ip` on the
+session row (both columns added by migration; an upgraded row reads as unknown rather than failing
+the panel), capped at 300 characters because a user-agent is attacker-controlled text that ends up
+in a database column and a table. Nodes' IPv4-mapped `::ffff:127.0.0.1` is normalised for display —
+technically true, useless in a list meant to be recognised.
+
+**Proven, not asserted.** The server flow ran against a real instance on a temp data dir: setup, two
+logins (the first retired by the second), a second user refused 404 when trying to end the first
+user's session while that session stayed live, and a self-revoke that cleared the cookie and signed
+the caller out. In Chrome: the activity panel listed the live sign-in and the account's own history;
+recent searches rendered, filled the field on click and survived a reload; and on a harness around
+the real `NativeVideoPlayer`, Space started playback, → seeked exactly 10s, M muted, ↓ dropped volume
+to 0.9, ? opened the list, and a 7-second deadline counted down on the button and then closed the
+player, clearing the stored timer. 971 tests (30 new); typecheck, lint and both builds clean.
+
 **v0.89.0 — subtitle appearance: the cues answer to the viewer, per device.** The last open piece of
 player settings, and the one the panel's compact section has been missing since v0.75.0 shipped the
 quality selector beside it. **The constraint first:** subtitles here are the browser's own cue

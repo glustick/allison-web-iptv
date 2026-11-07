@@ -15,6 +15,7 @@ import { Movies } from './components/Movies'
 import { Series } from './components/Series'
 import { SportsView } from './components/SportsView'
 import { ChangePassword } from './components/ChangePassword'
+import { DevicesPanel } from './components/DevicesPanel'
 import { formatElapsedTime } from './lib/connectionTiming'
 import {
   connectIptv,
@@ -136,6 +137,7 @@ export default function App(): JSX.Element {
 
   // The self-service password modal (v0.88.0) — the top bar's Change password entry.
   const [changingPassword, setChangingPassword] = useState(false)
+  const [showDevices, setShowDevices] = useState(false)
 
   async function handleLogout(): Promise<void> {
     await logout()
@@ -310,6 +312,14 @@ export default function App(): JSX.Element {
           <button
             type="button"
             className="logout-btn"
+            onClick={() => setShowDevices(true)}
+            title="Where this account is signed in, and its recent sign-in history"
+          >
+            Activity
+          </button>
+          <button
+            type="button"
+            className="logout-btn"
             onClick={() => setChangingPassword(true)}
             title="Change this account's password"
           >
@@ -321,6 +331,7 @@ export default function App(): JSX.Element {
         </div>
       </div>
       {changingPassword && <ChangePassword onClose={() => setChangingPassword(false)} />}
+      {showDevices && <DevicesPanel onClose={() => setShowDevices(false)} />}
       {!session && (
         <div className="admin-only-notice">
           No IPTV provider is configured for this account, so Live TV, Movies and Series are

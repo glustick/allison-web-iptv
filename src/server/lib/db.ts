@@ -149,7 +149,11 @@ function createSchema(db: Database.Database): void {
       username TEXT NOT NULL,
       role TEXT NOT NULL,
       login_at INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL
+      last_seen_at INTEGER NOT NULL,
+      -- Where the login came from, so its owner can recognise it in the devices panel
+      -- (v0.90.0). Empty string means "unknown", which is also what an upgraded row carries.
+      user_agent TEXT NOT NULL DEFAULT '',
+      ip         TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS auth_audit (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -189,6 +193,10 @@ function migrateSchema(db: Database.Database): void {
   // auth_sessions gained an encrypted token after the table shipped, so an existing database needs
   // the column added explicitly — CREATE TABLE IF NOT EXISTS would silently leave it out.
   addColumnOrNothing('auth_sessions', 'token_enc', 'token_enc TEXT NOT NULL DEFAULT \'\'')
+  // v0.90.0: the devices panel names each login. An upgraded database has sessions that predate
+  // the columns; they read as unknown rather than failing the panel.
+  addColumnOrNothing('auth_sessions', 'user_agent', "user_agent TEXT NOT NULL DEFAULT ''")
+  addColumnOrNothing('auth_sessions', 'ip', "ip TEXT NOT NULL DEFAULT ''")
   const addColumn = (table: string, column: string, ddl: string): boolean => {
     const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
     if (columns.some((entry) => entry.name === column)) return false

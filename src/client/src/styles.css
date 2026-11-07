@@ -1402,6 +1402,19 @@ body.resizing-col {
   color: #ffffff;
 }
 
+/* Recent searches (v0.90.0). The rows reuse .search-hit so a remembered term looks like a result;
+   only the head row is new, because it carries the Clear action beside its label. */
+.search-recent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.search-recent-hit .reorder-icon.placeholder {
+  font-size: 13px;
+}
+
 .search-hit .admin-muted {
   font-size: 11px;
   white-space: nowrap;
@@ -1870,6 +1883,106 @@ body.resizing-col .resize-handle--feeds::after {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Your devices (v0.90.0): a row per sign-in — the name and its provenance on the left, one
+   action on the right. Narrower than the multi-view picker: there are never many rows, and a
+   long line of metadata is easier to scan than a wide one. */
+.devices-panel {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.devices-panel .multiview-picker-head {
+  justify-content: space-between;
+}
+
+.device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 2px;
+  border-bottom: 1px solid #1b1f28;
+}
+
+.device-row:last-of-type {
+  border-bottom: none;
+}
+
+.device-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.device-name {
+  font-size: 13px;
+  color: #e6edf3;
+}
+
+.device-current {
+  color: #58a6ff;
+}
+
+.device-meta {
+  font-size: 11px;
+  color: #9aa1ad;
+}
+
+/* Account activity's two lists (v0.90.0). The history is capped and scrolls rather than stretching
+   the dialog: it is a glance, not a report. */
+.device-section {
+  margin: 12px 0 2px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9aa1ad;
+}
+
+.activity-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.activity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 2px;
+  border-bottom: 1px solid #1b1f28;
+}
+
+.activity-row:last-child {
+  border-bottom: none;
+}
+
+.activity-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.activity-badge.tone-ok {
+  color: #7ee787;
+  border-color: rgba(126, 231, 135, 0.35);
+}
+
+.activity-badge.tone-warn {
+  color: #f0b72f;
+  border-color: rgba(240, 183, 47, 0.35);
+}
+
+.activity-badge.tone-bad {
+  color: #ff7b72;
+  border-color: rgba(255, 123, 114, 0.35);
+}
+
+.activity-badge.tone-neutral {
+  color: #9aa1ad;
+  border-color: rgba(154, 161, 173, 0.3);
 }
 
 .multiview-picker-filter {

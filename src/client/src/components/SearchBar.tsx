@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 import { search, type SearchHit, type SearchStatus } from '../lib/system'
+import { clearRecentSearches, readRecentSearches, rememberSearch } from '../lib/recentSearches'
 
 // Global search over the provider's whole catalogue. Results are served from the SQLite index, so
 // this keeps working when the provider itself is slow — but an unbuilt index shows its state
@@ -14,6 +15,10 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const [searching, setSearching] = useState(false)
+  // What this device searched for before (v0.90.0) — offered when the field is empty. Recorded on
+  // selection, not on the debounced request: one typing session would otherwise leave "sky",
+  // "sky s", "sky sp" behind and bury the four other things worth offering.
+  const [recent, setRecent] = useState<string[]>(() => readRecentSearches())
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -60,6 +65,7 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
         onFocus={() => setOpen(true)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && hits[0]) {
+            setRecent(rememberSearch(query))
             onPlay(hits[0])
             setOpen(false)
           }
@@ -67,6 +73,30 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
         }}
         aria-label="Search channels, films and series"
       />
+      {open && query.trim().length < 2 && recent.length > 0 && (
+        <div className="search-results">
+          <div className="search-note search-recent-head">
+            <span>Recent searches</span>
+            <button type="button" className="admin-small-btn" onClick={() => setRecent(clearRecentSearches())}>
+              Clear
+            </button>
+          </div>
+          {recent.map((term) => (
+            <button
+              key={term}
+              type="button"
+              className="search-hit search-recent-hit"
+              onClick={() => {
+                setQuery(term)
+                setRecent(rememberSearch(term))
+              }}
+            >
+              <span className="reorder-icon placeholder">🕘</span>
+              <span className="reorder-label">{term}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {open && query.trim().length >= 2 && (
         <div className="search-results">
           {error && <div className="search-note error">{error}</div>}
@@ -83,6 +113,7 @@ export function SearchBar({ onPlay }: { onPlay: (hit: SearchHit) => void }): JSX
               type="button"
               className="search-hit"
               onClick={() => {
+                setRecent(rememberSearch(query))
                 onPlay(hit)
                 setOpen(false)
               }}

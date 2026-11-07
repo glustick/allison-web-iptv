@@ -425,6 +425,7 @@ export function Series({
             titleKey={`series:${nowPlaying.playlistId ?? ''}:${nowPlaying.episode.id}`}
             initialPositionSeconds={startAt}
             onProgress={handleProgress}
+            onStop={() => setNowPlaying(null)}
           />
         )}
         {nowPlaying && (
