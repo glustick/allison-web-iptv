@@ -17,3 +17,4 @@ Conventions: all scripts exit non-zero on failure and print what a human needs
 without reading code. The two verify-live/catchup scripts read `BASE_URL`,
 `IPTV_USER`, `IPTV_PASS` from the environment and never store credentials.
 | `fixture-provider.mjs` | A fake Xtream panel: four channels, a two-hour schedule, a real 12-second HLS stream, `player_api.php` + `xmltv.php`. Lets the UI be driven without a real account. | **Working** (v0.93.1). Bound to `0.0.0.0` deliberately: the app refuses provider URLs pointing at loopback, and allows LAN addresses. `PORT`, `FIXTURE_USER`, `FIXTURE_PASS`, `FFMPEG` env. |
+| `verify-ui.mjs` | The one scripted check: sign in → Live TV → play → assert the playhead advances, against the fixture. Real Chrome via CDP, real mouse click (a synthetic click is not a user gesture and Chrome blocks autoplay, which looks like a broken player). | **Working** (v0.95.0) — passes against the fixture. Needs `BASE_URL`, `APP_USER`, `APP_PASS`. |

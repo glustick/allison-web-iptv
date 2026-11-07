@@ -3,6 +3,7 @@ import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
 import { isFinished } from '../lib/continueWatching'
+import { nextEpisode } from '../lib/nextEpisode'
 import { sortSeries, type SeriesSort } from '../lib/librarySort'
 import { filterByText } from '../lib/listFilter'
 import { ListFilter } from './ListFilter'
@@ -78,13 +79,16 @@ function EpisodeList({
   client,
   seriesId,
   resumeFor,
-  onPlay
+  onPlay,
+  onLoaded
 }: {
   /** The scoped client for whichever playlist this series belongs to (v0.79.0). */
   client: XtreamClient
   seriesId: number
   resumeFor: (episodeId: number) => ResumePosition | undefined
   onPlay: (episode: SeriesEpisode, resumeFrom: number) => void
+  /** Hands the fetched episode list to the parent, which is what can offer "Next" (v0.95.0). */
+  onLoaded?: (info: SeriesInfo) => void
 }): JSX.Element {
   const [info, setInfo] = useState<SeriesInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -93,7 +97,10 @@ function EpisodeList({
     setInfo(null)
     client
       .getSeriesInfo(seriesId)
-      .then(setInfo)
+      .then((data) => {
+        setInfo(data)
+        onLoaded?.(data)
+      })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load episodes'))
   }, [client, seriesId])
 
@@ -158,6 +165,9 @@ export function Series({
   const [seriesSort, setSeriesSort] = useState<SeriesSort>('default')
   const [listFilter, setListFilter] = useState('')
   const [openSeries, setOpenSeries] = useState<SeriesItem | null>(null)
+  // The episode list for the series on screen (v0.95.0), lifted only so the player bar can name
+  // what plays next — nothing else in the parent needs it.
+  const [episodeInfo, setEpisodeInfo] = useState<{ seriesId: number; info: SeriesInfo } | null>(null)
   // Series favourites: prefs already stores them (kind 'series'); this tab just never showed them.
   const [nowPlaying, setNowPlaying] = useState<{ episode: SeriesEpisode; playlistId?: string } | null>(null)
   const [startAt, setStartAt] = useState(0)
@@ -451,6 +461,21 @@ export function Series({
                 </span>
               )}
               {startAt > 0 && <span className="resume-note"> · resumed at {formatClock(startAt)}</span>}
+              {(() => {
+                if (!episodeInfo || !openSeries || episodeInfo.seriesId !== openSeries.series_id) return null
+                const following = nextEpisode(episodeInfo.info.episodes, { id: nowPlaying.episode.id })
+                if (!following) return null
+                return (
+                  <button
+                    type="button"
+                    className="admin-small-btn"
+                    title={`Play ${following.title} next`}
+                    onClick={() => playEpisode(following, 0, nowPlaying.playlistId)}
+                  >
+                    Next: {following.title} ▸
+                  </button>
+                )
+              })()}
               {openSeries && (
                 <span className="now-playing-actions">
                   <button
@@ -544,6 +569,7 @@ export function Series({
               seriesId={openSeries.series_id}
               resumeFor={episodeResumeFor}
               onPlay={(episode, resumeFrom) => playEpisode(episode, resumeFrom, playlistRefOf(openSeries))}
+              onLoaded={(info) => setEpisodeInfo({ seriesId: openSeries.series_id, info })}
             />
           </>
         ) : (

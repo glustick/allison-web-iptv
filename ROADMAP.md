@@ -15,6 +15,40 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.95.0 — next episode, and the scripted check that finally exists.**
+
+**Next episode** is the feature deferred twice for the same honest reason: the episode list lives
+inside `EpisodeList`, which fetches it, and the "what plays next" button belongs in the parent's
+player bar. Lifting it looked like more coupling than the feature was worth — until it turned out to
+be one callback (`onLoaded`) and one piece of parent state keyed by `seriesId`, so a stale list from
+another series can never offer the wrong episode. `nextEpisode` (restored from the v0.93 round, where
+it was written, tested and then deleted for want of a caller) sorts seasons numerically because the
+provider's numbering is neither sorted nor contiguous, crosses into the next season that has
+episodes, skips an empty one, and returns null at the end rather than wrapping to the pilot.
+
+**`scripts/verify-ui.mjs` is the smoke test the ROADMAP has asked for since 2026-09-26** — "a single
+scripted login → guide → drag → play check that a future change runs by default". It drives real
+Chrome over CDP (`scripts/cdp-drive.mjs`), signs in, opens Live TV, clicks a channel and **asserts the
+playhead advanced**, printing the page's console lines on failure. It cost three lessons, all now
+comments in the file:
+
+- **React omits `type="text"`** (it is the default), so `input[type="text"]` matches nothing — the
+  selector has to be `input:not([type="password"])`. This failed silently as "element not found".
+- **Synthetic keystrokes need a visible, focused element**; a native value setter plus an `input`
+  event works in any window size and is what the script uses for the login fields.
+- **The playback click must be a real mouse event.** `el.click()` is not a user gesture, so Chrome
+  blocks autoplay with sound and the playhead sits at zero — indistinguishable from a broken player,
+  and exactly the kind of false negative that makes a harness untrustworthy.
+
+**Verified**: the script passes end to end (`PASS login → Live TV → play → playhead advancing`,
+`playing: t=1.1s, 640x360`), and the Next button appears on a real episode
+(`Next: Fixture S01E02 ▸`). 1034 tests; typecheck, lint and both builds clean.
+
+**Deliberately not in this round**: the watched-state (✓) marker. It needs a new table in the prefs
+database — `resume_positions` is a table, not a JSON field — so it is a migration with an API surface,
+and this build had to land green for the operator's automatic update. It stays at the top of the
+next list, where it has the honest size now.
+
 **v0.94.0 — ten more, split between the lists and the player.** Another batch release, each item
 small, with the fixture from v0.93.1 used to check what it can reach.
 

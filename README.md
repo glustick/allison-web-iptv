@@ -6,6 +6,31 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.95.0 — next episode, and a check that runs by itself)
+
+**Next episode.** While an episode plays, the bar names what follows — *Next: Fixture S01E02 ▸* — and
+clicking it plays that episode from the start. The episode list had to be lifted out of its child
+component for this, which is why it had been deferred twice; it now arrives in the parent through a
+callback, so nothing else in Series knows about it. `nextEpisode` sorts seasons numerically (the
+provider's numbering is neither sorted nor contiguous), crosses into the next season that actually
+has episodes, skips an empty one, and returns null at the end rather than wrapping to the pilot.
+
+**A check that runs by itself.** `scripts/verify-ui.mjs` is the smoke test the roadmap has asked for
+since September: real Chrome over CDP, sign in, Live TV, click a channel, and **assert the playhead
+advances** — failing with the page's own console lines when it does not. Three lessons it cost, all
+recorded in it: React omits `type="text"` because it is the default, so that selector never matches;
+setting a field through the native setter plus an `input` event is sturdier than synthetic keystrokes;
+and the playback click **must be a real mouse event**, because a synthetic `el.click()` is not a user
+gesture and Chrome then blocks autoplay — which looks exactly like a broken player.
+
+**Verified**: the script passes end to end against the fixture (`playing: t=1.1s, 640x360`), and the
+Next button appears on a real episode (`Next: Fixture S01E02 ▸`). 1034 tests; typecheck, lint and
+both builds clean.
+
+*Not in this round:* the watched-state (✓) feature I proposed needs a new table in the prefs
+database, not a field — that is a migration, and not something to bolt onto a build that has to land
+green tonight. It is the top of the next list.
+
 ## Current state (v0.94.0 — ten more, split between the lists and the player)
 
 **The lists.** A **filter box** on all three browsable lists (films, series and the live library):
