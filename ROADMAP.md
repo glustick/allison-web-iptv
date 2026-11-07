@@ -15,6 +15,40 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.92.0 — continue watching, and stopping when it is finished.** The visible half is a shelf of
+half-watched films above the Movies list. The half that matters more is a bug that had been there
+since resume points were introduced: **the resume store is written on every progress event,
+including the last one**, so a film watched to the end stayed in Continue watching at 100% for ever,
+and the same was true of episodes. Nothing ever cleared it.
+
+**The rule** now lives in `lib/continueWatching.ts` and is used by both the list and the writer:
+a title is finished at **95%**, or within **two minutes** of the end — with the tail rule restricted
+to titles of at least ten minutes, because applied to a five-minute clip "two minutes left" would
+call it finished before it started. That edge is tested, as is a position past the end (finished), an
+unknown duration (never finished), an unreadable `updatedAt` (sorts last, not first) and the cap.
+
+**The consequences** are deliberately three places, not one: the player's progress handler now
+**clears** the resume point when a title finishes rather than storing a final position; the shelf
+filters finished entries even if an older build wrote one; and the row badge in both libraries
+ignores a stored position that is already past the finish line — otherwise a record written before
+this release would paint a 100% badge for ever, which is the same bug in a different coat.
+
+**The shelf** (`ContinueWatchingShelf`) sits above the Movies list in every view except History:
+newest first, capped at eight, progress bar, position as a clock, and a dismiss that clears the
+resume point. Its dismiss is a **sibling** of the resume button rather than a child — a button inside
+a button is invalid HTML and browsers disagree about which one owns the click, the same conclusion
+the guide's reminder bell reached in v0.91.0. Series keeps its dedicated Continue watching view,
+which now hides finished episodes; a shelf there would need the episode's series context, which a
+bare resume record does not carry, so it is deliberately not built.
+
+**Proven**: four seeded entries (98%, 60%, 25%, and a 4-minute clip at 0%) rendered **three** cards in
+a browser against the shipped component — the finished one excluded — with the progress bars and
+clock labels correct, and dismiss removing its card (`cards=3` → `cards=2`). Not proven: the round
+trip from the server's prefs store into the shelf, because the Movies tab requires a configured
+IPTV account to open; that path is covered by the prefs API's own tests rather than by the
+screenshot, and the note says so rather than implying a full end-to-end run. 998 tests (11 new);
+typecheck, lint and both builds clean.
+
 **v0.91.0 — reminders, and what is on now.** Two features that make the guide useful after the
 choice has been made, plus the first real measurement of Safari — which is why this note is longer
 than two features deserve.

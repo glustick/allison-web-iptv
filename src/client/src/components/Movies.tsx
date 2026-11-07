@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
 import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
+import { ContinueWatchingShelf, type ContinueItem } from './ContinueWatchingShelf'
+import { continueWatching, isFinished, progressPercent as watchPercent } from '../lib/continueWatching'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { XtreamClient } from '../lib/xtreamClient'
 import { playlistRefOf } from '../lib/types'
@@ -218,6 +220,31 @@ export function Movies({
     return map
   }, [prefs.resume])
 
+  // The shelf (v0.92.0): unfinished films, newest first. Resume points that are already past the
+  // finish line are not offered — that was the bug this replaces, where a film watched to the end
+  // sat here at 100% for ever.
+  interface ShelfItem extends ContinueItem {
+    streamId: number
+    playlistId?: string
+  }
+  const continueItems = useMemo<ShelfItem[]>(() => {
+    const rows = prefs.resume
+      .filter((entry) => entry.kind === 'movie')
+      .map((entry) => ({
+        key: `${entry.playlistId || ''}:${entry.streamId}`,
+        name: entry.name,
+        positionSeconds: entry.positionSeconds,
+        durationSeconds: entry.durationSeconds,
+        playlistId: entry.playlistId || undefined,
+        streamId: entry.streamId,
+        playlistLabel:
+          entry.playlistId && entry.playlistId !== 'primary'
+            ? additional.find((line) => line.id === entry.playlistId)?.label
+            : undefined
+      }))
+    return continueWatching(rows)
+  }, [prefs.resume, additional])
+
   const movieFavourites = useMemo(() => prefs.favourites.filter((f) => f.kind === 'movie'), [prefs.favourites])
 
   const isFavourite = useCallback(
@@ -279,6 +306,14 @@ export function Movies({
   const handleProgress = useCallback(
     (positionSeconds: number, durationSeconds: number | null): void => {
       if (!nowPlaying) return
+      // Watched to the end is a state, not a position: clearing here is what stops a finished film
+      // sitting in Continue watching for ever (v0.92.0 — see lib/continueWatching).
+      if (isFinished(positionSeconds, durationSeconds)) {
+        void clearResumePosition('movie', nowPlaying.stream_id, playlistRefOf(nowPlaying))
+          .then((resume) => setPrefs((current) => ({ ...current, resume })))
+          .catch(() => {})
+        return
+      }
       void setResumePosition(
         {
           kind: 'movie',
@@ -435,6 +470,17 @@ export function Movies({
             </span>
           )}
         </div>
+        {selection.type !== 'history' && (
+          <ContinueWatchingShelf
+            items={continueItems}
+            onResume={(item) => play(item.streamId, item.name, item.positionSeconds, item.playlistId)}
+            onDismiss={(item) => {
+              void clearResumePosition('movie', item.streamId, item.playlistId)
+                .then((resume) => setPrefs((current) => ({ ...current, resume })))
+                .catch(() => {})
+            }}
+          />
+        )}
         <div className="channel-list">
           {listRows.length === 0 && (
             <p className="list-hint">
@@ -442,8 +488,11 @@ export function Movies({
             </p>
           )}
           {listRows.map((row) => {
-            const resume = movieResume.get(`${row.playlistId ?? ''}:${row.streamId}`)
-            const percent = resume?.durationSeconds ? Math.min(100, Math.round((resume.positionSeconds / resume.durationSeconds) * 100)) : null
+            const stored = movieResume.get(`${row.playlistId ?? ''}:${row.streamId}`)
+            // A finished title has no resume point any more, but a record written by an older build
+            // must not paint a 100% badge either.
+            const resume = stored && !isFinished(stored.positionSeconds, stored.durationSeconds) ? stored : undefined
+            const percent = resume?.durationSeconds ? watchPercent(resume.positionSeconds, resume.durationSeconds) : null
             return (
               <div key={`${row.playlistId ?? ''}:${row.streamId}`} className="channel-row-wrap">
                 <button

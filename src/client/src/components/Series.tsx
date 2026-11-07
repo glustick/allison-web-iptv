@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
 import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
+import { isFinished } from '../lib/continueWatching'
 import { useSidebarWidth } from '../lib/useSidebarWidth'
 import { formatClock } from './Movies'
 import { XtreamClient } from '../lib/xtreamClient'
@@ -336,6 +337,14 @@ export function Series({
   const handleProgress = useCallback(
     (positionSeconds: number, durationSeconds: number | null): void => {
       if (!nowPlaying) return
+      // Same rule as films (v0.92.0): an episode watched to the end leaves Continue watching
+      // instead of sitting there at 100% for ever.
+      if (isFinished(positionSeconds, durationSeconds)) {
+        void clearResumePosition('series', Number(nowPlaying.episode.id), nowPlaying.playlistId)
+          .then((resumePositions) => setPrefs((current) => ({ ...current, resume: resumePositions })))
+          .catch(() => {})
+        return
+      }
       void setResumePosition(
         {
           kind: 'series',
@@ -484,7 +493,8 @@ export function Series({
             </div>
             {historyEpisodes.length === 0 && <p className="list-hint">Nothing watched yet.</p>}
             {historyEpisodes.map((row) => {
-              const resume = resumeFor(row.id, row.playlistId)
+              const stored = resumeFor(row.id, row.playlistId)
+              const resume = stored && !isFinished(stored.positionSeconds, stored.durationSeconds) ? stored : undefined
               const episode = {
                 id: String(row.id),
                 episode_num: 0,

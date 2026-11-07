@@ -6,6 +6,29 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.92.0 — continue watching, and stopping when it is finished)
+
+A bug fix wearing a feature's clothes. The resume store records a position on **every** progress
+event, including the last one, so a film watched to the end sat in Continue watching at 100% for
+ever — the same in Series. **Finished is now a state** (`lib/continueWatching.ts`), decided in one
+place and used by both the list and the handler that writes positions: at 95%, or within two minutes
+of the end of a title long enough to have credits (ten minutes — on a five-minute clip the credits
+rule would call it finished before it started, which is exactly the sort of edge a test now pins).
+A title that finishes **clears** its resume point instead of storing one, and a record written by an
+older build cannot paint a 100% badge either.
+
+**The shelf**: half-watched films now sit above the list in Movies — newest first, capped at eight,
+each with a progress bar, its position as a clock, and one action per card (resume) plus a dismiss.
+The dismiss is a **sibling** of the resume button, not nested inside it, so neither click can mean
+the other — the same rule as the guide's reminder bell. Series keeps its existing Continue watching
+view, which now hides finished episodes.
+
+Proven in a browser against the shipped component: four seeded entries rendered three cards (the
+98% one excluded), and dismiss removed its card. What that does *not* prove is the round trip
+against a real provider — the Movies tab needs a configured IPTV account to open, so the shelf's
+data path from the server's prefs store is covered by the API's own tests rather than by this
+screenshot. 998 tests (11 new); typecheck, lint and both builds clean.
+
 ## Current state (v0.91.0 — reminders, and what's on now)
 
 Two things that make the guide useful *after* you have chosen something. **Programme reminders**: a

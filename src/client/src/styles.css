@@ -583,6 +583,98 @@ body.resizing-row {
    a button is invalid HTML and browsers disagree about which one a click belongs to. It is
    positioned against the block's right edge, and only rendered for programmes that have not
    started yet and blocks wide enough to hold it. */
+/* Continue watching (v0.92.0): a horizontal shelf of half-watched films above the list. The card
+   is the resume button; the dismiss is its sibling, so neither click can mean the other. */
+.cw-shelf {
+  padding: 8px 12px 2px;
+  border-bottom: 1px solid #1b1f28;
+}
+
+.cw-heading {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9aa1ad;
+  margin-bottom: 6px;
+}
+
+.cw-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0 8px;
+}
+
+.cw-card {
+  position: relative;
+  flex: 0 0 220px;
+}
+
+.cw-open {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  text-align: left;
+  background: #151a24;
+  border: 1px solid #232936;
+  border-radius: 8px;
+  color: #e7e9ee;
+  cursor: pointer;
+}
+
+.cw-open:hover {
+  border-color: #4f7cff;
+}
+
+.cw-name {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cw-bar {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: #1b2030;
+  overflow: hidden;
+}
+
+.cw-bar-fill {
+  display: block;
+  height: 100%;
+  background: #4f7cff;
+}
+
+.cw-meta {
+  font-size: 11px;
+  color: #9aa1ad;
+}
+
+.cw-dismiss {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  line-height: 1;
+  font-size: 13px;
+  border-radius: 50%;
+  border: 1px solid #2a2f3a;
+  background: #0f1219;
+  color: #9aa1ad;
+  cursor: pointer;
+}
+
+.cw-dismiss:hover {
+  color: #ffffff;
+  border-color: #ff6b6b;
+}
+
 /* Now / next under the live player (v0.91.0). A thin strip: the programme's name is the point, the
    progress bar answers "how long has this been on", and neither competes with the picture. */
 .now-next {
