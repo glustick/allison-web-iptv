@@ -15,6 +15,28 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.100.0 — the player can say what it is doing.**
+
+Every recovery decision the live player makes has always been a `console.warn`: stall detected,
+loader kicked, source reloaded, session replaced, playlist frozen, raw-TS rerouted, the client-side
+engine taking over. Twenty-one of them. That record existed **only in a console**, which is exactly
+the thing nobody has open when the picture freezes — as the Sky Sports report proved twice: the
+server side was readable, the player's side was gone.
+
+The same lines now land in a **Diagnostics** panel behind the player's Controls menu: newest first,
+bounded at 24, each with its clock time, in the panel the player already has for quality and stats.
+`logEvent` writes both the console line and the in-app entry, so nothing was lost for DevTools
+users and nothing has to be reproduced to be read. `lib/playbackEvents.ts` is the bounded buffer,
+pure and tested — the player owns the actions, the module owns the rule, the same split
+`liveStreamRecovery` and `sessionHealth` already use.
+
+**Live only, deliberately:** that is where the recovery ladder is, and where the freeze is.
+
+1058 tests (5 new, on the buffer: newest-first ordering, the cap, no mutation, a zero limit, and a
+limit a phone can read). Typecheck, lint and both builds clean. **Not browser-verified** — and this
+release is specifically the thing that makes the next freeze diagnosable without a browser console,
+which is worth more than another round of features until it has been deployed.
+
 **v0.99.0 — a show opens where you are.**
 
 The watched state arrived in v0.96.0 and the bulk catch-up in v0.98.0, but the episode list still

@@ -2538,3 +2538,39 @@ body.resizing-col .resize-handle--feeds::after {
   white-space: nowrap;
   margin-left: 8px;
 }
+
+/* The player's own event log (v0.100.0). Deliberately plain and monospace: these are the lines
+   that used to exist only in a console nobody had open when the picture froze. */
+.player-diagnostics {
+  max-width: min(340px, 80vw);
+  max-height: 40vh;
+  overflow-y: auto;
+  text-align: left;
+  background: rgba(11, 13, 18, 0.92);
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: #c8cdd6;
+}
+
+.player-diagnostics-row {
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  word-break: break-word;
+}
+
+.player-diagnostics-row:last-child {
+  border-bottom: none;
+}
+
+.player-diagnostics-time {
+  color: #7b8496;
+  margin-right: 4px;
+}
+
+.player-diagnostics-empty {
+  opacity: 0.7;
+}

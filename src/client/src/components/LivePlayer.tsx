@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type JSX } from 'react'
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { stallRecoveryShape, useTranscodeFallback } from '../lib/transcodeFallback'
 import {
@@ -32,6 +32,7 @@ import { usePlayerKeys } from '../lib/usePlayerKeys'
 import { ShortcutsHelp } from './ShortcutsHelp'
 import { SubtitleStyleButton } from './SubtitleStyleButton'
 import { PlayerMenu } from './PlayerMenu'
+import { appendEvent, type PlaybackEvent } from '../lib/playbackEvents'
 import { SleepTimerButton } from './SleepTimerButton'
 import { MediaStats } from './MediaStats'
 import { WebCodecsPlayer } from './WebCodecsPlayer'
@@ -115,6 +116,14 @@ export function LivePlayer({
   const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // The same decisions the console has always recorded, kept where a viewer can read them
+  // (v0.100.0) — a freeze is exactly when nobody has DevTools open.
+  const [playbackEvents, setPlaybackEvents] = useState<PlaybackEvent[]>([])
+  const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const logEvent = useCallback((message: string): void => {
+    logEvent(message)
+    setPlaybackEvents((previous) => appendEvent(previous, message, new Date().toLocaleTimeString()))
+  }, [])
   // A transient, self-clearing line for events the player handles on its own (a dead session
   // being replaced mid-view) — distinct from `error`, which always wants a Retry. Cleared the
   // moment fragments flow again.
@@ -217,14 +226,14 @@ export function LivePlayer({
             // budget are the provider dropping the channel, not a blip.
             stopped = true
             clearInterval(timer)
-            console.warn('[player] session died again past the replacement budget — declaring the provider is dropping this channel')
+            logEvent('[player] session died again past the replacement budget — declaring the provider is dropping this channel')
             reset()
             setError('The stream session keeps ending — the provider appears to be dropping this channel. Press Retry to try again.')
             return
           }
           if (!shouldRestartDeadSession(verdict)) return
           sessionReplacementsRef.current += 1
-          console.warn(
+          logEvent(
             `[player] session died server-side; replacing it (${sessionReplacementsRef.current} this run, before the error ladder)`
           )
           setStatusNotice('The stream session ended — restarting it…')
@@ -275,7 +284,7 @@ export function LivePlayer({
         typeof VideoDecoder !== 'undefined' && typeof EncodedVideoChunk !== 'undefined',
       mseCanDecodeAudio: (codec) => canDecodeAudioCodec(codec, mseProbe)
     })
-    console.warn(`[player] route: ${route.route} — ${route.reason}`)
+    logEvent(`[player] route: ${route.route} — ${route.reason}`)
     // A session that is already producing this channel's output changes everything: the route
     // decided what to START, and it started — the player's job now is to attach to that output.
     // Returning here regardless is what left a freshly started transcode unfetched and the screen
@@ -310,7 +319,7 @@ export function LivePlayer({
         return
       }
     } else if (route.route !== 'direct') {
-      console.warn('[player] a session is already producing this channel — attaching to its output')
+      logEvent('[player] a session is already producing this channel — attaching to its output')
     }
     if (engineRef.current === null || engineRef.current === 'webcodecs') {
       engineRef.current = route.route === 'direct' ? route.engine : nativeHls ? 'native' : 'hls'
@@ -385,7 +394,7 @@ let stallCount = 0
       const terminal = gaveUp || fatalErrorShown
       if (shouldAutoRevive({ terminal, autoReviveAttempts })) {
         autoReviveAttempts += 1
-        console.warn('[player] tab visible again after a terminal state — auto-reviving')
+        logEvent('[player] tab visible again after a terminal state — auto-reviving')
         setStatusNotice('Reconnecting — this stream ended while the tab was away…')
         void retryPlayback()
         return
@@ -410,7 +419,7 @@ let stallCount = 0
         if (actions.kickLoader && hlsRef.current) {
           kicksSinceLastFragment += 1
           hlsRef.current.startLoad()
-          console.warn('[player] tab visible again — kicked the hls loader immediately')
+          logEvent('[player] tab visible again — kicked the hls loader immediately')
         }
         if (actions.resumePlayback && video.paused) video.play().catch(() => {})
       }
@@ -434,7 +443,7 @@ let stallCount = 0
         const attempt = reloadAttemptsRef.current + 1
         reloadAttemptsRef.current = attempt
         lastReloadAtRef.current = Date.now()
-        console.warn(`[player] live stream stalled; recovery attempt ${attempt}`)
+        logEvent(`[player] live stream stalled; recovery attempt ${attempt}`)
         // Escalation, because a plain reload can only fix a wedged *player*, not a wedged
         // *stream*: 1) rebuild the source; 2) switch engines (start a transcode, or replace a
         // dead transcode session — reloading the same dead session id just re-freezes);
@@ -488,7 +497,7 @@ let stallCount = 0
         return
       }
       if (actions.kickLoader) {
-        console.warn('[player] live loading stalled after backgrounding; restarting hls loader')
+        logEvent('[player] live loading stalled after backgrounding; restarting hls loader')
         kicksSinceLastFragment += 1
         hls.startLoad()
       }
@@ -537,7 +546,7 @@ let stallCount = 0
       if (videoBytes > 0) everDecodedVideo = true
       consecutiveSilentTicks = videoBytes > 0 && audioBytes === 0 ? consecutiveSilentTicks + 1 : 0
       if (consecutiveSilentTicks >= SILENT_AUDIO_SILENT_TICKS && video.currentTime > 2) {
-        console.warn('[player] playing with no decoded audio; switching to the transcode path')
+        logEvent('[player] playing with no decoded audio; switching to the transcode path')
         startSilentAudioFallback()
       }
     }, SILENT_AUDIO_CHECK_INTERVAL_MS)
@@ -558,7 +567,7 @@ let stallCount = 0
       if (nativeFailedRef.current) return
       nativeFailedRef.current = true
       engineRef.current = 'hls'
-      console.warn('[player] native HLS playback failed; re-attaching with hls.js')
+      logEvent('[player] native HLS playback failed; re-attaching with hls.js')
       setReloadTick((t) => t + 1)
     }
 
@@ -622,7 +631,7 @@ let stallCount = 0
         if (!stalled) return
         if (video.paused || !isPlayheadAtBufferEnd(video)) return
         gaveUp = true
-        console.warn(
+        logEvent(
           `[player] playlist window frozen at ${details.startSN}-${details.endSN} — declaring the channel not broadcasting`
         )
         if (hasSession()) reset()
@@ -641,7 +650,7 @@ let stallCount = 0
           (level) => level.audioCodec && !canDecodeAudioCodec(level.audioCodec, isTypeSupported)
         )
         if (undecodable) {
-          console.warn(`[player] stream audio is ${undecodable.audioCodec}, not decodable here; transcoding`)
+          logEvent(`[player] stream audio is ${undecodable.audioCodec}, not decodable here; transcoding`)
           startSilentAudioFallback()
         }
       })
@@ -719,7 +728,7 @@ let stallCount = 0
           }
         }
         if (!data.fatal) return
-        console.error('[player] fatal hls error', data.type, data.details)
+        logEvent(`[player] fatal hls error ${String(data.type)} ${String(data.details)}`)
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
             networkRetryCount += 1
@@ -757,7 +766,7 @@ let stallCount = 0
               // failure rather than three watchdog cycles later.
               if (hasSession()) {
                 sessionReplacementsRef.current += 1
-                console.warn(
+                logEvent(
                   `[player] transcode session failed its network retries; replacing the session (${sessionReplacementsRef.current} this run)`
                 )
                 if (isDeadSessionTerminal({ alive: false, hasSession: true, awaiting: false, replacements: sessionReplacementsRef.current })) {
@@ -835,7 +844,7 @@ let stallCount = 0
               // so the proactive gate never fired, but the *device* can decode (its saved verdict
               // says so). Playback has now provably failed; the client's own GPU gets the channel.
               if (typeof VideoDecoder !== 'undefined' && !webCodecsTriedRef.current && verdictIsUsable(loadVerdict())) {
-                console.warn('[player] MSE claimed this video and then failed it — handing the channel to the client-side engine')
+                logEvent('[player] MSE claimed this video and then failed it — handing the channel to the client-side engine')
                 webCodecsTriedRef.current = true
                 instance.destroy()
                 reset()
@@ -908,7 +917,7 @@ let stallCount = 0
     void (async () => {
       const kind = await sniffStreamKind(url)
       if (cancelled || kind !== 'mpegts') return
-      console.warn('[player] stream is raw MPEG-TS, not HLS; routing it through the transcoder')
+      logEvent('[player] stream is raw MPEG-TS, not HLS; routing it through the transcoder')
       setStatusNotice(CONVERSION_NOTICE)
       tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
     })()
@@ -957,7 +966,7 @@ let stallCount = 0
         typeof VideoDecoder !== 'undefined' &&
         verdictIsUsable(loadVerdict())
       ) {
-        console.warn(`[player] ${videoCodec} video undecodable by this browser's MSE — decoding client-side (WebCodecs)`)
+        logEvent(`[player] ${videoCodec} video undecodable by this browser's MSE — decoding client-side (WebCodecs)`)
         engineRef.current = 'webcodecs'
         setWebCodecs(true)
         return
@@ -966,7 +975,7 @@ let stallCount = 0
         needsStreamCopyRemux({ videoCodec, isLive: true }) &&
         (engineRef.current === 'native' || !mseCanDecode)
       ) {
-        console.warn(
+        logEvent(
           `[player] ${videoCodec} live video in an MPEG-TS HLS container that this browser cannot present — ` +
             'remuxing the container (stream copy, no re-encode)'
         )
@@ -987,7 +996,7 @@ let stallCount = 0
         // The sentence is built by lib/playbackDiagnosis.ts: it names the engine that answered and what
         // this device measured, so a native hiccup reported through the fallback stops reading the same
         // as a genuine codec gap (the 2026-09-22 finding — "same error as Chrome" told us nothing).
-        console.warn(
+        logEvent(
           `[player] stream video is ${videoCodec}, which this browser cannot decode` +
             (nativeFailedRef.current ? ' (after the native pipeline had already failed)' : '')
         )
@@ -1004,7 +1013,7 @@ let stallCount = 0
       if (audioTracks.length === 0) return
       const tracks = audioTracks
       if (canDecodeAudioCodec(tracks[0].codec, decodeProbe)) return
-      console.warn(`[player] first audio track is ${tracks[0].codec}, which this browser cannot decode; transcoding`)
+      logEvent(`[player] first audio track is ${tracks[0].codec}, which this browser cannot decode; transcoding`)
       setStatusNotice(CONVERSION_NOTICE)
       tryFallbackForSilentAudio(url, false, () => setReloadTick((t) => t + 1), (message) => setError(message))
     })()
@@ -1097,6 +1106,28 @@ let stallCount = 0
         >
           {showStats ? 'Hide stats' : 'Stats'}
         </button>
+        <button
+          type="button"
+          className="admin-small-btn"
+          aria-pressed={showDiagnostics}
+          onClick={() => setShowDiagnostics((value) => !value)}
+          title="The player's own recent decisions — what it tried, in order, when playback stalled"
+        >
+          {showDiagnostics ? 'Hide diagnostics' : 'Diagnostics'}
+        </button>
+        {showDiagnostics && (
+          <div className="player-diagnostics" role="log" aria-label="Player events">
+            {playbackEvents.length === 0 ? (
+              <div className="player-diagnostics-empty">No player events yet.</div>
+            ) : (
+              playbackEvents.map((event, index) => (
+                <div className="player-diagnostics-row" key={`${event.at}-${index}`}>
+                  <span className="player-diagnostics-time">{event.at}</span> {event.message}
+                </div>
+              ))
+            )}
+          </div>
+        )}
         {showStats && (
           <MediaStats
             video={videoRef.current}

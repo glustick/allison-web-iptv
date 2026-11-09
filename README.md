@@ -6,6 +6,20 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.100.0 — the player can say what it is doing)
+
+The live player's recovery decisions — stall detected, loader kicked, source reloaded, session
+replaced, playlist frozen, engine fallback — have always been console lines, which is the one place
+nobody can look when the picture freezes. They now also land in a **Diagnostics** panel behind the
+player's Controls menu: newest first, 24 deep, each with its clock time, beside quality and stats.
+
+`lib/playbackEvents.ts` owns the bounded buffer (pure, tested); the player owns the actions, the
+same split the recovery and session-health modules already use. Live only, because that is where
+the ladder and the freeze are.
+
+1058 tests; typecheck, lint and both builds clean. Not browser-verified — this one exists to make
+the next freeze diagnosable, so it is worth deploying before another feature.
+
 ## Current state (v0.99.0 — a show opens where you are)
 
 The episode list used to open at season 1, episode 1 every time. It now opens with a **Continue**
