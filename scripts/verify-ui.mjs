@@ -135,7 +135,51 @@ try {
     { timeout: 3000 }
   )
   console.log(`  playing: t=${info.t}s, ${info.w}x${info.h}`)
-  console.log('PASS  login → Live TV → play → playhead advancing')
+
+  // --- watched state (v0.97.0): tick a film, see the badge, hide it, bring it back ------------
+  const moviesTab = await d.waitFor(
+    `(() => { const b = [...document.querySelectorAll('.tab')].find((t) => t.textContent.trim() === 'Movies'); if (!b || b.disabled) return false; b.click(); return true; })()`,
+    { timeout: 10000 }
+  )
+  if (!moviesTab) fail('Movies tab is not available', d)
+  await clickByText(d, 'All').catch(() => {})
+  await d.waitFor(`document.querySelectorAll('.channel-row').length > 0`, { timeout: 15000 })
+
+  const ticked = await d.waitFor(
+    `(() => { const b = document.querySelector('.watched-toggle'); if (!b) return false; b.click(); return true; })()`,
+    { timeout: 8000 }
+  )
+  if (!ticked) fail('no watched toggle on a film row', d)
+
+  const badged = await d.waitFor(`Boolean(document.querySelector('.watched-badge'))`, { timeout: 8000 }).catch(() => false)
+  if (!badged) fail('ticking a film did not show the watched badge', d)
+  console.log('  watched badge appears')
+
+  const beforeHide = await d.waitFor(`document.querySelectorAll('.channel-row').length`, { timeout: 3000 })
+  const hid = await d.waitFor(
+    `(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.startsWith('Hide watched')); if (!b) return false; b.click(); return true; })()`,
+    { timeout: 8000 }
+  )
+  if (!hid) fail('no Hide watched toggle after ticking a film', d)
+  const afterHide = await d.waitFor(`document.querySelectorAll('.channel-row').length`, { timeout: 5000 })
+  if (!(afterHide === beforeHide - 1)) fail(`hiding watched did not remove exactly one row (${beforeHide} → ${afterHide})`, d)
+
+  const restored = await d.waitFor(
+    `(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.startsWith('Show watched')); if (!b) return false; b.click(); return true; })()`,
+    { timeout: 8000 }
+  )
+  if (!restored) fail('no Show watched toggle to restore the row', d)
+  const afterRestore = await d.waitFor(`document.querySelectorAll('.channel-row').length`, { timeout: 5000 })
+  if (afterRestore !== beforeHide) fail(`restoring watched did not bring the row back (${afterHide} → ${afterRestore})`, d)
+
+  // Leave the fixture as it was found: untick the film we ticked.
+  await d.waitFor(
+    `(() => { const b = document.querySelector('.watched-toggle.active'); if (!b) return false; b.click(); return true; })()`,
+    { timeout: 5000 }
+  ).catch(() => {})
+  console.log('  watched filter hides and restores the row')
+
+  console.log('PASS  login → Live TV → play → playhead advancing → watched toggle → filter')
 } catch (err) {
   console.error(`FAIL  ${err instanceof Error ? err.message : String(err)}`)
   process.exitCode = 1

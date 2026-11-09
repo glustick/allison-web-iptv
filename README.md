@@ -6,6 +6,26 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.97.0 — finishing marks it watched)
+
+Reaching the end of a film or an episode now marks it **watched** by itself. Before this, finishing
+cleared the resume point and left the tick alone: the two states were kept in sync by hand, which
+meant they were not in sync. The server clears the resume point in the same call it already made
+for a tick, so finishing is one request and cannot end up half-done. It fires once per playback,
+gated on the current title, because progress events come every few seconds and credits are long.
+
+**Hide watched** arrived with it: a toggle on the film list that names its count and appears only
+when there is something to hide, and one on the episode list that appears once something in that
+show is watched. Both are view-local, like the text filter beside them — hiding is a mode you are
+in while looking for something.
+
+The identity rule these share (`kind + playlist + id`, so the same id on two playlists stays two
+titles) now lives in `lib/watchState.ts` instead of being spelled out at each call site, and
+`scripts/verify-ui.mjs` gained a scripted pass over the whole watched flow.
+
+1043 tests; typecheck, lint and both builds clean. The scripted check has not been run against this
+build yet.
+
 ## Current state (v0.96.0 — the watched state)
 
 A title can now be marked **watched** (✓), for films and for episodes. It is a real table in the

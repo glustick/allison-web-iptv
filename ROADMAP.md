@@ -15,6 +15,34 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.97.0 — finishing a title marks it watched, and watched titles can get out of the way.**
+
+v0.96.0 added the ✓ but made it a manual act. The obvious hole: **reaching the end of a film or an
+episode already cleared its resume point and left the tick untouched** — the two states were kept in
+sync by hand, which meant they were not in sync. Finishing now marks the title watched, and the
+server clears the resume point in the same call it already made for the tick, so a finished title
+needs one request and cannot end up half-done. Once per playback, deliberately: progress events
+fire every few seconds and the credits are a long time, so a key on the current title (reset when
+playback starts) gates it.
+
+**Hide watched** is the other half of a state that means something. The film list's toolbar gains a
+toggle that names its own count (`Hide watched (3)`) and only appears when there is something to
+hide; the episode list gains one that appears once something in that show is watched — a toggle that
+can do nothing is noise. Both are local to the view, like the text filter beside them, rather than a
+stored preference: hiding is a mode you are in while looking for something.
+
+**One identity rule, finally written down.** The film list, the episode list and the finish guard
+each spelled out "kind + playlist + id" for themselves; `lib/watchState.ts` (`watchedKey`,
+`isWatched`) now owns it, with tests for the two cases that have bitten this app before — an absent
+playlist meaning the primary, and the same id under two kinds.
+
+**And a scripted check, finally:** `scripts/verify-ui.mjs` gains a watched-state pass — open
+Movies, tick a film, see the badge, hide watched and prove exactly one row left, bring it back —
+beside its existing login → Live TV → play check. It has not been run against this build yet, which
+is the one honest gap left in this entry.
+
+1043 tests (4 new, on the shared key); typecheck, lint, server and client builds clean.
+
 **v0.96.1 — the player's controls moved behind one button (operator's report).**
 
 Reported while watching: *"the full screen is difficult to press, move the overlay up so that it

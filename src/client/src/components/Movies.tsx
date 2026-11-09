@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
 import { ContinueWatchingShelf, type ContinueItem } from './ContinueWatchingShelf'
 import { continueWatching, isFinished, progressPercent as watchPercent } from '../lib/continueWatching'
+import { isWatched, watchedKey } from '../lib/watchState'
 import { readLibrarySort, sortFilms, writeLibrarySort, type LibrarySort } from '../lib/librarySort'
 import { filterByText } from '../lib/listFilter'
 import { ListFilter } from './ListFilter'
@@ -73,11 +74,16 @@ export function Movies({
   const [librarySort, setLibrarySort] = useState<LibrarySort>(() => readLibrarySort())
   // Narrows the list already in memory (v0.94.0) — no request, no leaving the view.
   const [listFilter, setListFilter] = useState('')
+  // The ✓ has a consequence (v0.97.0): a watched film can be hidden, which is the whole point of
+  // marking one. Kept local rather than persisted — it is a browse-time question, not a preference.
+  const [hideWatched, setHideWatched] = useState(false)
   const [movies, setMovies] = useState<VodStream[]>([])
   const [nowPlaying, setNowPlaying] = useState<VodStream | null>(null)
   // The position this playback started from, so the player seeks there once and the UI can show
   // whether we resumed or started fresh.
   const [startAt, setStartAt] = useState(0)
+  // Which title this run has already marked watched on finishing — see handleProgress.
+  const finishedMarkedRef = useRef<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   // True once the category fetch has *answered* — an empty catalogue that arrived as an answer is
   // the provider's to explain, and it deserves a sentence rather than a silently bare sidebar.
@@ -298,6 +304,7 @@ export function Movies({
         ...(playlistId ? { playlistId, playlistLabel: additional.find((e) => e.id === playlistId)?.label } : {})
       }) as VodStream
       setStartAt(resumeFrom)
+      finishedMarkedRef.current = null
       setNowPlaying(stream)
       void recordHistory({
         kind: 'movie',
@@ -315,11 +322,26 @@ export function Movies({
   const handleProgress = useCallback(
     (positionSeconds: number, durationSeconds: number | null): void => {
       if (!nowPlaying) return
-      // Watched to the end is a state, not a position: clearing here is what stops a finished film
+      // Watched to the end is a state, not a position: it marks the film watched (v0.97.0), and
+      // the server clears the resume point in the same call — which is what stops a finished film
       // sitting in Continue watching for ever (v0.92.0 — see lib/continueWatching).
+      //
+      // Once per playback: progress fires every few seconds, and the credits are a long time.
       if (isFinished(positionSeconds, durationSeconds)) {
-        void clearResumePosition('movie', nowPlaying.stream_id, playlistRefOf(nowPlaying))
-          .then((resume) => setPrefs((current) => ({ ...current, resume })))
+        const key = watchedKey({ kind: 'movie', playlistId: playlistRefOf(nowPlaying), streamId: nowPlaying.stream_id })
+        if (finishedMarkedRef.current === key) return
+        finishedMarkedRef.current = key
+        void setWatchedState(
+          {
+            kind: 'movie',
+            streamId: nowPlaying.stream_id,
+            playlistId: playlistRefOf(nowPlaying),
+            name: nowPlaying.name,
+            category: nowPlaying.category_id
+          },
+          true
+        )
+          .then((next) => setPrefs((current) => ({ ...current, watched: next.watched, resume: next.resume })))
           .catch(() => {})
         return
       }
@@ -359,7 +381,15 @@ export function Movies({
             name: movie.name,
             rating: movie.rating
           }))
-  const visibleRows = filterByText(listRows, listFilter, (row) => row.name)
+  const isRowWatched = useCallback(
+    (row: { streamId: number; playlistId?: string }): boolean =>
+      isWatched(prefs.watched, { kind: 'movie', playlistId: row.playlistId, streamId: row.streamId }),
+    [prefs.watched]
+  )
+  const filteredRows = filterByText(listRows, listFilter, (row) => row.name)
+  const watchedCount = filteredRows.filter((row) => isRowWatched(row)).length
+  // One rule for the badge and the filter, so a row can never be hidden while looking unwatched.
+  const visibleRows = hideWatched ? filteredRows.filter((row) => !isRowWatched(row)) : filteredRows
   const sectionTitle = selection.type === 'favourites' ? 'Favourite films' : selection.type === 'history' ? 'Watch history' : 'All films'
 
   return (
@@ -462,6 +492,17 @@ export function Movies({
             shown={visibleRows.length}
             total={listRows.length}
           />
+          {watchedCount > 0 && (
+            <button
+              type="button"
+              className={hideWatched ? 'admin-small-btn active' : 'admin-small-btn'}
+              aria-pressed={hideWatched}
+              onClick={() => setHideWatched((value) => !value)}
+              title="Watched films are ticked; this hides them from the list"
+            >
+              {hideWatched ? `Show watched (${watchedCount})` : `Hide watched (${watchedCount})`}
+            </button>
+          )}
           {(selection.type === 'all' || selection.type === 'provider') && (
             <select
               className="admin-small-btn"
@@ -525,17 +566,18 @@ export function Movies({
         <div className="channel-list">
           {visibleRows.length === 0 && (
             <p className="list-hint">
-              {selection.type === 'favourites' ? 'No favourite films yet — press ☆ while one plays.' : selection.type === 'history' ? 'Nothing watched yet.' : 'No films to show.'}
+              {hideWatched && watchedCount > 0
+                ? `All ${watchedCount} film${watchedCount === 1 ? '' : 's'} here are marked watched — Show watched brings them back.`
+                : selection.type === 'favourites'
+                  ? 'No favourite films yet — press ☆ while one plays.'
+                  : selection.type === 'history'
+                    ? 'Nothing watched yet.'
+                    : 'No films to show.'}
             </p>
           )}
           {visibleRows.map((row) => {
             const stored = movieResume.get(`${row.playlistId ?? ''}:${row.streamId}`)
-            const watched = prefs.watched.some(
-              (entry) =>
-                entry.kind === 'movie' &&
-                entry.streamId === row.streamId &&
-                (entry.playlistId ?? '') === (row.playlistId ?? '')
-            )
+            const watched = isRowWatched(row)
             // A finished title has no resume point any more, but a record written by an older build
             // must not paint a 100% badge either — and a ticked-off title offers nothing to resume.
             const resume = !watched && stored && !isFinished(stored.positionSeconds, stored.durationSeconds) ? stored : undefined

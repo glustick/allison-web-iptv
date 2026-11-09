@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
 import { isFinished } from '../lib/continueWatching'
+import { isWatched, watchedKey } from '../lib/watchState'
 import { nextEpisode } from '../lib/nextEpisode'
 import { sortSeries, type SeriesSort } from '../lib/librarySort'
 import { filterByText } from '../lib/listFilter'
@@ -96,6 +97,7 @@ function EpisodeList({
   onLoaded?: (info: SeriesInfo) => void
 }): JSX.Element {
   const [info, setInfo] = useState<SeriesInfo | null>(null)
+  const [hideWatched, setHideWatched] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -118,19 +120,42 @@ function EpisodeList({
   // the season list from `episodes`' own keys instead works regardless of whether a given
   // provider bothers to populate `seasons` at all; `info.seasons` is only consulted for a
   // nicer display name when one happens to be there for a season that also has episodes.
+  // A long show is mostly episodes already seen; hiding them is the difference between a list
+  // you scroll and one you read. Only offered once something in this series is watched — a toggle
+  // that can do nothing is noise.
+  const anyWatched = Object.keys(info.episodes).some((key) =>
+    (info.episodes[key] ?? []).some((episode) => watchedFor(Number(episode.id)))
+  )
+  const visibleInSeason = (seasonNumber: number): SeriesEpisode[] =>
+    (info.episodes[String(seasonNumber)] ?? []).filter(
+      (episode) => !hideWatched || !watchedFor(Number(episode.id))
+    )
   const seasonNumbers = Object.keys(info.episodes)
     .map(Number)
-    .filter((n) => (info.episodes[String(n)]?.length ?? 0) > 0)
+    .filter((n) => visibleInSeason(n).length > 0)
     .sort((a, b) => a - b)
 
   return (
     <div className="channel-list">
+      {anyWatched && (
+        <div className="now-playing-bar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Episodes</span>
+          <button
+            type="button"
+            className={hideWatched ? 'admin-small-btn active' : 'admin-small-btn'}
+            aria-pressed={hideWatched}
+            onClick={() => setHideWatched((value) => !value)}
+          >
+            {hideWatched ? 'Show watched' : 'Hide watched'}
+          </button>
+        </div>
+      )}
       {seasonNumbers.map((seasonNumber) => (
         <div key={seasonNumber}>
           <div className="now-playing-bar">
             {info.seasons.find((s) => s.season_number === seasonNumber)?.name || `Season ${seasonNumber}`}
           </div>
-          {(info.episodes[String(seasonNumber)] ?? []).map((episode) => {
+          {visibleInSeason(seasonNumber).map((episode) => {
             const watched = watchedFor(Number(episode.id))
             // A watched episode has had its resume point cleared server-side; a record written
             // before this release must not put "Resume" back on a ticked-off episode either.
@@ -198,6 +223,8 @@ export function Series({
   const [categoriesAnswered, setCategoriesAnswered] = useState(false)
   const [selection, setSelection] = useState<Selection>({ type: 'all' })
   const [prefs, setPrefs] = useState<PrefsState>(EMPTY_PREFS)
+  // Which episode this run has already marked watched on finishing — see handleProgress.
+  const finishedMarkedRef = useRef<string | null>(null)
   const seriesFavourites = useMemo(() => prefs.favourites.filter((f) => f.kind === 'series'), [prefs.favourites])
   const { sidebarWidth, startSidebarDrag } = useSidebarWidth()
 
@@ -348,9 +375,7 @@ export function Series({
 
   const episodeWatched = useCallback(
     (episodeId: number): boolean =>
-      prefs.watched.some(
-        (entry) => entry.kind === 'series' && entry.streamId === episodeId && (entry.playlistId ?? '') === openSeriesRef
-      ),
+      isWatched(prefs.watched, { kind: 'series', playlistId: openSeriesRef, streamId: episodeId }),
     [prefs.watched, openSeriesRef]
   )
 
@@ -387,6 +412,7 @@ export function Series({
 
   const playEpisode = useCallback(
     (episode: SeriesEpisode, resumeFrom: number, playlistId?: string): void => {
+      finishedMarkedRef.current = null
       setStartAt(resumeFrom)
       setNowPlaying({ episode, playlistId })
       void recordHistory({ kind: 'series', streamId: Number(episode.id), playlistId, name: episode.title })
@@ -399,11 +425,24 @@ export function Series({
   const handleProgress = useCallback(
     (positionSeconds: number, durationSeconds: number | null): void => {
       if (!nowPlaying) return
-      // Same rule as films (v0.92.0): an episode watched to the end leaves Continue watching
-      // instead of sitting there at 100% for ever.
+      // Same rule as films, and now the same state (v0.97.0): an episode watched to the end is
+      // marked watched, and the server clears its resume point in the same call — so it leaves
+      // Continue watching instead of sitting there at 100% for ever (v0.92.0).
       if (isFinished(positionSeconds, durationSeconds)) {
-        void clearResumePosition('series', Number(nowPlaying.episode.id), nowPlaying.playlistId)
-          .then((resumePositions) => setPrefs((current) => ({ ...current, resume: resumePositions })))
+        const key = watchedKey({ kind: 'series', playlistId: nowPlaying.playlistId, streamId: Number(nowPlaying.episode.id) })
+        if (finishedMarkedRef.current === key) return
+        finishedMarkedRef.current = key
+        void setWatchedState(
+          {
+            kind: 'series',
+            streamId: Number(nowPlaying.episode.id),
+            playlistId: nowPlaying.playlistId,
+            name: nowPlaying.episode.title,
+            category: openSeries?.name ?? null
+          },
+          true
+        )
+          .then((next) => setPrefs((current) => ({ ...current, watched: next.watched, resume: next.resume })))
           .catch(() => {})
         return
       }
