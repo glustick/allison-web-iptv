@@ -6,6 +6,21 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.99.0 — a show opens where you are)
+
+The episode list used to open at season 1, episode 1 every time. It now opens with a **Continue**
+bar naming the first episode you have not marked watched, and an accent on that row — both from one
+value, so they cannot disagree.
+
+A finished show has nowhere to continue to, so the bar simply isn't there rather than offering the
+pilot again. And the choice is made from watched state, not resume points: a show with three watched
+episodes and one half-played one wants the half-played one.
+
+The flattening that orders episodes (seasons numerically, episodes by their own number) was lifted
+out of the Next-episode helper and now serves both it and the Continue bar.
+
+1053 tests; typecheck, lint and both builds clean. Not browser-verified.
+
 ## Current state (v0.98.0 — a season in one call)
 
 Catching up on a show is one intent, so it is now one request. `POST /api/prefs/watched/bulk` marks

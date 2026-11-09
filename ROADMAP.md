@@ -15,6 +15,27 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.99.0 — a show opens where you are.**
+
+The watched state arrived in v0.96.0 and the bulk catch-up in v0.98.0, but the episode list still
+opened at season 1, episode 1 every time — the app knew where you were and did not say. Now it does:
+`firstUnwatchedEpisode` returns the first episode you have not ticked off, in watch order, and the
+show opens with a **Continue** bar naming it (`Next up: 5. The Long Read`) and an accent on that
+row. The two are computed from the same value, so the bar and the row cannot disagree.
+
+**The one rule worth stating:** a finished show has nowhere to continue to, so `firstUnwatchedEpisode`
+returns null and the bar disappears rather than offering the pilot again. And it deliberately does
+not consult resume points: those say where a title was *paused*, this says which title to *open*, and
+a show with three watched episodes and one half-played one wants the half-played one.
+
+`orderedEpisodes` was lifted out of `nextEpisode` for this — the same flattening (seasons
+numerically, episodes by their own number, because the provider's numbering is neither sorted nor
+contiguous) now serves both the Next button and the Continue bar instead of being spelled out twice.
+
+1053 tests (5 new: the flattening order, first-unwatched across a season boundary, the finished-show
+null, the nothing-watched start, and unknown ids). Typecheck, lint and both builds clean. **Not
+browser-verified** — the season action and this bar are both waiting on a browser run.
+
 **v0.98.0 — a season in one call.**
 
 The watched state made a single tick honest and a whole show tedious: catching up on eight episodes

@@ -14,22 +14,44 @@ export interface EpisodeLike {
   title: string
 }
 
-export function nextEpisode<T extends EpisodeLike>(episodes: Record<string, T[]>, current: { id: string }): T | null {
+/**
+ * Every episode in watch order: seasons numerically (the provider's numbering is neither sorted
+ * nor contiguous), and each season's episodes by their own number. The one flattening both
+ * functions below share — before v0.99.0 it lived inside nextEpisode, spelled out for one caller.
+ */
+export function orderedEpisodes<T extends EpisodeLike>(episodes: Record<string, T[]>): T[] {
   const seasonKeys = Object.keys(episodes)
     .map((key) => Number(key))
     .filter((season) => Number.isFinite(season))
     .sort((a, b) => a - b)
-
-  for (let i = 0; i < seasonKeys.length; i += 1) {
-    const list = (episodes[String(seasonKeys[i])] ?? []).slice().sort((a, b) => a.episode_num - b.episode_num)
-    const index = list.findIndex((episode) => episode.id === current.id)
-    if (index === -1) continue
-    if (index + 1 < list.length) return list[index + 1]
-    for (let j = i + 1; j < seasonKeys.length; j += 1) {
-      const following = (episodes[String(seasonKeys[j])] ?? []).slice().sort((a, b) => a.episode_num - b.episode_num)
-      if (following.length > 0) return following[0]
-    }
-    return null
+  const ordered: T[] = []
+  for (const season of seasonKeys) {
+    ordered.push(...(episodes[String(season)] ?? []).slice().sort((a, b) => a.episode_num - b.episode_num))
   }
-  return null
+  return ordered
+}
+
+export function nextEpisode<T extends EpisodeLike>(episodes: Record<string, T[]>, current: { id: string }): T | null {
+  const ordered = orderedEpisodes(episodes)
+  const index = ordered.findIndex((episode) => episode.id === current.id)
+  if (index === -1) return null
+  return ordered[index + 1] ?? null
+}
+
+/**
+ * Where a viewer actually is in a show (v0.99.0): the first episode they have not marked watched,
+ * in watch order. Null when everything is watched — a finished show has nowhere to continue to,
+ * and a button that promised otherwise would be lying.
+ *
+ * Deliberately does not consult resume points: those say where a title was paused, this says
+ * which title to open next, and a show with three watched episodes and one half-played one wants
+ * the half-played one.
+ */
+export function firstUnwatchedEpisode<T extends EpisodeLike>(
+  episodes: Record<string, T[]>,
+  watchedIds: Iterable<string>
+): T | null {
+  const watched = new Set<string>()
+  for (const id of watchedIds) watched.add(String(id))
+  return orderedEpisodes(episodes).find((episode) => !watched.has(String(episode.id))) ?? null
 }

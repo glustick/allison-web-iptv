@@ -4,6 +4,7 @@ import { reportNowPlaying } from '../lib/activityReporter'
 import { NativeVideoPlayer } from './NativeVideoPlayer'
 import { isFinished } from '../lib/continueWatching'
 import { isWatched, watchedKey } from '../lib/watchState'
+import { firstUnwatchedEpisode, orderedEpisodes } from '../lib/nextEpisode'
 import { nextEpisode } from '../lib/nextEpisode'
 import { sortSeries, type SeriesSort } from '../lib/librarySort'
 import { filterByText } from '../lib/listFilter'
@@ -124,6 +125,13 @@ function EpisodeList({
   // the season list from `episodes`' own keys instead works regardless of whether a given
   // provider bothers to populate `seasons` at all; `info.seasons` is only consulted for a
   // nicer display name when one happens to be there for a season that also has episodes.
+  // Where the viewer is (v0.99.0): the first episode they have not ticked off. Resume points say
+  // where a title was paused; this says which title to open, and a show with three watched
+  // episodes and one half-played one wants the half-played one.
+  const orderedList = orderedEpisodes(info.episodes)
+  const watchedIds = orderedList.filter((episode) => watchedFor(Number(episode.id))).map((episode) => String(episode.id))
+  const nextUp = firstUnwatchedEpisode(info.episodes, watchedIds)
+
   // A long show is mostly episodes already seen; hiding them is the difference between a list
   // you scroll and one you read. Only offered once something in this series is watched — a toggle
   // that can do nothing is noise.
@@ -141,6 +149,24 @@ function EpisodeList({
 
   return (
     <div className="channel-list">
+      {nextUp && (
+        <div
+          className="now-playing-bar"
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+        >
+          <span>
+            Next up: {nextUp.episode_num}. {nextUp.title}
+          </span>
+          <button
+            type="button"
+            className="admin-small-btn"
+            title="Play the first episode you have not marked watched"
+            onClick={() => onPlay(nextUp, resumeFor(Number(nextUp.id))?.positionSeconds ?? 0)}
+          >
+            ▶ Continue
+          </button>
+        </div>
+      )}
       {anyWatched && (
         <div className="now-playing-bar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>Episodes</span>
@@ -186,19 +212,21 @@ function EpisodeList({
           })()}
           {visibleInSeason(seasonNumber).map((episode) => {
             const watched = watchedFor(Number(episode.id))
+            const isNext = nextUp?.id === episode.id
             // A watched episode has had its resume point cleared server-side; a record written
             // before this release must not put "Resume" back on a ticked-off episode either.
             const resume = watched ? undefined : resumeFor(Number(episode.id))
             return (
               <div key={episode.id} className="channel-row-wrap">
                 <button
-                  className={watched ? 'channel-row channel-row--watched' : 'channel-row'}
+                  className={`channel-row${watched ? ' channel-row--watched' : ''}${isNext ? ' channel-row--next' : ''}`}
                   onClick={() => onPlay(episode, resume?.positionSeconds ?? 0)}
                 >
                   <span>
                     {episode.episode_num}. {episode.title}
                   </span>
                   {watched && <span className="watched-badge">✓ Watched</span>}
+                  {isNext && <span className="next-badge">▶ Next up</span>}
                 </button>
                 <button
                   type="button"
