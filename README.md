@@ -6,6 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.101.0 — the same diagnostics in both players)
+
+The film and episode player now carries the **Diagnostics** panel the live player gained in 0.100.0,
+recording the four things that answer "why is this title stuck": the title opened and from where,
+whether it went straight to conversion because it is remembered as needing one, a fatal hls.js error
+on the converted output, and a session that expired underneath it.
+
+Same buffer, same panel, same styling as live — one diagnostic surface across both players rather
+than two dialects. 1058 tests; typecheck, lint and both builds clean. Not browser-verified.
+
 ## Current state (v0.100.0 — the player can say what it is doing)
 
 The live player's recovery decisions — stall detected, loader kicked, source reloaded, session

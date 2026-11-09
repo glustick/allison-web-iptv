@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type JSX } from 'react'
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import Hls from 'hls.js'
 import { useTranscodeFallback } from '../lib/transcodeFallback'
 import { streamNeedsTranscode } from '../lib/transcodeHints'
@@ -14,6 +14,7 @@ import { usePlayerKeys } from '../lib/usePlayerKeys'
 import { ShortcutsHelp } from './ShortcutsHelp'
 import { SubtitleStyleButton } from './SubtitleStyleButton'
 import { PlayerMenu } from './PlayerMenu'
+import { appendEvent, type PlaybackEvent } from '../lib/playbackEvents'
 import { SleepTimerButton } from './SleepTimerButton'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
@@ -59,6 +60,15 @@ export function NativeVideoPlayer({
   onStop?: () => void
 }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  // The same run-time record the live player keeps (v0.100.0): what this title's playback tried,
+  // readable without DevTools. Films convert and re-attach too, and a stuck film has the same
+  // problem a stuck channel does — the decisions were only in a console.
+  const [playbackEvents, setPlaybackEvents] = useState<PlaybackEvent[]>([])
+  const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const logEvent = useCallback((message: string): void => {
+    console.warn(message)
+    setPlaybackEvents((previous) => appendEvent(previous, message, new Date().toLocaleTimeString()))
+  }, [])
   
   // A restarted or expired session looks exactly like a stall: the player keeps refreshing its
   // playlist, each refresh now answers 401, and the picture stops advancing with nothing on
@@ -66,9 +76,15 @@ export function NativeVideoPlayer({
   const sessionExpired = useSessionExpired(true)
 
   // Nothing the player does can succeed once the session is gone, so stop pretending.
+  const sessionLoggedRef = useRef(false)
   useEffect(() => {
-    if (sessionExpired) videoRef.current?.pause()
-  }, [sessionExpired])
+    if (!sessionExpired) return
+    videoRef.current?.pause()
+    if (!sessionLoggedRef.current) {
+      sessionLoggedRef.current = true
+      logEvent('[player] session expired — playback stopped')
+    }
+  }, [sessionExpired, logEvent])
   const hlsRef = useRef<Hls | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -115,7 +131,14 @@ export function NativeVideoPlayer({
   useEffect(() => {
     reset()
     setPreparing(false)
-  }, [titleKey, reset])
+    logEvent(
+      initialPositionSeconds && initialPositionSeconds > 5
+        ? `[player] opening ${titleKey} at ${Math.round(initialPositionSeconds)}s`
+        : `[player] opening ${titleKey} from the start`
+    )
+    // Deliberately keyed on the title: a reload of the same one is already recorded by whatever
+    // caused it, and re-logging "opening" would bury the reason.
+  }, [titleKey, reset, logEvent])
 
   // Kept in a ref so the reporting interval always calls the current callback without the
   // effect (and therefore the player) being rebuilt when a parent re-renders.
@@ -162,6 +185,7 @@ export function NativeVideoPlayer({
     video.addEventListener('playing', markPlaying)
     // Known to need converting (lib/transcodeHints.ts): go straight there instead of spending
     if (streamNeedsTranscode(url)) {
+      logEvent('[player] this title is remembered as needing conversion — starting there')
       setPreparing(true)
       tryFallbackForSilentAudio(url, true, () => setReloadTick((t) => t + 1), (message) => setError(message))
       return
@@ -211,7 +235,7 @@ export function NativeVideoPlayer({
       })
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
-          console.error('[player] fatal hls error on fallback output', data.type, data.details)
+          logEvent(`[player] fatal hls error on the converted output: ${String(data.type)} ${String(data.details)}`)
           const code = (data as { response?: { code?: number } }).response?.code
           setError(
             code === 502 || code === 504
@@ -382,6 +406,28 @@ export function NativeVideoPlayer({
         >
           ?
         </button>
+        <button
+          type="button"
+          className="admin-small-btn"
+          aria-pressed={showDiagnostics}
+          onClick={() => setShowDiagnostics((value) => !value)}
+          title="What this title's playback has tried, in order"
+        >
+          {showDiagnostics ? 'Hide diagnostics' : 'Diagnostics'}
+        </button>
+        {showDiagnostics && (
+          <div className="player-diagnostics" role="log" aria-label="Player events">
+            {playbackEvents.length === 0 ? (
+              <div className="player-diagnostics-empty">No player events yet.</div>
+            ) : (
+              playbackEvents.map((event, index) => (
+                <div className="player-diagnostics-row" key={`${event.at}-${index}`}>
+                  <span className="player-diagnostics-time">{event.at}</span> {event.message}
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </PlayerMenu>
       <ShortcutsHelp open={showShortcuts} seekable onClose={() => setShowShortcuts(false)} />
       <TrackControls

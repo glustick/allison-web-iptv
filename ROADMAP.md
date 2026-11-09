@@ -15,6 +15,23 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.101.0 — the film player speaks the same diagnostic language.**
+
+v0.100.0 gave the live player an in-app record of its recovery decisions; films and episodes were
+left with a single `console.error` and a set of behaviours that produce no line at all. They now
+carry the same **Diagnostics** panel behind their Controls menu, recording the four things that
+actually answer "why is this title stuck": which title was opened and from where, whether it went
+straight to the conversion path because it is remembered as needing one, a fatal hls.js error on the
+converted output, and a session that expired under it (logged once, not once per poll).
+
+The buffer, the panel and the styling are the live player's own — `lib/playbackEvents.ts` and the
+`.player-diagnostics` block. What is new here is only the wiring, which is the point: one diagnostic
+surface across both players rather than two dialects.
+
+1058 tests (unchanged — the buffer was already covered in v0.100.0, and this release is wiring; the
+honest check for it is the panel itself). Typecheck, lint and both builds clean. **Not
+browser-verified**, like the six before it.
+
 **v0.100.0 — the player can say what it is doing.**
 
 Every recovery decision the live player makes has always been a `console.warn`: stall detected,
