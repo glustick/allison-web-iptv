@@ -58,11 +58,23 @@ export interface ResumePosition {
   updatedAt: string
 }
 
+/** A title the viewer marked finished — the ✓ marker, deliberately separate from a resume point. */
+export interface WatchedEntry {
+  kind: MediaKind
+  streamId: number
+  /** Which playlist the title came from; undefined (or '') is the primary playlist. */
+  playlistId?: string
+  name: string
+  category: string | null
+  watchedAt: string
+}
+
 export interface PrefsState {
   favourites: Favourite[]
   categories: CustomCategory[]
   history: HistoryEntry[]
   resume: ResumePosition[]
+  watched: WatchedEntry[]
 }
 
 export interface ChannelRef {
@@ -76,7 +88,7 @@ export interface ChannelRef {
   icon?: string | null
 }
 
-const EMPTY: PrefsState = { favourites: [], categories: [], history: [], resume: [] }
+const EMPTY: PrefsState = { favourites: [], categories: [], history: [], resume: [], watched: [] }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -142,6 +154,22 @@ export async function setResumePosition(
     jsonPost({ ...channel, positionSeconds, durationSeconds })
   )
   return data.resumePositions ?? []
+}
+
+/**
+ * Marks a title watched or unwatched. The server answers with both lists: marking watched clears
+ * that title's resume point, and a caller that only patched `watched` would leave the shelf
+ * offering something the viewer has just ticked off.
+ */
+export async function setWatchedState(
+  channel: ChannelRef,
+  watched: boolean
+): Promise<{ watched: WatchedEntry[]; resume: ResumePosition[] }> {
+  const data = await request<{ watched: WatchedEntry[]; resumePositions: ResumePosition[] }>(
+    '/api/prefs/watched',
+    jsonPost({ ...channel, watched })
+  )
+  return { watched: data.watched ?? [], resume: data.resumePositions ?? [] }
 }
 
 export async function clearResumePosition(kind: MediaKind, streamId: number, playlistId?: string): Promise<ResumePosition[]> {

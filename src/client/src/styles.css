@@ -2466,3 +2466,24 @@ body.resizing-col .resize-handle--feeds::after {
   font-size: 13px;
   color: #b8bec9;
 }
+
+/* --- Watched state (v0.96.0) --------------------------------------------------------------- */
+
+/* A ticked-off title reads as done without disappearing: the row stays where it is (a viewer
+   who ticked the wrong one must be able to find it again), it just stops competing for
+   attention with everything still to watch. */
+.channel-row--watched {
+  opacity: 0.62;
+}
+
+.watched-badge {
+  font-size: 11px;
+  color: #7de08d;
+  white-space: nowrap;
+  margin-left: 8px;
+}
+
+.watched-toggle.active {
+  border-color: #7de08d;
+  color: #7de08d;
+}

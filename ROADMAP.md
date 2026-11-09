@@ -15,6 +15,41 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.96.0 — the watched state, the item the last entry left at the top of the list.**
+
+The v0.95.0 entry deferred this for the honest reason: it is not a field, it is a migration with an
+API surface. It now exists as `watched` — its own table in the prefs database, keyed the way every
+other per-user record is (`username, kind, stream_id, playlist_id`), so an episode is
+`kind='series'` plus its own id and the same id on two playlists stays two different titles. It is
+deliberately **not** a column on `resume_positions`: a resume point is a place to come back to, a
+watched mark is the statement that there is nothing to come back for, and one title legitimately
+has the first while having had the second before it (rewatching).
+
+**The interaction that makes it more than a badge:** marking a title watched **clears its resume
+point**. Without that, ticking a film off would leave it on the Continue watching shelf at 84%,
+asking to be resumed — the shelf reads `resume_positions`, not `watched`. The route therefore
+answers with both lists in one response, so the tick and the shelf can never disagree for a round
+trip.
+
+**In the UI** a film row and an episode row each carry a sibling toggle (never a button inside the
+row button — the invalid-HTML rule this app keeps re-learning), the row dims, a green ✓ Watched
+badge appears, and any Resume offer is suppressed. Ticked titles stay where they are rather than
+disappearing: a viewer who ticked the wrong one has to be able to find it again.
+
+**A real bug the tests found:** two ticks inside the same millisecond share an ISO timestamp, and
+`ORDER BY watched_at DESC` alone then answered in insertion order — so "newest first" was wrong
+exactly when someone marked two episodes in quick succession. `rowid DESC` is now the tiebreaker,
+and a test pins it.
+
+1039 tests (5 new, all on the store: mark/unmark ordering, the resume-point clearing, live
+rejection, the two-playlists case, and per-user/reopen). Typecheck, lint and both builds clean.
+**Not verified in a browser** — the toggles and the dimmed rows have no scripted check yet; the
+fixture provider's catalogue is the obvious place to add one next.
+
+**Scope, deliberately:** films and episodes only. Favourites, history and search rows do not carry
+the toggle yet — those lists are indexes of things you already touched, and the next round can add
+it there once this shape has been used.
+
 **v0.95.0 — next episode, and the scripted check that finally exists.**
 
 **Next episode** is the feature deferred twice for the same honest reason: the episode list lives

@@ -16,12 +16,13 @@ import {
   recordHistory,
   setFavourite,
   setResumePosition,
+  setWatchedState,
   type PrefsState,
   type ResumePosition
 } from '../lib/prefs'
 import type { Category, VodStream } from '../lib/types'
 
-const EMPTY_PREFS: PrefsState = { favourites: [], categories: [], history: [], resume: [] }
+const EMPTY_PREFS: PrefsState = { favourites: [], categories: [], history: [], resume: [], watched: [] }
 
 type Selection = { type: 'all' } | { type: 'provider'; id: string } | { type: 'favourites' } | { type: 'history' }
 
@@ -529,18 +530,24 @@ export function Movies({
           )}
           {visibleRows.map((row) => {
             const stored = movieResume.get(`${row.playlistId ?? ''}:${row.streamId}`)
+            const watched = prefs.watched.some(
+              (entry) =>
+                entry.kind === 'movie' &&
+                entry.streamId === row.streamId &&
+                (entry.playlistId ?? '') === (row.playlistId ?? '')
+            )
             // A finished title has no resume point any more, but a record written by an older build
-            // must not paint a 100% badge either.
-            const resume = stored && !isFinished(stored.positionSeconds, stored.durationSeconds) ? stored : undefined
+            // must not paint a 100% badge either — and a ticked-off title offers nothing to resume.
+            const resume = !watched && stored && !isFinished(stored.positionSeconds, stored.durationSeconds) ? stored : undefined
             const percent = resume?.durationSeconds ? watchPercent(resume.positionSeconds, resume.durationSeconds) : null
             return (
               <div key={`${row.playlistId ?? ''}:${row.streamId}`} className="channel-row-wrap">
                 <button
-                  className={
+                  className={`${
                     nowPlaying?.stream_id === row.streamId && (playlistRefOf(nowPlaying) ?? '') === (row.playlistId ?? '')
                       ? 'channel-row active'
                       : 'channel-row'
-                  }
+                  }${watched ? ' channel-row--watched' : ''}`}
                   onClick={() => play(row.streamId, row.name, resume?.positionSeconds ?? 0, row.playlistId)}
                 >
                   <span>{row.name}</span>
@@ -550,12 +557,34 @@ export function Movies({
                       {additional.find((e) => e.id === row.playlistId)?.label ?? row.playlistId}
                     </span>
                   )}
+                  {watched && <span className="watched-badge">✓ Watched</span>}
                   {resume && (
                     <span className="resume-badge">
                       {percent !== null ? `${percent}% · ` : ''}
                       {formatClock(resume.positionSeconds)}
                     </span>
                   )}
+                </button>
+                <button
+                  type="button"
+                  className={watched ? 'admin-small-btn watched-toggle active' : 'admin-small-btn watched-toggle'}
+                  aria-pressed={watched}
+                  title={watched ? 'Mark this film unwatched' : 'Mark this film watched'}
+                  onClick={() => {
+                    void setWatchedState(
+                      {
+                        kind: 'movie',
+                        streamId: row.streamId,
+                        playlistId: row.playlistId,
+                        name: row.name
+                      },
+                      !watched
+                    )
+                      .then((next) => setPrefs((current) => ({ ...current, watched: next.watched, resume: next.resume })))
+                      .catch(() => {})
+                  }}
+                >
+                  {watched ? '✓' : 'Mark watched'}
                 </button>
                 {resume && (
                   <>

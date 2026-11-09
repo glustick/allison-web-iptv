@@ -17,12 +17,13 @@ import {
   fetchPrefs,
   recordHistory,
   setResumePosition,
+  setWatchedState,
   type PrefsState,
   type ResumePosition
 } from '../lib/prefs'
 import type { Category, SeriesItem, SeriesInfo, SeriesEpisode } from '../lib/types'
 
-const EMPTY_PREFS: PrefsState = { favourites: [], categories: [], history: [], resume: [] }
+const EMPTY_PREFS: PrefsState = { favourites: [], categories: [], history: [], resume: [], watched: [] }
 
 type Selection = { type: 'all' } | { type: 'favourites' } | { type: 'provider'; id: string } | { type: 'history' }
 
@@ -79,14 +80,18 @@ function EpisodeList({
   client,
   seriesId,
   resumeFor,
+  watchedFor,
   onPlay,
+  onToggleWatched,
   onLoaded
 }: {
   /** The scoped client for whichever playlist this series belongs to (v0.79.0). */
   client: XtreamClient
   seriesId: number
   resumeFor: (episodeId: number) => ResumePosition | undefined
+  watchedFor: (episodeId: number) => boolean
   onPlay: (episode: SeriesEpisode, resumeFrom: number) => void
+  onToggleWatched: (episode: SeriesEpisode, watched: boolean) => void
   /** Hands the fetched episode list to the parent, which is what can offer "Next" (v0.95.0). */
   onLoaded?: (info: SeriesInfo) => void
 }): JSX.Element {
@@ -126,13 +131,29 @@ function EpisodeList({
             {info.seasons.find((s) => s.season_number === seasonNumber)?.name || `Season ${seasonNumber}`}
           </div>
           {(info.episodes[String(seasonNumber)] ?? []).map((episode) => {
-            const resume = resumeFor(Number(episode.id))
+            const watched = watchedFor(Number(episode.id))
+            // A watched episode has had its resume point cleared server-side; a record written
+            // before this release must not put "Resume" back on a ticked-off episode either.
+            const resume = watched ? undefined : resumeFor(Number(episode.id))
             return (
               <div key={episode.id} className="channel-row-wrap">
-                <button className="channel-row" onClick={() => onPlay(episode, resume?.positionSeconds ?? 0)}>
+                <button
+                  className={watched ? 'channel-row channel-row--watched' : 'channel-row'}
+                  onClick={() => onPlay(episode, resume?.positionSeconds ?? 0)}
+                >
                   <span>
                     {episode.episode_num}. {episode.title}
                   </span>
+                  {watched && <span className="watched-badge">✓ Watched</span>}
+                </button>
+                <button
+                  type="button"
+                  className={watched ? 'admin-small-btn watched-toggle active' : 'admin-small-btn watched-toggle'}
+                  aria-pressed={watched}
+                  title={watched ? 'Mark this episode unwatched' : 'Mark this episode watched'}
+                  onClick={() => onToggleWatched(episode, !watched)}
+                >
+                  {watched ? '✓' : 'Mark watched'}
                 </button>
                 {resume && (
                   <ResumeControls
@@ -323,6 +344,32 @@ export function Series({
   const episodeResumeFor = useCallback(
     (episodeId: number): ResumePosition | undefined => resumeFor(episodeId, openSeriesRef),
     [resumeFor, openSeriesRef]
+  )
+
+  const episodeWatched = useCallback(
+    (episodeId: number): boolean =>
+      prefs.watched.some(
+        (entry) => entry.kind === 'series' && entry.streamId === episodeId && (entry.playlistId ?? '') === openSeriesRef
+      ),
+    [prefs.watched, openSeriesRef]
+  )
+
+  const toggleEpisodeWatched = useCallback(
+    (episode: SeriesEpisode, watched: boolean): void => {
+      void setWatchedState(
+        {
+          kind: 'series',
+          streamId: Number(episode.id),
+          playlistId: openSeriesRef,
+          name: episode.title,
+          category: openSeries?.name ?? null
+        },
+        watched
+      )
+        .then((next) => setPrefs((current) => ({ ...current, watched: next.watched, resume: next.resume })))
+        .catch(() => {})
+    },
+    [openSeriesRef, openSeries]
   )
 
   const historyEpisodes = useMemo(() => {
@@ -568,7 +615,9 @@ export function Series({
               client={openSeries.playlistId ? new XtreamClient(openSeries.playlistId) : session.client}
               seriesId={openSeries.series_id}
               resumeFor={episodeResumeFor}
+              watchedFor={episodeWatched}
               onPlay={(episode, resumeFrom) => playEpisode(episode, resumeFrom, playlistRefOf(openSeries))}
+              onToggleWatched={toggleEpisodeWatched}
               onLoaded={(info) => setEpisodeInfo({ seriesId: openSeries.series_id, info })}
             />
           </>

@@ -1745,7 +1745,8 @@ app.get('/api/prefs', requireAuth, (req, res) => {
       favourites: prefsStore.listFavourites(session.username),
       categories: prefsStore.listCategories(session.username),
       history: prefsStore.listHistory(session.username, 50),
-      resume: prefsStore.listResumePositions(session.username)
+      resume: prefsStore.listResumePositions(session.username),
+      watched: prefsStore.listWatched(session.username)
     })
   } catch (err) {
     handlePrefsError(res, err, 'load')
@@ -1838,6 +1839,23 @@ app.post('/api/prefs/resume', requireAuth, (req, res) => {
     res.json({ ok: true, resume: position, resumePositions: prefsStore.listResumePositions(session.username) })
   } catch (err) {
     handlePrefsError(res, err, 'save resume position')
+  }
+})
+
+// The watched state — the ✓ marker, separate from resume points (v0.96.0).
+app.post('/api/prefs/watched', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    prefsStore.setWatched(session.username, req.body ?? {}, Boolean(req.body?.watched))
+    // Marking watched clears that title's resume point, so both lists travel back together —
+    // one response, and the Continue watching shelf cannot keep offering a title just ticked off.
+    res.json({
+      ok: true,
+      watched: prefsStore.listWatched(session.username),
+      resumePositions: prefsStore.listResumePositions(session.username)
+    })
+  } catch (err) {
+    handlePrefsError(res, err, 'set watched state')
   }
 })
 

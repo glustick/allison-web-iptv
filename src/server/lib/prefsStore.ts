@@ -64,6 +64,17 @@ export interface CustomCategory {
   channels: CustomCategoryChannel[]
 }
 
+/** A title the viewer marked finished — the ✓ marker, not a resume point. */
+export interface WatchedEntry {
+  kind: MediaKind
+  streamId: number
+  /** Which playlist the title came from; '' is the primary playlist. */
+  playlistId: string
+  name: string
+  category: string | null
+  watchedAt: string
+}
+
 export interface ResumePosition {
   kind: MediaKind
   streamId: number
@@ -172,6 +183,10 @@ export interface PrefsStore {
     durationSeconds?: number | null
   ): ResumePosition | null
   clearResumePosition(username: string, kind: MediaKind, streamId: number, playlistId?: string): void
+  listWatched(username: string, kind?: MediaKind): WatchedEntry[]
+  /** Marks or unmarks a title. Marking also drops any resume point, so a ticked-off title cannot
+   *  sit on the Continue watching shelf asking to be resumed. Returns the user's full list. */
+  setWatched(username: string, channel: ChannelRef, watched: boolean): WatchedEntry[]
 }
 
 export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
@@ -186,6 +201,40 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
   function requireDb(): Database {
     if (!handle) throw new PrefsError(`Preference database is not usable: ${openError ?? 'unknown error'}`)
     return handle.db
+  }
+
+  // `rowid DESC` is not decoration: two ticks in one millisecond share a timestamp, and without
+  // the tiebreaker SQLite is free to answer in insertion order — so "newest first" would be wrong
+  // exactly when someone marks two episodes in quick succession.
+  function listWatchedRows(db: Database, username: string, kind?: MediaKind): WatchedEntry[] {
+    const rows = (
+      kind
+        ? db
+            .prepare(
+              'SELECT kind, stream_id, playlist_id, name, category, watched_at FROM watched WHERE username = ? AND kind = ? ORDER BY watched_at DESC, rowid DESC'
+            )
+            .all(username, validateKind(kind))
+        : db
+            .prepare(
+              'SELECT kind, stream_id, playlist_id, name, category, watched_at FROM watched WHERE username = ? ORDER BY watched_at DESC, rowid DESC'
+            )
+            .all(username)
+    ) as Array<{
+      kind: string
+      stream_id: number
+      playlist_id: string
+      name: string
+      category: string | null
+      watched_at: string
+    }>
+    return rows.map((row) => ({
+      kind: validateKind(row.kind),
+      streamId: row.stream_id,
+      playlistId: row.playlist_id,
+      name: row.name,
+      category: row.category,
+      watchedAt: row.watched_at
+    }))
   }
 
   function clearResume(db: Database, username: string, kind: MediaKind, streamId: number, playlistId: string): void {
@@ -537,6 +586,41 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
 
     clearResumePosition(username: string, kind: MediaKind, streamId: number, playlistId?: string): void {
       clearResume(requireDb(), username, validateKind(kind), validateStreamId(streamId), cleanPlaylistId(playlistId))
+    },
+
+    listWatched(username: string, kind?: MediaKind): WatchedEntry[] {
+      return listWatchedRows(requireDb(), username, kind)
+    },
+
+    setWatched(username: string, channel: ChannelRef, watched: boolean): WatchedEntry[] {
+      const db = requireDb()
+      const kind = validateKind(channel.kind)
+      // Live has no "finished" — the same rule resume points follow, for the same reason.
+      if (!RESUMABLE_KINDS.includes(kind)) throw new PrefsError('Watched state only applies to movies and series')
+      const streamId = validateStreamId(channel.streamId)
+      const playlistId = cleanPlaylistId(channel.playlistId)
+      if (!watched) {
+        db.prepare('DELETE FROM watched WHERE username = ? AND kind = ? AND stream_id = ? AND playlist_id = ?').run(
+          username,
+          kind,
+          streamId,
+          playlistId
+        )
+        return listWatchedRows(db, username)
+      }
+      const name = cleanName(channel.name, 'name', MAX_NAME_LENGTH)
+      db.prepare(
+        `INSERT INTO watched (username, kind, stream_id, playlist_id, name, category, watched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (username, kind, stream_id, playlist_id)
+         DO UPDATE SET name = excluded.name,
+                       category = excluded.category,
+                       watched_at = excluded.watched_at`
+      ).run(username, kind, streamId, playlistId, name, channel.category ?? null, new Date().toISOString())
+      // Marking something watched means there is nothing left to resume: a stale point would put
+      // it straight back on the Continue watching shelf, which is exactly what the tick denied.
+      clearResume(db, username, kind, streamId, playlistId)
+      return listWatchedRows(db, username)
     },
 
     removeChannelFromCategory(username: string, id: number, kind: MediaKind, streamId: number, playlistId?: string): void {

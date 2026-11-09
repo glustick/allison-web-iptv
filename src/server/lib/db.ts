@@ -121,6 +121,20 @@ function createSchema(db: Database.Database): void {
       PRIMARY KEY (username, kind, stream_id, playlist_id)
     );
 
+    -- Titles the viewer has explicitly finished (the ✓ marker), deliberately separate from
+    -- resume_positions: a resume point is a place to come back to, this is the statement that
+    -- there is nothing to come back for. Episodes are (kind 'series', the episode's own id).
+    CREATE TABLE IF NOT EXISTS watched (
+      username         TEXT NOT NULL,
+      kind             TEXT NOT NULL,
+      stream_id        INTEGER NOT NULL,
+      playlist_id      TEXT NOT NULL DEFAULT '',
+      name             TEXT NOT NULL,
+      category         TEXT,
+      watched_at       TEXT NOT NULL,
+      PRIMARY KEY (username, kind, stream_id, playlist_id)
+    );
+
     -- Search index over the provider's catalogue: one row per channel/film/series, its name
     -- pre-tokenised with the same normalisation the matcher uses. Rebuilt on demand, so it is
     -- disposable — which is what lets search keep working while the provider is unreachable.

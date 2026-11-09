@@ -439,3 +439,58 @@ describe('playlist dimension (v0.78.0)', () => {
     rmSync(legacyDir, { recursive: true, force: true })
   })
 })
+
+describe('watched state (v0.96.0)', () => {
+  const movie = (streamId: number, name: string) => ({ kind: 'movie' as const, streamId, name, category: 'Movies' })
+
+  it('marks and unmarks a title, newest first', () => {
+    store.setWatched('alice', movie(7, 'Dune'), true)
+    store.setWatched('alice', movie(8, 'Alien'), true)
+    expect(store.listWatched('alice').map((w) => w.streamId)).toEqual([8, 7])
+
+    store.setWatched('alice', movie(8, 'Alien'), false)
+    expect(store.listWatched('alice').map((w) => w.streamId)).toEqual([7])
+    expect(store.listWatched('alice')[0]).toMatchObject({ kind: 'movie', name: 'Dune' })
+  })
+
+  it('clears the resume point when a title is marked watched', () => {
+    // The desktop's shelf and this app's both build from resume points; a tick that left one
+    // behind would put the title straight back on the shelf it was just ticked off.
+    store.setResumePosition('alice', movie(7, 'Dune'), 600, 9000)
+    expect(store.listResumePositions('alice')).toHaveLength(1)
+
+    store.setWatched('alice', movie(7, 'Dune'), true)
+    expect(store.listWatched('alice')).toHaveLength(1)
+    expect(store.listResumePositions('alice')).toEqual([])
+  })
+
+  it('refuses live TV — a channel has no finished state', () => {
+    expect(() => store.setWatched('alice', live(1, 'Sky News'), true)).toThrow(/movies and series/)
+    expect(store.listWatched('alice')).toEqual([])
+  })
+
+  it('keeps the same id on two playlists as two different titles', () => {
+    store.setWatched('alice', { ...movie(42, 'Film A'), playlistId: 'primary' }, true)
+    expect(store.listWatched('alice')).toHaveLength(1)
+
+    store.setWatched('alice', { ...movie(42, 'Film B'), playlistId: 'second' }, true)
+    expect(store.listWatched('alice')).toHaveLength(2)
+
+    // Unmarking one leaves the other alone.
+    store.setWatched('alice', { ...movie(42, 'Film A'), playlistId: 'primary' }, false)
+    expect(store.listWatched('alice').map((w) => w.playlistId)).toEqual(['second'])
+  })
+
+  it('is per user, per kind, and survives a reopen', () => {
+    store.setWatched('alice', movie(1, 'A Film'), true)
+    store.setWatched('alice', { kind: 'series', streamId: 2, name: 'Show Episode 1' }, true)
+    store.setWatched('bob', movie(3, 'Another Film'), true)
+
+    expect(store.listWatched('alice')).toHaveLength(2)
+    expect(store.listWatched('alice', 'series').map((w) => w.name)).toEqual(['Show Episode 1'])
+    expect(store.listWatched('bob').map((w) => w.name)).toEqual(['Another Film'])
+
+    const reopened = createPrefsStore({ dataDir: dir })
+    expect(reopened.listWatched('alice')).toHaveLength(2)
+  })
+})

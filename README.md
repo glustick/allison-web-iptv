@@ -6,6 +6,26 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.96.0 — the watched state)
+
+A title can now be marked **watched** (✓), for films and for episodes. It is a real table in the
+prefs database — `watched`, keyed by user, kind, id and playlist like every other per-user record —
+not a flag on the resume point, because the two mean different things: a resume point is a place to
+come back to, a watched mark says there is nothing to come back for.
+
+The part that matters in use: **marking something watched clears its resume point**, so a ticked
+film leaves Continue watching instead of sitting there at 84% asking to be resumed. The endpoint
+returns both lists together so the tick and the shelf cannot disagree, and a ticked row dims with a
+green ✓ badge while staying where it is — a viewer who ticked the wrong one has to be able to find
+it again.
+
+One real bug found by the tests: two ticks in the same millisecond share a timestamp, and ordering
+by it alone fell back to insertion order. `rowid` is now the tiebreaker.
+
+1039 tests; typecheck, lint and both builds clean. Not verified in a browser yet — the toggles have
+no scripted check. Deliberately limited to the two catalogue lists: favourites, history and search
+rows do not carry the toggle yet.
+
 ## Current state (v0.95.0 — next episode, and a check that runs by itself)
 
 **Next episode.** While an episode plays, the bar names what follows — *Next: Fixture S01E02 ▸* — and
