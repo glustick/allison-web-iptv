@@ -494,3 +494,49 @@ describe('watched state (v0.96.0)', () => {
     expect(reopened.listWatched('alice')).toHaveLength(2)
   })
 })
+
+describe('watched batches — one season, one call (v0.98.0)', () => {
+  const episode = (streamId: number, title: string) => ({ kind: 'series' as const, streamId, name: title, category: 'A Show' })
+  const season = [1, 2, 3, 4].map((n) => episode(100 + n, `Episode ${n}`))
+
+  it('marks a whole batch, and gives them back newest-first', () => {
+    store.setWatchedMany('alice', season, true)
+    expect(store.listWatched('alice')).toHaveLength(4)
+    expect(store.listWatched('alice').map((w) => w.name)).toEqual(['Episode 4', 'Episode 3', 'Episode 2', 'Episode 1'])
+  })
+
+  it('writes nothing when one entry is invalid — a half-applied catch-up is worse than none', () => {
+    const withLive = [...season, { kind: 'live' as const, streamId: 9, name: 'A Channel' }]
+    expect(() => store.setWatchedMany('alice', withLive, true)).toThrow(/movies and series/)
+    expect(store.listWatched('alice')).toEqual([])
+  })
+
+  it('unmarks a batch, and leaves a title outside it alone', () => {
+    store.setWatchedMany('alice', season, true)
+    store.setWatched('alice', episode(999, 'A Special'), true)
+    store.setWatchedMany('alice', season.slice(0, 2), false)
+    expect(store.listWatched('alice').map((w) => w.streamId).sort()).toEqual([103, 104, 999])
+  })
+
+  it('clears the resume point for every title in the batch', () => {
+    store.setResumePosition('alice', episode(101, 'Episode 1'), 600, 1800)
+    store.setResumePosition('alice', episode(102, 'Episode 2'), 300, 1800)
+    expect(store.listResumePositions('alice')).toHaveLength(2)
+
+    store.setWatchedMany('alice', season.slice(0, 2), true)
+    expect(store.listWatched('alice')).toHaveLength(2)
+    expect(store.listResumePositions('alice')).toEqual([])
+  })
+
+  it('keeps the same id on two playlists apart inside a batch', () => {
+    store.setWatchedMany(
+      'alice',
+      [
+        { ...episode(101, 'Episode 1'), playlistId: 'primary' },
+        { ...episode(101, 'Episode 1 (backup)'), playlistId: 'second' }
+      ],
+      true
+    )
+    expect(store.listWatched('alice')).toHaveLength(2)
+  })
+})

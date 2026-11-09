@@ -172,6 +172,18 @@ export async function setWatchedState(
   return { watched: data.watched ?? [], resume: data.resumePositions ?? [] }
 }
 
+/** A whole season in one call — the same shape and the same two lists as a single tick. */
+export async function setWatchedManyState(
+  entries: ChannelRef[],
+  watched: boolean
+): Promise<{ watched: WatchedEntry[]; resume: ResumePosition[] }> {
+  const data = await request<{ watched: WatchedEntry[]; resumePositions: ResumePosition[] }>(
+    '/api/prefs/watched/bulk',
+    jsonPost({ entries, watched })
+  )
+  return { watched: data.watched ?? [], resume: data.resumePositions ?? [] }
+}
+
 export async function clearResumePosition(kind: MediaKind, streamId: number, playlistId?: string): Promise<ResumePosition[]> {
   const query = playlistId ? `?playlist=${encodeURIComponent(playlistId)}` : ''
   const data = await request<{ resumePositions: ResumePosition[] }>(`/api/prefs/resume/${kind}/${streamId}${query}`, {

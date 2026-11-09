@@ -15,6 +15,26 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.98.0 — a season in one call.**
+
+The watched state made a single tick honest and a whole show tedious: catching up on eight episodes
+was eight round trips, eight chances to miss one, and eight separate resume-point clears. A season
+is now one request. `POST /api/prefs/watched/bulk` takes up to 200 entries, **validates every one
+before writing any** (a half-applied catch-up — a season ticked except the entry with a bad id — is
+worse than none of it), writes them in a single transaction, and clears the resume point for each
+in the same transaction. It answers with both lists, exactly like a single tick, so the shelf and
+the ticks cannot disagree.
+
+In the episode list, each season header now reads `Season 2 · 3/10 watched` and carries a
+**✓ Mark season** button whenever something in that season is still unwatched. The header was
+already the one place with room — a fourth button on every row is not.
+
+1048 tests (5 new, all on the bulk path: the batch and its ordering, the all-or-nothing validation,
+unmarking a batch without touching a title outside it, the resume clears, and the same id on two
+playlists inside one batch). Typecheck, lint and both builds clean. **Not browser-verified** — the
+scripted pass covers the film-side watched flow, not this season action yet, and it is the next
+thing a browser run should reach.
+
 **v0.97.0 — finishing a title marks it watched, and watched titles can get out of the way.**
 
 v0.96.0 added the ✓ but made it a manual act. The obvious hole: **reaching the end of a film or an

@@ -1859,6 +1859,31 @@ app.post('/api/prefs/watched', requireAuth, (req, res) => {
   }
 })
 
+// A whole season in one call: catching up is one intent, and a round trip per episode is silly.
+// The cap is a request bound, not a domain rule — a season is tens, not thousands.
+app.post('/api/prefs/watched/bulk', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  const entries = Array.isArray(req.body?.entries) ? req.body.entries : null
+  if (!entries) {
+    res.status(400).json({ error: 'Expected an entries array' })
+    return
+  }
+  if (entries.length > 200) {
+    res.status(400).json({ error: 'At most 200 entries per request' })
+    return
+  }
+  try {
+    prefsStore.setWatchedMany(session.username, entries, Boolean(req.body?.watched))
+    res.json({
+      ok: true,
+      watched: prefsStore.listWatched(session.username),
+      resumePositions: prefsStore.listResumePositions(session.username)
+    })
+  } catch (err) {
+    handlePrefsError(res, err, 'set watched state')
+  }
+})
+
 app.delete('/api/prefs/resume/:kind/:streamId', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
   try {

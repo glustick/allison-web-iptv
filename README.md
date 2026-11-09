@@ -6,6 +6,21 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
+## Current state (v0.98.0 — a season in one call)
+
+Catching up on a show is one intent, so it is now one request. `POST /api/prefs/watched/bulk` marks
+up to 200 entries in a single transaction, validating every one before writing any — a season ticked
+except the entry with a bad id is worse than none of it — and clears each title's resume point in
+the same transaction. It answers with both lists, like a single tick, so the shelf and the ticks
+cannot disagree.
+
+Each season header now reads `Season 2 · 3/10 watched`, with a **✓ Mark season** button whenever
+something in that season is still unwatched. The header was the one place with room; a fourth button
+on every row is not.
+
+1048 tests; typecheck, lint and both builds clean. The scripted browser pass covers the film-side
+watched flow, not this season action yet.
+
 ## Current state (v0.97.0 — finishing marks it watched)
 
 Reaching the end of a film or an episode now marks it **watched** by itself. Before this, finishing

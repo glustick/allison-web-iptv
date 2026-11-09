@@ -187,6 +187,9 @@ export interface PrefsStore {
   /** Marks or unmarks a title. Marking also drops any resume point, so a ticked-off title cannot
    *  sit on the Continue watching shelf asking to be resumed. Returns the user's full list. */
   setWatched(username: string, channel: ChannelRef, watched: boolean): WatchedEntry[]
+  /** Marks or unmarks a batch in one transaction — a whole season is one catch-up, not N round
+   *  trips. Every entry is validated before anything is written, so a bad one changes nothing. */
+  setWatchedMany(username: string, channels: ChannelRef[], watched: boolean): WatchedEntry[]
 }
 
 export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
@@ -620,6 +623,46 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
       // Marking something watched means there is nothing left to resume: a stale point would put
       // it straight back on the Continue watching shelf, which is exactly what the tick denied.
       clearResume(db, username, kind, streamId, playlistId)
+      return listWatchedRows(db, username)
+    },
+
+    setWatchedMany(username: string, channels: ChannelRef[], watched: boolean): WatchedEntry[] {
+      const db = requireDb()
+      // Validate everything first: a batch is one intent, and half of it applied is worse than
+      // none of it (a season marked watched except the one entry with a bad id).
+      const prepared = channels.map((channel) => {
+        const kind = validateKind(channel.kind)
+        if (!RESUMABLE_KINDS.includes(kind)) throw new PrefsError('Watched state only applies to movies and series')
+        return {
+          kind,
+          streamId: validateStreamId(channel.streamId),
+          playlistId: cleanPlaylistId(channel.playlistId),
+          name: cleanName(channel.name, 'name', MAX_NAME_LENGTH),
+          category: channel.category ?? null
+        }
+      })
+      const now = new Date().toISOString()
+      const remove = db.prepare(
+        'DELETE FROM watched WHERE username = ? AND kind = ? AND stream_id = ? AND playlist_id = ?'
+      )
+      const upsert = db.prepare(
+        `INSERT INTO watched (username, kind, stream_id, playlist_id, name, category, watched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (username, kind, stream_id, playlist_id)
+         DO UPDATE SET name = excluded.name,
+                       category = excluded.category,
+                       watched_at = excluded.watched_at`
+      )
+      db.transaction(() => {
+        for (const entry of prepared) {
+          if (!watched) {
+            remove.run(username, entry.kind, entry.streamId, entry.playlistId)
+            continue
+          }
+          upsert.run(username, entry.kind, entry.streamId, entry.playlistId, entry.name, entry.category, now)
+          clearResume(db, username, entry.kind, entry.streamId, entry.playlistId)
+        }
+      })()
       return listWatchedRows(db, username)
     },
 

@@ -19,6 +19,7 @@ import {
   recordHistory,
   setResumePosition,
   setWatchedState,
+  setWatchedManyState,
   type PrefsState,
   type ResumePosition
 } from '../lib/prefs'
@@ -84,6 +85,7 @@ function EpisodeList({
   watchedFor,
   onPlay,
   onToggleWatched,
+  onMarkSeason,
   onLoaded
 }: {
   /** The scoped client for whichever playlist this series belongs to (v0.79.0). */
@@ -93,6 +95,8 @@ function EpisodeList({
   watchedFor: (episodeId: number) => boolean
   onPlay: (episode: SeriesEpisode, resumeFrom: number) => void
   onToggleWatched: (episode: SeriesEpisode, watched: boolean) => void
+  /** Marks a whole season in one request — see the parent's markSeason. */
+  onMarkSeason: (episodes: SeriesEpisode[]) => void
   /** Hands the fetched episode list to the parent, which is what can offer "Next" (v0.95.0). */
   onLoaded?: (info: SeriesInfo) => void
 }): JSX.Element {
@@ -152,9 +156,34 @@ function EpisodeList({
       )}
       {seasonNumbers.map((seasonNumber) => (
         <div key={seasonNumber}>
-          <div className="now-playing-bar">
-            {info.seasons.find((s) => s.season_number === seasonNumber)?.name || `Season ${seasonNumber}`}
-          </div>
+          {(() => {
+            const all = info.episodes[String(seasonNumber)] ?? []
+            const watchedCount = all.filter((episode) => watchedFor(Number(episode.id))).length
+            const remaining = all.length - watchedCount
+            return (
+              <div
+                className="now-playing-bar"
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+              >
+                <span>
+                  {info.seasons.find((s) => s.season_number === seasonNumber)?.name || `Season ${seasonNumber}`}
+                  {watchedCount > 0 ? ` · ${watchedCount}/${all.length} watched` : ''}
+                </span>
+                {remaining > 0 && (
+                  // Catching up is one intent, not one click per episode. The server takes the
+                  // whole batch in a transaction (v0.98.0), so this is one round trip.
+                  <button
+                    type="button"
+                    className="admin-small-btn"
+                    title={`Mark the remaining ${remaining} episode${remaining === 1 ? '' : 's'} of this season watched`}
+                    onClick={() => onMarkSeason(all)}
+                  >
+                    ✓ Mark season
+                  </button>
+                )}
+              </div>
+            )
+          })()}
           {visibleInSeason(seasonNumber).map((episode) => {
             const watched = watchedFor(Number(episode.id))
             // A watched episode has had its resume point cleared server-side; a record written
@@ -377,6 +406,22 @@ export function Series({
     (episodeId: number): boolean =>
       isWatched(prefs.watched, { kind: 'series', playlistId: openSeriesRef, streamId: episodeId }),
     [prefs.watched, openSeriesRef]
+  )
+
+  const markSeasonWatched = useCallback(
+    (episodes: SeriesEpisode[]): void => {
+      const entries = episodes.map((episode) => ({
+        kind: 'series' as const,
+        streamId: Number(episode.id),
+        playlistId: openSeriesRef,
+        name: episode.title,
+        category: openSeries?.name ?? null
+      }))
+      void setWatchedManyState(entries, true)
+        .then((next) => setPrefs((current) => ({ ...current, watched: next.watched, resume: next.resume })))
+        .catch(() => {})
+    },
+    [openSeriesRef, openSeries]
   )
 
   const toggleEpisodeWatched = useCallback(
@@ -657,6 +702,7 @@ export function Series({
               watchedFor={episodeWatched}
               onPlay={(episode, resumeFrom) => playEpisode(episode, resumeFrom, playlistRefOf(openSeries))}
               onToggleWatched={toggleEpisodeWatched}
+              onMarkSeason={markSeasonWatched}
               onLoaded={(info) => setEpisodeInfo({ seriesId: openSeries.series_id, info })}
             />
           </>
