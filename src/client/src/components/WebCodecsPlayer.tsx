@@ -3,6 +3,7 @@ import Hls from 'hls.js'
 import { runWebCodecsVideo, playingWallMsFromFrags, type StampedFragment, type WebCodecsVideoStats } from '../lib/webCodecsVideo'
 import { verdictIsUsable, loadVerdict } from '../lib/decodeGate'
 import { newSessionId } from '../lib/sessionId'
+import { PlayerMenu } from './PlayerMenu'
 
 // The client-side engine, in the player. The picture is decoded in this browser (WebCodecs, the
 // device's own GPU — gated on the decode verdict this device saved for itself) straight off the
@@ -259,6 +260,21 @@ export function WebCodecsPlayer({
           background: '#000'
         }}
       />
+      {/* The canvas is pointer-events: none, so the only way into fullscreen used to be a
+          double-click on the wrap — invisible, and hard to land on a phone. One button, in the
+          same menu the other two players use (v0.96.1). */}
+      <PlayerMenu>
+        <button
+          type="button"
+          className="admin-small-btn"
+          title="Fullscreen"
+          onClick={() => {
+            void wrapRef.current?.requestFullscreen?.().catch(() => {})
+          }}
+        >
+          ⛶ Fullscreen
+        </button>
+      </PlayerMenu>
       {muted && !error && (
         <button
           type="button"

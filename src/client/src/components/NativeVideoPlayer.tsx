@@ -13,6 +13,7 @@ import { useSleepTimer } from '../lib/useSleepTimer'
 import { usePlayerKeys } from '../lib/usePlayerKeys'
 import { ShortcutsHelp } from './ShortcutsHelp'
 import { SubtitleStyleButton } from './SubtitleStyleButton'
+import { PlayerMenu } from './PlayerMenu'
 import { SleepTimerButton } from './SleepTimerButton'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
@@ -320,18 +321,8 @@ export function NativeVideoPlayer({
   return (
     <div className="player-wrap">
       <video ref={videoRef} controls />
-      {/* The live player's own overlay position — 10vh down clears the browser's native controls. */}
-      <div
-        style={{
-          position: 'absolute',
-          top: '10vh',
-          right: 8,
-          zIndex: 40,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-end'
-        }}
-      >
+      {/* Same one-button menu as live (v0.96.1): the controls no longer sit over the picture. */}
+      <PlayerMenu>
         <select
           className="admin-small-btn"
           style={{ padding: '4px 8px' }}
@@ -391,7 +382,7 @@ export function NativeVideoPlayer({
         >
           ?
         </button>
-      </div>
+      </PlayerMenu>
       <ShortcutsHelp open={showShortcuts} seekable onClose={() => setShowShortcuts(false)} />
       <TrackControls
         audioTracks={audioTracks}

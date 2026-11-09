@@ -31,6 +31,7 @@ import type { GuideProgramme } from '../lib/guideNowNext'
 import { usePlayerKeys } from '../lib/usePlayerKeys'
 import { ShortcutsHelp } from './ShortcutsHelp'
 import { SubtitleStyleButton } from './SubtitleStyleButton'
+import { PlayerMenu } from './PlayerMenu'
 import { SleepTimerButton } from './SleepTimerButton'
 import { MediaStats } from './MediaStats'
 import { WebCodecsPlayer } from './WebCodecsPlayer'
@@ -1030,22 +1031,10 @@ let stallCount = 0
 
   return (
     <div className="player-wrap">
-      {/* One container for both overlays: the toggle and the panel stack inside it, so they cannot
-          cover each other, and a single offset clears the browser's own controls. 10% down the screen
-          is the operator's own measurement — at the very top edge the button sat over the volume
-          control. */}
-      <div
-        style={{
-          position: 'absolute',
-          top: '10vh',
-          right: 8,
-          zIndex: 40,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-end',
-          gap: 6
-        }}
-      >
+      {/* One button in the corner, and everything below it until the menu is opened (v0.96.1).
+          The stack used to sit permanently over the picture, which on a phone is a strip that
+          cannot be pressed to reach the browser's own controls or fullscreen. */}
+      <PlayerMenu>
         {/* Quality applies to the re-encode tier only — the one path where the server reshapes
             the picture. A channel playing natively or through a copy session is untouched, and
             so is the client-side engine (its canvas shows exactly what it decodes). Changing it
@@ -1121,7 +1110,7 @@ let stallCount = 0
             }}
           />
         )}
-      </div>
+      </PlayerMenu>
       {webCodecs ? (
         <WebCodecsPlayer url={url} />
       ) : (

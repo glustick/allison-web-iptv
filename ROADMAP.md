@@ -15,6 +15,29 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.96.1 — the player's controls moved behind one button (operator's report).**
+
+Reported while watching: *"the full screen is difficult to press, move the overlay up so that it
+does not cover the full screen"*. The overlay in question was not one panel but the whole control
+stack — quality, PiP, −10s/+10s, subtitle style, sleep, shortcuts, stats — stacked down the right
+edge of the picture and permanently on screen. On a phone that strip is a large part of the video
+that cannot be pressed to bring up the browser's own controls or reach fullscreen, and on a desktop
+it covers the picture while nothing is being adjusted.
+
+One `PlayerMenu` (new, shared) now renders a single **⚙ Controls** button in the picture's
+top-right corner, and the same controls in the same order behind it. The picture is the thing you
+press; one small button is the only thing that intercepts a press. Applied to all three surfaces
+the report could have meant: the live player, the film/episode player, and the client-side decoder
+— where the only way into fullscreen had been a double-click on a canvas that is
+`pointer-events: none`, so a **⛶ Fullscreen** button now lives in the same menu.
+
+The old `top: 10vh` offset went with the stack: it existed to keep a tall column clear of the
+browser's native controls, and a single button in the corner does not reach them.
+
+Typecheck, lint, 1039 tests and both builds clean. **Not verified in a browser** — like 0.96.0's
+toggles, this is a change made from the report plus the DOM, and the next scripted browser check
+should cover opening the menu and entering fullscreen.
+
 **v0.96.0 — the watched state, the item the last entry left at the top of the list.**
 
 The v0.95.0 entry deferred this for the honest reason: it is not a field, it is a migration with an
