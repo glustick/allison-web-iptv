@@ -18,7 +18,7 @@ describe('connectionLedger', () => {
     ledger.record('/api/stream/live/668.m3u8')
     advance(1500)
     const active = ledger.active()
-    expect(active).toEqual([{ key: '/api/stream/live/668.m3u8', idleMs: 1500 }])
+    expect(active).toEqual([{ key: '/api/stream/live/668.m3u8', idleMs: 1500, account: null }])
   })
 
   it('drops a stream whose last request is older than the window — no request, no connection', () => {
@@ -37,7 +37,7 @@ describe('connectionLedger', () => {
     // The segment Referer records under the same key — a playing stream keeps refreshing it.
     ledger.record('/api/stream/live/668.m3u8')
     advance(20_000)
-    expect(ledger.active()).toEqual([{ key: '/api/stream/live/668.m3u8', idleMs: 20_000 }])
+    expect(ledger.active()).toEqual([{ key: '/api/stream/live/668.m3u8', idleMs: 20_000, account: null }])
   })
 
   it('lists several streams oldest-stable (sorted by key) and prunes only the stale one', () => {
@@ -75,5 +75,34 @@ describe('connectionLedger', () => {
     ledger.record('/api/stream/live/1.m3u8')
     now = 100
     expect(ledger.active()).toEqual([])
+  })
+
+  // v0.102.0 — the per-account bucketing. The playlist fetch names the owner; the segment
+  // Referers that follow carry no session and must not erase it.
+  it('remembers which account authenticated the stream', () => {
+    const { ledger, advance } = ledgerWithClock()
+    ledger.record('/api/stream/live/668.m3u8', 'chris')
+    advance(1000)
+    expect(ledger.active()).toEqual([
+      { key: '/api/stream/live/668.m3u8', idleMs: 1000, account: 'chris' }
+    ])
+  })
+
+  it('keeps the remembered owner when a later account-less record refreshes the stream', () => {
+    const { ledger, advance } = ledgerWithClock()
+    ledger.record('/api/stream/live/668.m3u8', 'chris')
+    advance(5000)
+    // The proxy's segment Referer callback — no account available.
+    ledger.record('/api/stream/live/668.m3u8')
+    advance(1000)
+    expect(ledger.active()).toEqual([
+      { key: '/api/stream/live/668.m3u8', idleMs: 1000, account: 'chris' }
+    ])
+  })
+
+  it('answers null for a key only ever recorded without an account', () => {
+    const { ledger } = ledgerWithClock()
+    ledger.record('/api/stream/live/668.m3u8')
+    expect(ledger.active()[0]?.account).toBeNull()
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CONNECTION_CEILING, accountTileUsage, connectionStatus, tileGate, tileWouldExceed } from './connectionBudget'
+import { CONNECTION_CEILING, accountAttribution, accountTileUsage, accountUsage, connectionStatus, tileGate, tileWouldExceed } from './connectionBudget'
 
 describe('connectionStatus', () => {
   it('falls back to the standing hint while the live count is unknown', () => {
@@ -99,5 +99,51 @@ describe('accountTileUsage (v0.86.0)', () => {
     expect(accountTileUsage(slots, 'p2')).toBe(1)
     expect(accountTileUsage(slots, 'other')).toBe(0)
     expect(accountTileUsage([], undefined)).toBe(0)
+  })
+})
+
+describe('accountUsage and accountAttribution (v0.102.0)', () => {
+  const bucketed: import('./connectionBudget.js').ConnectionSnapshot = {
+    used: 4,
+    streamCount: 3,
+    transcodes: 1,
+    accounts: [
+      { username: 'chris', streams: 2, transcodes: 0, used: 2 },
+      { username: 'sam', streams: 1, transcodes: 1, used: 2 },
+      { username: '', streams: 0, transcodes: 0, used: 0 }
+    ]
+  }
+
+  it('accountUsage answers one account’s row and null when the server said nothing', () => {
+    expect(accountUsage(bucketed, 'sam')?.used).toBe(2)
+    expect(accountUsage(bucketed, 'nobody')).toBeNull()
+    expect(accountUsage(null, 'chris')).toBeNull()
+    // A snapshot without buckets (older server) answers null too, never a crash.
+    expect(accountUsage({ used: 2, streamCount: 2, transcodes: 0 }, 'chris')).toBeNull()
+  })
+
+  it('accountAttribution names each holder when more than one account is in play', () => {
+    expect(accountAttribution(bucketed)).toBe(' — chris 2, sam 2')
+  })
+
+  it('stays silent for a single account, an empty grid, or an unbucketed snapshot', () => {
+    expect(accountAttribution({ used: 3, streamCount: 3, transcodes: 0, accounts: [{ username: 'chris', streams: 3, transcodes: 0, used: 3 }] })).toBe('')
+    expect(accountAttribution({ used: 0, streamCount: 0, transcodes: 0, accounts: [] })).toBe('')
+    expect(accountAttribution(null)).toBe('')
+    expect(accountAttribution({ used: 2, streamCount: 2, transcodes: 0 })).toBe('')
+  })
+
+  it('never names unattributed traffic', () => {
+    const anon: import('./connectionBudget.js').ConnectionSnapshot = {
+      used: 3,
+      streamCount: 3,
+      transcodes: 0,
+      accounts: [
+        { username: 'chris', streams: 2, transcodes: 0, used: 2 },
+        { username: '', streams: 1, transcodes: 0, used: 1 }
+      ]
+    }
+    // One named account + anonymous traffic: the totals already cover it.
+    expect(accountAttribution(anon)).toBe('')
   })
 })

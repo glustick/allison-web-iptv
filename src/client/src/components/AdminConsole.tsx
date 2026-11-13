@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties, type JSX } from 'react'
 import type { AppUser, UserRole } from '../lib/appAuth'
 import { useResizableColumns, type ColumnSpec } from '../lib/useResizableColumns'
+import { AUDIT_OUTCOMES, auditFilterQuery } from '../lib/auditFilter'
 import { PlaylistsPanel } from './PlaylistsPanel'
 import { SportsPanel } from './SportsPanel'
 
@@ -133,22 +134,29 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
   // The auth log is a record, not live state — a slower poll than the sessions table (and a
   // manual Refresh), so a 5-second cadence is not spent re-reading history nobody is watching.
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([])
-  const refreshAudit = useCallback(async (): Promise<void> => {
-    try {
-      const res = await fetch('/api/admin/audit?limit=50')
-      if (!res.ok) return
-      const data = (await res.json()) as { entries?: AuditEntry[] }
-      setAuditEntries(data.entries ?? [])
-    } catch {
-      // The log is supplementary — a failed read leaves the last one on screen.
-    }
-  }, [])
+  // v0.102.0 — the filters: any account, any outcome, both optional. Changing either re-fetches
+  // immediately (the poll carries the current pair forward).
+  const [auditUser, setAuditUser] = useState('')
+  const [auditOutcome, setAuditOutcome] = useState('')
+  const refreshAudit = useCallback(
+    async (username: string, outcome: string): Promise<void> => {
+      try {
+        const res = await fetch(`/api/admin/audit?${auditFilterQuery(username, outcome)}`)
+        if (!res.ok) return
+        const data = (await res.json()) as { entries?: AuditEntry[] }
+        setAuditEntries(data.entries ?? [])
+      } catch {
+        // The log is supplementary — a failed read leaves the last one on screen.
+      }
+    },
+    []
+  )
 
   useEffect(() => {
-    void refreshAudit()
-    const poll = window.setInterval(() => void refreshAudit(), AUDIT_POLL_MS)
+    void refreshAudit(auditUser, auditOutcome)
+    const poll = window.setInterval(() => void refreshAudit(auditUser, auditOutcome), AUDIT_POLL_MS)
     return () => window.clearInterval(poll)
-  }, [refreshAudit])
+  }, [refreshAudit, auditUser, auditOutcome])
 
   useEffect(() => {
     void refresh()
@@ -485,7 +493,7 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
       <section className="admin-section">
         <div className="epg-section-head">
           <h2>Auth log</h2>
-          <button type="button" className="admin-small-btn" onClick={() => void refreshAudit()}>
+          <button type="button" className="admin-small-btn" onClick={() => void refreshAudit(auditUser, auditOutcome)}>
             Refresh
           </button>
         </div>
@@ -494,6 +502,38 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
           resets end that account's sessions, force-logouts and account changes are recorded here as
           they happen. Newest first, most recent 50.
         </p>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+          <input
+            className="multiview-picker-filter"
+            type="search"
+            placeholder="Filter by account"
+            value={auditUser}
+            onChange={(event) => setAuditUser(event.target.value)}
+          />
+          <select
+            value={auditOutcome}
+            onChange={(event) => setAuditOutcome(event.target.value)}
+          >
+            <option value="">Every outcome</option>
+            {AUDIT_OUTCOMES.map((outcome) => (
+              <option key={outcome} value={outcome}>
+                {outcome}
+              </option>
+            ))}
+          </select>
+          {(auditUser !== '' || auditOutcome !== '') && (
+            <button
+              type="button"
+              className="admin-small-btn"
+              onClick={() => {
+                setAuditUser('')
+                setAuditOutcome('')
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
         <div className="admin-table-wrap">
           <table
             className="admin-table admin-table--fixed"

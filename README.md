@@ -6,7 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.101.0 — the same diagnostics in both players)
+## Current state (v0.102.0 — whose connections, whose sign-ins)
+
+The ops surfaces learned to attribute. The connection count answers an **accounts breakdown** —
+the ledger remembers which account authenticated each relayed stream, transcode sessions carry
+their owner, and the multi-view toolbar names each holder when more than one account is in play
+(" — chris 2, sam 1"). The **Auth log gained filters**: any account, any outcome, both optional,
+composed server-side and carried by the poll. 1077 tests; typecheck, lint and both builds clean.
+Not browser-verified.
+
+## Previous release (v0.101.0 — the same diagnostics in both players)
 
 The film and episode player now carries the **Diagnostics** panel the live player gained in 0.100.0,
 recording the four things that answer "why is this title stuck": the title opened and from where,

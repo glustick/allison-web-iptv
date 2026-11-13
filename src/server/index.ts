@@ -61,7 +61,7 @@ import {
   postToDiscordWebhooks,
   type ProviderWatch
 } from './lib/providerWatch.js'
-import { createAuthAudit } from './lib/authAudit.js'
+import { createAuthAudit, type AuthOutcome } from './lib/authAudit.js'
 import { createAuthAuditStore } from './lib/authAuditStore.js'
 import { createAuthSessionStore, hashAuthToken } from './lib/authSessionStore.js'
 import { revocableSessionTokens } from './lib/singleSession.js'
@@ -751,7 +751,25 @@ app.post('/api/auth/activity', requireAuth, (req, res) => {
 // mirrored to the container log (see lib/authAudit.ts), because a deploy restarts the app.
 app.get('/api/admin/audit', requireAuth, requireAdmin, (req, res) => {
   const limit = Number(req.query.limit)
-  res.json({ entries: authAudit.recent(Number.isFinite(limit) && limit > 0 ? limit : 50) })
+  // v0.102.0 — the Auth log's filters: any combination of account and outcome. The outcome is
+  // validated against the type's own members rather than trusted; an unknown one answers empty
+  // rather than every row.
+  const outcomes: AuthOutcome[] = [
+    'ok', 'failed', 'locked', 'logout', 'setup', 'revoked', 'password-changed',
+    'force-logout', 'session-ended', 'user-created', 'user-deleted'
+  ]
+  const rawOutcome = typeof req.query.outcome === 'string' ? req.query.outcome : ''
+  const outcome = outcomes.includes(rawOutcome as AuthOutcome) ? (rawOutcome as AuthOutcome) : undefined
+  const username = typeof req.query.username === 'string' && req.query.username.trim().length > 0
+    ? req.query.username.trim()
+    : undefined
+  res.json({
+    entries: authAudit.recentFiltered({
+      username,
+      outcome,
+      limit: Number.isFinite(limit) && limit > 0 ? limit : 50
+    })
+  })
 })
 
 app.get('/api/admin/alerts', requireAuth, requireAdmin, (req, res) => {
@@ -1160,7 +1178,8 @@ app.get('/api/timeshift/:file', requireAuth, (req, res) => {
   // credentials are injected here rather than travelling through the browser.
   const rewritten = req as unknown as IncomingMessage & { url?: string }
   rewritten.url = upstreamPath
-  connectionLedger.record(req.path)
+  // v0.102.0 — the account that asked, so the connection count can say WHO holds it.
+  connectionLedger.record(req.path, (req.authSession as AuthSession).username)
   relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
 })
 
@@ -1194,7 +1213,8 @@ app.get('/api/iptv/playlists/:playlistId/timeshift/:file', requireAuth, (req, re
   rewritten.headers['x-proxy-target-base'] = playlist.server
   rewritten.headers['x-app-playlist-key'] = req.path
   rewritten.url = upstreamPath
-  connectionLedger.record(req.path)
+  // v0.102.0 — the account that asked, so the connection count can say WHO holds it.
+  connectionLedger.record(req.path, (req.authSession as AuthSession).username)
   relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
 })
 
@@ -1214,7 +1234,7 @@ app.get('/api/stream/:kind/:file', requireAuth, (req, res) => {
   // Every playlist reload lands here (a live playlist re-requests every few seconds), and the
   // segment requests that follow carry this same path as their Referer — one key per playing
   // stream for the connection ledger.
-  connectionLedger.record(req.path)
+  connectionLedger.record(req.path, (req.authSession as AuthSession).username)
   const rewritten = req as unknown as IncomingMessage & { url?: string }
   // The playlist window inside the proxy is keyed by the app-side URL — the same pathname the
   // players' segment requests carry as their Referer, which is what the refused-segment retry
@@ -2209,7 +2229,7 @@ app.get('/api/iptv/playlists/:playlistId/stream/:kind/:file', requireAuth, (req,
     'x-app-playlist-key': req.path
   }
   scoped.url = `/${kind}/${encodeURIComponent(credentials.username)}/${encodeURIComponent(credentials.password)}/${file}`
-  connectionLedger.record(req.path)
+  connectionLedger.record(req.path, (req.authSession as AuthSession).username)
   relayToProxy(req as unknown as IncomingMessage, res as unknown as ServerResponse)
 })
 
@@ -2224,12 +2244,30 @@ app.get('/api/iptv/connections', requireAuth, (req, res) => {
     try {
       const streams = connectionLedger.active()
       const transcodes = await transcodeService.stats()
+      // v0.102.0 — the same count, bucketed by WHO holds it: the multi-account question the
+      // totals could not answer ("the box says 4 — whose four?"). A stream the ledger could not
+      // attribute and a session whose owner was not said land under '' rather than being dropped,
+      // so the buckets always add up to the totals above.
+      const byAccount = new Map<string, { username: string; streams: number; transcodes: number; used: number }>()
+      const bucket = (username: string) => {
+        let row = byAccount.get(username)
+        if (!row) {
+          row = { username, streams: 0, transcodes: 0, used: 0 }
+          byAccount.set(username, row)
+        }
+        return row
+      }
+      for (const stream of streams) bucket(stream.account ?? '').streams += 1
+      for (const t of transcodes) bucket(t.owner ?? '').transcodes += 1
+      for (const row of byAccount.values()) row.used = row.streams + row.transcodes
+      const accounts = [...byAccount.values()].sort((a, b) => b.used - a.used || a.username.localeCompare(b.username))
       res.json({
         ok: true,
         streams,
         streamCount: streams.length,
         transcodes: transcodes.length,
-        used: streams.length + transcodes.length
+        used: streams.length + transcodes.length,
+        accounts
       })
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Connection count failed' })
@@ -2999,6 +3037,8 @@ function resolveUpstreamUrl(relativeOrAbsolute: string, req: Request): string {
 }
 
 app.post('/api/transcode/start', requireAuth, (req, res) => {
+  // v0.102.0 — whose account this session belongs to, for the connection count's per-account bucketing.
+  const session = req.authSession as AuthSession
   const { sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex, videoTranscode, audioOnly, maxHeight } = req.body ?? {}
   // The viewer's quality choice (v0.75.0): only a sane positive integer is a cap — anything
   // else reads as "not set", so a malformed value can never reach the encoder's filter chain.
@@ -3047,7 +3087,8 @@ app.post('/api/transcode/start', requireAuth, (req, res) => {
       inputHeaders,
       false,
       Boolean(audioOnly),
-      maxHeightOverride
+      maxHeightOverride,
+      session.username
     )
     .then(({ playlistPath, subtitleTracks }) => {
       // Same reasoning as the desktop app's own transcode:start handler: the filename varies

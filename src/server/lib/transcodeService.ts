@@ -179,6 +179,10 @@ export interface TranscodeSession {
   // collecting further matches so the output section's own re-description is never mistaken
   // for additional source subtitle streams.
   inputStreamListEnded: boolean
+  /** Whose account started this (v0.102.0) — the connection count's per-account bucketing for
+   *  transcode sessions, which (unlike relayed browser playback) carry no Referer to key on.
+   *  Null when the caller did not say — the pre-v0.102.0 shape. */
+  owner: string | null
 }
 
 export const TRANSCODE_DIR_PREFIX = 'allisoniptv-transcode-'
@@ -511,6 +515,8 @@ export interface TranscodeService {
       /** Average output rate in bytes/second since the session started (null under 1s). */
       bytesPerSecond: number | null
       idleSeconds: number
+      // v0.102.0 — whose account started this, for per-account connection bucketing.
+      owner: string | null
     }>
   >
   /** Where segments land and how much room that filesystem has left. */
@@ -553,7 +559,12 @@ export interface TranscodeService {
      * deployment default. Validated by the route to a positive integer in sane bounds; here,
      * anything not finite-and-positive reads as "not set" rather than corrupting the filter.
      */
-    maxHeightOverride?: number | null
+    maxHeightOverride?: number | null,
+    /**
+     * Whose account asked for this session (v0.102.0) — so the connection count can attribute
+     * transcode sessions per account. Optional and purely informational: nothing gates on it.
+     */
+    owner?: string
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }>
   stopTranscode(sessionId: string): Promise<void>
   /** Whether a session exists in the live map — the dead-session signal (v0.87.0). ffmpeg's
@@ -705,7 +716,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
      * output the browser plays as a plain audio element — which is also the A/V clock.
      */
     audioOnly = false,
-    maxHeightOverride?: number | null
+    maxHeightOverride?: number | null,
+    owner?: string
   ): Promise<{ sessionId: string; playlistPath: string; subtitleTracks: SubtitleTrackInfo[] }> {
     // The viewer's cap only applies where a reshape is even possible (see the interface's own
     // doc); everywhere else the deployment profile stands exactly as before.
@@ -987,7 +999,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       lastServedAt: Date.now(),
       stderrTail: [],
       subtitleTracks: [],
-      inputStreamListEnded: false
+      inputStreamListEnded: false,
+      owner: owner ?? null
     }
     transcodeSessions.set(sessionId, session)
     // Ownership flag for the session directory: ffmpeg's exit handler must not clean up while
@@ -1163,7 +1176,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
           await rm(dir, { recursive: true, force: true }).catch(() => {})
           return startTranscode(
             sourceUrl, isVod, sessionId, subtitleStreamIndex, audioStreamIndex, videoTranscode, inputHeaders, true, audioOnly,
-            maxHeightOverride
+            maxHeightOverride, owner
           )
         }
         if (subtitleStreamIndex >= 0 && SUBTITLE_CODEC_INCOMPATIBLE_PATTERN.test(session.stderrTail.join('\n'))) {
@@ -1172,7 +1185,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
           // false (that is why this branch fired), so it is this flow's job to remove it.
           startSettled = true
           await rm(dir, { recursive: true, force: true }).catch(() => {})
-          return startTranscode(sourceUrl, isVod, sessionId, -1, audioStreamIndex, videoTranscode, undefined, false, audioOnly, maxHeightOverride)
+          return startTranscode(sourceUrl, isVod, sessionId, -1, audioStreamIndex, videoTranscode, undefined, false, audioOnly, maxHeightOverride, owner)
         }
         // The exit handler deliberately left the directory in place (the start flow owns it
         // until settled) — a failed start has no use for it, so clean it here.
@@ -1414,6 +1427,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       bytes: number
       bytesPerSecond: number | null
       idleSeconds: number
+      owner: string | null
     }>
   > {
     const now = Date.now()
@@ -1428,7 +1442,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
           hasPlaylist: existsSync(join(session.dir, 'playlist.m3u8')) || existsSync(join(session.dir, 'master.m3u8')),
           bytes,
           bytesPerSecond: averageBytesPerSecond(bytes, runningSeconds),
-          idleSeconds: Math.round((now - session.lastServedAt) / 1000)
+          idleSeconds: Math.round((now - session.lastServedAt) / 1000),
+          owner: session.owner
         }
       })
     )

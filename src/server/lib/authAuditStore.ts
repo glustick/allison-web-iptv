@@ -21,6 +21,17 @@ export function createAuthAuditStore(options: { dataDir: string }): AuthAuditPer
   const selectFor = db.db.prepare(
     'SELECT at, outcome, username, ip, user_agent AS userAgent FROM auth_audit WHERE lower(username) = lower(?) ORDER BY id DESC LIMIT ?'
   )
+  // The admin log's filters (v0.102.0): each side optional, composed. The conditions and the
+  // params are built together so a placeholder can never meet the wrong argument.
+  const selectFiltered = db.db.prepare(
+    'SELECT at, outcome, username, ip, user_agent AS userAgent FROM auth_audit WHERE lower(username) = lower(?) AND outcome = ? ORDER BY id DESC LIMIT ?'
+  )
+  const selectFilteredByUser = db.db.prepare(
+    'SELECT at, outcome, username, ip, user_agent AS userAgent FROM auth_audit WHERE lower(username) = lower(?) ORDER BY id DESC LIMIT ?'
+  )
+  const selectFilteredByOutcome = db.db.prepare(
+    'SELECT at, outcome, username, ip, user_agent AS userAgent FROM auth_audit WHERE outcome = ? ORDER BY id DESC LIMIT ?'
+  )
 
   return {
     append(entry) {
@@ -32,6 +43,18 @@ export function createAuthAuditStore(options: { dataDir: string }): AuthAuditPer
     },
     recentFor(username, limit) {
       return selectFor.all(username, limit) as AuthAuditEntry[]
+    },
+    recentFiltered(filter) {
+      if (filter.username && filter.outcome) {
+        return selectFiltered.all(filter.username, filter.outcome, filter.limit) as AuthAuditEntry[]
+      }
+      if (filter.username) {
+        return selectFilteredByUser.all(filter.username, filter.limit) as AuthAuditEntry[]
+      }
+      if (filter.outcome) {
+        return selectFilteredByOutcome.all(filter.outcome, filter.limit) as AuthAuditEntry[]
+      }
+      return select.all(filter.limit) as AuthAuditEntry[]
     }
   }
 }

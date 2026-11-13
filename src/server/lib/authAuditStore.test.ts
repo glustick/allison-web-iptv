@@ -49,3 +49,56 @@ describe('createAuthAuditStore', () => {
     expect(store.recent(1)[0].username).toBe(`u${AUTH_AUDIT_LIMIT + 24}`)
   })
 })
+
+describe('recentFiltered (v0.102.0)', () => {
+  it('filters by account, case-insensitively, through the durable store', () => {
+    const dir = dataDir()
+    const audit = createAuthAudit(200, createAuthAuditStore({ dataDir: dir }))
+    audit.record({ username: 'chris', ip: '1.1.1.1', userAgent: 'Safari', outcome: 'ok' })
+    audit.record({ username: 'Chris', ip: '1.1.1.1', userAgent: 'Safari', outcome: 'failed' })
+    audit.record({ username: 'sam', ip: '1.1.1.1', userAgent: 'Safari', outcome: 'ok' })
+    const rows = audit.recentFiltered({ username: 'CHRIS', limit: 10 })
+    expect(rows).toHaveLength(2)
+    expect(rows.every((row) => row.username.toLowerCase() === 'chris')).toBe(true)
+  })
+
+  it('filters by outcome alone', () => {
+    const dir = dataDir()
+    const audit = createAuthAudit(200, createAuthAuditStore({ dataDir: dir }))
+    audit.record({ ...entry, outcome: 'ok' })
+    audit.record({ ...entry, outcome: 'failed' })
+    audit.record({ ...entry, outcome: 'ok' })
+    expect(audit.recentFiltered({ outcome: 'failed', limit: 10 }).map((r) => r.outcome)).toEqual(['failed'])
+  })
+
+  it('composes account and outcome', () => {
+    const dir = dataDir()
+    const audit = createAuthAudit(200, createAuthAuditStore({ dataDir: dir }))
+    audit.record({ username: 'chris', ip: '1', userAgent: 'ua', outcome: 'ok' })
+    audit.record({ username: 'chris', ip: '1', userAgent: 'ua', outcome: 'failed' })
+    audit.record({ username: 'sam', ip: '1', userAgent: 'ua', outcome: 'failed' })
+    const rows = audit.recentFiltered({ username: 'chris', outcome: 'failed', limit: 10 })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ username: 'chris', outcome: 'failed' })
+  })
+
+  it('an empty filter is the unfiltered log', () => {
+    const dir = dataDir()
+    const audit = createAuthAudit(200, createAuthAuditStore({ dataDir: dir }))
+    audit.record({ ...entry, outcome: 'ok' })
+    audit.record({ ...entry, outcome: 'failed' })
+    expect(audit.recentFiltered({ limit: 10 })).toHaveLength(2)
+  })
+})
+
+describe('createAuthAudit.recentFiltered without a store (the ring)', () => {
+  it('filters the in-memory ring by both sides', () => {
+    const audit = createAuthAudit()
+    audit.record({ username: 'chris', ip: '1', userAgent: 'ua', outcome: 'ok' })
+    audit.record({ username: 'sam', ip: '1', userAgent: 'ua', outcome: 'ok' })
+    audit.record({ username: 'chris', ip: '1', userAgent: 'ua', outcome: 'logout' })
+    expect(audit.recentFiltered({ username: 'chris', limit: 10 })).toHaveLength(2)
+    expect(audit.recentFiltered({ outcome: 'logout', limit: 10 })).toHaveLength(1)
+    expect(audit.recentFiltered({ username: 'sam', outcome: 'logout', limit: 10 })).toHaveLength(0)
+  })
+})

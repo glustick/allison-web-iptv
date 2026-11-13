@@ -15,6 +15,29 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.102.0 — whose connections, whose sign-ins: the ops surfaces learn to attribute.**
+
+Two questions the admin surfaces could not answer, both asked in one round:
+
+**"The box says 4 connections — whose four?"** The connection count (v0.85.0) was a single total
+over every playing surface. The ledger now remembers *which account* authenticated each relayed
+stream (the playlist fetch names the owner; the segment Referers that follow carry no session, so
+they keep the remembered one), transcode sessions carry their owner from the start route, and
+`/api/iptv/connections` answers an `accounts` breakdown whose buckets always add up to the totals.
+The multi-view toolbar appends the attribution — " — chris 2, sam 1" — only when more than one
+account is actually holding connections; unattributed traffic is deliberately never given an
+invented name. `accountUsage` answers one account's row for any surface that wants it.
+
+**"Show me the failed sign-ins for one account."** The Auth log listed everything, filtered
+nothing. `/api/admin/audit` takes `?username=` and `?outcome=` (the outcome validated against
+AuthOutcome's own members — an unknown one answers empty, not everything), the store composes the
+two conditions in SQL, and the Auth log section gained an account search and an outcome select
+with a Clear button. The 30s poll carries the current filters forward.
+
+Tests: 1077 (19 new — ledger attribution 3, audit filters 8, client bucketing 4, query builder 7 —
+one ledger test rewritten rather than added, its fixture gained the `account` field). Typecheck,
+lint and both builds clean.
+
 **v0.101.0 — the film player speaks the same diagnostic language.**
 
 v0.100.0 gave the live player an in-app record of its recovery decisions; films and episodes were

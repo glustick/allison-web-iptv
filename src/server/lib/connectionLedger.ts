@@ -30,10 +30,14 @@ export interface ActiveConnection {
   key: string
   /** Milliseconds since the last request for this stream. */
   idleMs: number
+  /** Whose account the stream belongs to (v0.102.0) — the authenticated playlist fetch names
+   *  the owner; the segment Referers that follow carry no session, so they keep the remembered
+   *  one. Null only for a key nobody authenticated first, which the relay routes make rare. */
+  account: string | null
 }
 
 export interface ConnectionLedger {
-  record(key: string): void
+  record(key: string, account?: string): void
   /** Streams with activity inside the window, oldest activity last. Prunes as a side effect. */
   active(): ActiveConnection[]
 }
@@ -42,15 +46,18 @@ export function createConnectionLedger(deps: ConnectionLedgerDeps = {}): Connect
   const now = deps.now ?? Date.now
   const windowMs = deps.windowMs ?? DEFAULT_WINDOW_MS
   const maxEntries = deps.maxEntries ?? DEFAULT_MAX_ENTRIES
-  const entries = new Map<string, number>()
+  const entries = new Map<string, { at: number; account: string | null }>()
 
   return {
-    record(key: string): void {
+    record(key: string, account?: string): void {
       if (!key) return
+      // A record without an account (the proxy's segment Referer) must not erase the owner the
+      // authenticated playlist fetch recorded — the owner outlives the individual request.
+      const remembered = entries.get(key)?.account ?? null
       // Delete-then-set keeps Map iteration order = recency order, which is what makes both the
       // LRU cap and the oldest-first listing free.
       entries.delete(key)
-      entries.set(key, now())
+      entries.set(key, { at: now(), account: account ?? remembered })
       while (entries.size > maxEntries) {
         const oldest = entries.keys().next().value
         if (oldest === undefined) break
@@ -60,11 +67,11 @@ export function createConnectionLedger(deps: ConnectionLedgerDeps = {}): Connect
 
     active(): ActiveConnection[] {
       const current = now()
-      for (const [key, at] of entries) {
-        if (current - at >= windowMs) entries.delete(key)
+      for (const [key, entry] of entries) {
+        if (current - entry.at >= windowMs) entries.delete(key)
       }
       return [...entries.entries()]
-        .map(([key, at]) => ({ key, idleMs: current - at }))
+        .map(([key, entry]) => ({ key, idleMs: current - entry.at, account: entry.account }))
         .sort((a, b) => a.key.localeCompare(b.key))
     }
   }

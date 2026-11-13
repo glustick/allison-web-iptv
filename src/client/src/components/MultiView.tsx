@@ -9,7 +9,7 @@ import {
   type MultiViewLayout,
   type MultiViewSlot
 } from '../lib/multiViewPrefs'
-import { connectionStatus, useConnectionCount, type ConnectionSnapshot, type PlaylistLimits } from '../lib/connectionBudget'
+import { accountAttribution, connectionStatus, useConnectionCount, type ConnectionSnapshot, type PlaylistLimits } from '../lib/connectionBudget'
 import { useMultiViewTile } from '../lib/useMultiViewTile'
 import { MultiViewPicker } from './MultiViewPicker'
 
@@ -169,7 +169,7 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
             </button>
           ))}
         </span>
-        <span className="epg-note">{connectionNote.text}</span>
+        <span className="epg-note">{connectionNote.text}{accountAttribution(connections)}</span>
       </div>
       <div className={`multiview-grid multiview-grid--${prefs.layout}`}>
         {prefs.slots.map((slot, index) =>

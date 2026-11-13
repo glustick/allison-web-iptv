@@ -26,6 +26,9 @@ export interface ConnectionSnapshot {
   used: number
   streamCount: number
   transcodes: number
+  /** The same count bucketed by account (v0.102.0) — '' is traffic the server could not
+   *  attribute. Absent on older servers; everything that reads it must survive its absence. */
+  accounts?: Array<{ username: string; streams: number; transcodes: number; used: number }>
 }
 
 export interface ConnectionStatus {
@@ -123,13 +126,30 @@ export function useConnectionCount(pollMs = 15_000): ConnectionSnapshot | null {
     const poll = (): void => {
       fetch('/api/iptv/connections')
         .then((res) => (res.ok ? res.json() : null))
-        .then((body: { used?: number; streamCount?: number; transcodes?: number } | null) => {
+        .then(
+          (
+            body: {
+              used?: number
+              streamCount?: number
+              transcodes?: number
+              accounts?: Array<{ username: string; streams: number; transcodes: number; used: number }>
+            } | null
+          ) => {
           if (!active || !body || typeof body.used !== 'number') return
           // A later answer never overwrites a newer one with an older poll's shape.
           setSnapshot({
             used: body.used,
             streamCount: body.streamCount ?? body.used,
-            transcodes: body.transcodes ?? 0
+            transcodes: body.transcodes ?? 0,
+            accounts: Array.isArray(body.accounts)
+              ? body.accounts.filter(
+                  (row): row is { username: string; streams: number; transcodes: number; used: number } =>
+                    typeof row?.username === 'string' &&
+                    Number.isFinite(row.streams) &&
+                    Number.isFinite(row.transcodes) &&
+                    Number.isFinite(row.used)
+                )
+              : undefined
           })
         })
         .catch(() => {})
@@ -143,4 +163,29 @@ export function useConnectionCount(pollMs = 15_000): ConnectionSnapshot | null {
   }, [pollMs])
 
   return snapshot
+}
+
+// v0.102.0 — the per-account attribution. The server buckets the same count by who holds it;
+// these helpers turn the buckets into the one sentence that answers "the box says 4 — whose
+// four?" without changing what any existing surface already says.
+
+/** One account's row out of the snapshot, or null when the server did not report one. */
+export function accountUsage(
+  snapshot: ConnectionSnapshot | null,
+  username: string
+): { username: string; streams: number; transcodes: number; used: number } | null {
+  return snapshot?.accounts?.find((row) => row.username === username) ?? null
+}
+
+/**
+ * The attribution suffix for the toolbar's sentence — " — chris 2, sam 1". Empty when it would
+ * say nothing: a snapshot without buckets (older server, or the poll has not answered), a
+ * single account holding everything (the totals already answer), or nobody holding anything.
+ * Unattributed traffic ('') is deliberately NOT named — it is usually the same household's
+ * pre-upgrade traffic, and an invented name would be worse than silence.
+ */
+export function accountAttribution(snapshot: ConnectionSnapshot | null): string {
+  const named = (snapshot?.accounts ?? []).filter((row) => row.username !== '' && row.used > 0)
+  if (named.length < 2) return ''
+  return ` — ${named.map((row) => `${row.username} ${row.used}`).join(', ')}`
 }

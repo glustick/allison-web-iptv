@@ -38,6 +38,11 @@ export interface AuthAudit {
    * full trail stays admin-only; this is the same rows, filtered to the caller.
    */
   recentFor(username: string, limit?: number): AuthAuditEntry[]
+  /**
+   * The admin log's filters (v0.102.0): any combination of account and outcome, newest first.
+   * Either side of the filter is optional — `recentFiltered({})` is `recent()` with a limit.
+   */
+  recentFiltered(filter: { username?: string; outcome?: AuthOutcome; limit?: number }): AuthAuditEntry[]
 }
 
 /** Where entries outlive the process. Optional, so the ring can be unit-tested on its own. */
@@ -45,6 +50,7 @@ export interface AuthAuditPersistence {
   append(entry: AuthAuditEntry): void
   recent(limit: number): AuthAuditEntry[]
   recentFor(username: string, limit: number): AuthAuditEntry[]
+  recentFiltered(filter: { username?: string; outcome?: AuthOutcome; limit: number }): AuthAuditEntry[]
 }
 
 export function createAuthAudit(limit = 200, persistence?: AuthAuditPersistence): AuthAudit {
@@ -97,6 +103,24 @@ export function createAuthAudit(limit = 200, persistence?: AuthAuditPersistence)
       // back through is short too — an honest consequence of running without the store.
       return entries
         .filter((entry) => entry.username.toLowerCase() === username.toLowerCase())
+        .slice(-wanted)
+        .reverse()
+    },
+    recentFiltered(filter) {
+      const wanted = Math.max(1, Math.min(filter.limit ?? 50, 500))
+      if (persistence) {
+        try {
+          return persistence.recentFiltered({ ...filter, limit: wanted })
+        } catch (err) {
+          console.error('[auth] could not read the audit trail:', err instanceof Error ? err.message : String(err))
+        }
+      }
+      return entries
+        .filter(
+          (entry) =>
+            (!filter.username || entry.username.toLowerCase() === filter.username.toLowerCase()) &&
+            (!filter.outcome || entry.outcome === filter.outcome)
+        )
         .slice(-wanted)
         .reverse()
     }
