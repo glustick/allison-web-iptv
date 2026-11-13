@@ -15,6 +15,25 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.104.0 — a login ends by TIME too, not only by silence.**
+
+The "durable session service" item's last honest gap: the idle TTL ends sessions that go quiet,
+and a tab left on a playing channel heartbeats every ~15 seconds — which IS activity — so an
+always-on viewer's login lived for ever. That was an accident of what counts as activity, not a
+security property. Sessions now also end an absolute time after they BEGAN (default 30 days,
+however active), the viewer signs in again, and that is the whole ceremony.
+
+`lib/sessionLifetime.ts` (pure): `resolveMaxSessionAgeMs` reads `AUTH_MAX_SESSION_AGE_HOURS`
+(garbage/zero/negative → the 30-day default — a typo must shorten nobody's sessions to nothing
+and lengthen nobody's to forever); `sessionIsExpired` judges the login clock only, so it composes
+with the idle rule without either knowing the other; `expiredRestoredSessions` picks the rows a
+restart must not revive — and the boot removes those rows, so the cap survives restarts by
+construction rather than re-firing every boot. Enforced at the lazy lookup (checked first and
+quietly — a month-old login expiring is routine, not the event a failed guess is), the periodic
+sweep, and the restore.
+
+Tests: 1098 (7 new). Typecheck, lint and both builds clean.
+
 **v0.103.0 — the films stop before the disk does: a bound on retained VOD output.**
 
 The design question v0.12.2 left open — a film deliberately keeps every segment so the viewer can

@@ -47,7 +47,7 @@ describe('sessionIsExpired', () => {
 
 describe('expiredRestoredSessions', () => {
   it('names the rows a restart must not bring back', () => {
-    const now = 30 * DAY
+    const now = 31 * DAY
     const restored = [
       { tokenHash: 'fresh', session: { loginAt: 29 * DAY, lastSeenAt: now } },
       { tokenHash: 'ancient', session: { loginAt: 0, lastSeenAt: now } }

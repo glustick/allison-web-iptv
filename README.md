@@ -6,7 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.103.0 — the films stop before the disk does)
+## Current state (v0.104.0 — a login ends by time too, not only by silence)
+
+Sessions gained an **absolute lifetime cap** (default 30 days, `AUTH_MAX_SESSION_AGE_HOURS`):
+the idle TTL only ends logins that go quiet, and an always-on tab heartbeats for ever — so a
+login now also ends a bounded time after it began, however active it stayed. Enforced at lookup,
+sweep and boot restore (expired rows are not revived, and removed). 1098 tests; typecheck, lint
+and both builds clean. Not browser-verified.
+
+## Previous release (v0.103.0 — the films stop before the disk does)
 
 A bound on **retained VOD output**: films keep every segment (that is what makes them scrubbable),
 so the total across open films is what can fill a disk — 10 GB+ per long feature. The bound
