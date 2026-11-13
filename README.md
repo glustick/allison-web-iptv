@@ -6,7 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.102.0 — whose connections, whose sign-ins)
+## Current state (v0.103.0 — the films stop before the disk does)
+
+A bound on **retained VOD output**: films keep every segment (that is what makes them scrubbable),
+so the total across open films is what can fill a disk — 10 GB+ per long feature. The bound
+(`TRANSCODE_VOD_MAX_TOTAL_BYTES`, default 16 GiB, `0` disables) refuses a new film when the total
+is spent and evicts the **most-idle** film when it goes over — an abandoned one goes before a
+watched one, and a film seconds old is never touched (a grace window). Scrubbing within an open
+film is unchanged. 1091 tests; typecheck, lint and both builds clean. Not browser-verified.
+
+## Previous release (v0.102.0 — whose connections, whose sign-ins)
 
 The ops surfaces learned to attribute. The connection count answers an **accounts breakdown** —
 the ledger remembers which account authenticated each relayed stream, transcode sessions carry

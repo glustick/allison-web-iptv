@@ -2001,3 +2001,51 @@ describe('ffmpeg failure-line summary', () => {
     expect(describeFfmpegFailure(tail)).toBe(`${tail[0]}\n${tail[1].trim()}`)
   })
 })
+
+// v0.103.0 — the VOD disk bound. A film session keeps every segment it produces, so the total
+// retained across open films is the number that can fill the disk long before the free-space
+// guardrail's own floor. These two tests are the bound's two halves: a start is refused when the
+// retained total is already at it, and the sweep evicts the most-idle film session when the total
+// goes over — never a live session, which holds kilobytes.
+describe('VOD disk bound', () => {
+  it('refuses a second film when the first has the bound spent', async () => {
+    const service = track(
+      makeService({ resolveFfmpegPath: resolverFor(FAKE_FFMPEG), vodBudgetBytes: 1 })
+    )
+    await withFakeFfmpegMode('success', () => service.startTranscode('film-one.mkv', true, 'film-one'))
+    // The fake ffmpeg's playlist is a real file on disk, so film-one already holds bytes — a
+    // 1-byte bound is spent by anything. The refusal names the bound and the way out.
+    await expect(
+      withFakeFfmpegMode('success', () => service.startTranscode('film-two.mkv', true, 'film-two'))
+    ).rejects.toThrow(/disk bound.*TRANSCODE_VOD_MAX_TOTAL_BYTES/s)
+    // Live is never the bound's business: a live start beside a spent film bound is fine.
+    await withFakeFfmpegMode('success', () => service.startTranscode('live.m3u8', false, 'live-one'))
+    const stats = await service.stats()
+    expect(stats.find((s) => s.sessionId === 'film-two')).toBeUndefined()
+    expect(stats.find((s) => s.sessionId === 'live-one')).toBeDefined()
+  })
+
+  it('the sweep evicts a film session that pushes the total over the bound', async () => {
+    const service = track(
+      makeService({
+        resolveFfmpegPath: resolverFor(FAKE_FFMPEG),
+        vodBudgetBytes: 1,
+        vodEvictionGraceMs: 0,
+        idleSweepMs: 50,
+        // The idle sweep must not be the thing that stops it — a long idle window proves the
+        // eviction (not idleness) did.
+        idleStopMs: 60_000
+      })
+    )
+    const { playlistPath } = await withFakeFfmpegMode('success', () =>
+      service.startTranscode('film-one.mkv', true, 'film-over-bound')
+    )
+    expect(existsSync(playlistPath)).toBe(true)
+
+    // A film holding bytes against a 1 KiB bound, freshly served — over on the next sweep.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const stats = await service.stats()
+    expect(stats.find((s) => s.sessionId === 'film-over-bound')).toBeUndefined()
+    expect(existsSync(dirname(playlistPath))).toBe(false)
+  })
+})

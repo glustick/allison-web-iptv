@@ -64,6 +64,7 @@ import {
 import { createAuthAudit, type AuthOutcome } from './lib/authAudit.js'
 import { createAuthAuditStore } from './lib/authAuditStore.js'
 import { createAuthSessionStore, hashAuthToken } from './lib/authSessionStore.js'
+import { expiredRestoredSessions, resolveMaxSessionAgeMs, sessionIsExpired } from './lib/sessionLifetime.js'
 import { revocableSessionTokens } from './lib/singleSession.js'
 import { stripHopByHopHeaders } from './lib/relayHeaders.js'
 import { buildTimeshiftPath, TimeshiftRequestError } from './lib/timeshift.js'
@@ -144,6 +145,11 @@ export interface AuthSession {
 // client's activity heartbeat (every ~15s while playing) keeps streaming sessions alive.
 const AUTH_IDLE_TTL_MS = Number(process.env.AUTH_IDLE_TTL_HOURS ?? 24) * 60 * 60 * 1000
 
+// Absolute lifetime cap (v0.104.0): the idle TTL only ends sessions that go quiet, and an
+// always-on tab heartbeats for ever — so a login ALSO ends this long after it began, however
+// active it stayed. AUTH_MAX_SESSION_AGE_HOURS overrides; the viewer just signs in again.
+const AUTH_MAX_SESSION_AGE_MS = resolveMaxSessionAgeMs(process.env.AUTH_MAX_SESSION_AGE_HOURS)
+
 // Keyed by hashAuthToken(token), never the raw token: every authenticated request hashes its
 // cookie once, and the admin surfaces (sessions list, force-logout) work on the irreversible
 // hash, so a raw credential can no longer leak into the DOM or a network response.
@@ -179,6 +185,12 @@ function getAuthSession(req: { headers?: IncomingMessage['headers'] }): AuthSess
   // authenticated request into a database write.
   if (session) authSessionStore.touch(token, Date.now())
   if (!session) return null
+  // The absolute cap is checked FIRST and quietly: an expired-by-age login is routine (the
+  // viewer signed in a month ago), not the security event a failed guess is.
+  if (sessionIsExpired(Date.now(), session, AUTH_MAX_SESSION_AGE_MS)) {
+    destroyAuthSession(tokenHash)
+    return null
+  }
   if (Date.now() - session.lastSeenAt > AUTH_IDLE_TTL_MS) {
     // The full teardown, not a bare map delete: the proxy target (and, via the store call
     // inside, the row) used to survive this branch — a small leak the sweep eventually cleaned.
@@ -268,7 +280,12 @@ function destroySessionsOfUsername(username: string): number {
 setInterval(() => {
   const now = Date.now()
   for (const [tokenHash, session] of authSessions) {
-    if (now - session.lastSeenAt > AUTH_IDLE_TTL_MS) destroyAuthSession(tokenHash)
+    if (
+      sessionIsExpired(now, session, AUTH_MAX_SESSION_AGE_MS) ||
+      now - session.lastSeenAt > AUTH_IDLE_TTL_MS
+    ) {
+      destroyAuthSession(tokenHash)
+    }
   }
   authSessionStore.prune(now)
 }, 10 * 60 * 1000).unref()
@@ -3228,7 +3245,17 @@ app.get('*', (_req, res) => {
 // Bring back every session that is still inside its idle window. This is the whole point of the
 // store: a deploy recreates the container, and without this everyone would be signed out — which cost
 // real time on 2026-09-17 when a sequence of releases meant signing in again after each one.
-for (const restored of authSessionStore.load(Date.now())) {
+const restoredRows = authSessionStore.load(Date.now())
+// The cap survives restarts by construction: a row older than the cap is not just skipped, its
+// row is removed — otherwise the next boot would re-meet it and the sweep would re-remove it
+// for ever.
+const expiredByAge = expiredRestoredSessions(Date.now(), restoredRows, AUTH_MAX_SESSION_AGE_MS)
+for (const tokenHash of expiredByAge) authSessionStore.removeByHash(tokenHash)
+if (expiredByAge.size > 0) {
+  console.log(`[auth] ${expiredByAge.size} restored session(s) were past the lifetime cap — not revived`)
+}
+for (const restored of restoredRows) {
+  if (expiredByAge.has(restored.tokenHash)) continue
   // Keyed by the stored hash; the decrypted raw token is used only to re-derive that hash and
   // then dropped — the map never holds a raw credential (v0.83.0).
   authSessions.set(restored.tokenHash, {

@@ -15,6 +15,27 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.103.0 — the films stop before the disk does: a bound on retained VOD output.**
+
+The design question v0.12.2 left open — a film deliberately keeps every segment so the viewer can
+scrub, so a 2h20 feature holds 10 GB+ for its runtime; cap the window or accept it? — is answered,
+with a third shape: **bound the TOTAL, not any one film's window.** Scrubbing anywhere in an
+open film stays intact; what gives way is the most-idle film first. An abandoned-but-buffered film
+nobody has fetched for minutes goes before the film someone is watching, and a film seconds into
+its transcode is never the sweep's business (a grace window — its bytes have not arrived yet, and
+stopping mid-start reads as "Transcode cancelled" to the caller who just asked for it, a race this
+release's own test caught).
+
+The pieces: `lib/vodBudget.ts` (pure — `resolveVodBudgetBytes` reads
+`TRANSCODE_VOD_MAX_TOTAL_BYTES`, plain bytes or KiB/MiB/GiB suffixes, default 16 GiB, `0` disables,
+garbage falls back to the default rather than silently off; `vodStartRefusal`; `planVodEvictions`,
+most-idle-first, byte-tiebreak, live sessions never candidates). Refusal at VOD start names the
+bound and the knob; the idle sweep evicts over-bound films after its own idle stops. Sessions now
+carry `isVod` and `startSettled`, and stats exposes both (`isVod` in the table rows).
+
+Tests: 1091 (14 new on the module, 2 service-level — the refusal and the sweep eviction — plus the
+grace-window shapes). Typecheck, lint and both builds clean.
+
 **v0.102.0 — whose connections, whose sign-ins: the ops surfaces learn to attribute.**
 
 Two questions the admin surfaces could not answer, both asked in one round:

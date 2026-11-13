@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises'
 import { filesystemSpace, isLowSpace, transcodeSpaceRefusal } from './diskSpace.js'
 import { sessionIsIdle } from './transcodeIdle.js'
+import { VOD_EVICTION_GRACE_MS, planVodEvictions, resolveVodBudgetBytes, vodStartRefusal } from './vodBudget.js'
 import { parseTsProgramStreams } from './tsProgramMap.js'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
@@ -183,6 +184,14 @@ export interface TranscodeSession {
    *  transcode sessions, which (unlike relayed browser playback) carry no Referer to key on.
    *  Null when the caller did not say — the pre-v0.102.0 shape. */
   owner: string | null
+  /** Whether this session keeps every segment it produces (VOD) — the disk-bound sweep's
+   *  candidate set (v0.103.0). Live sessions hold kilobytes and are never its business. */
+  isVod: boolean
+  /** Whether startTranscode has settled for this session (v0.103.0). The disk-bound sweep must
+   *  not stop a session whose start is still deciding its own outcome — a stop mid-start reads
+   *  as 'Transcode cancelled' to the caller who asked for it (measured by this release's own
+   *  test). Flipped true at every success return; failures remove the session anyway. */
+  startSettled: boolean
 }
 
 export const TRANSCODE_DIR_PREFIX = 'allisoniptv-transcode-'
@@ -501,6 +510,13 @@ export interface TranscodeServiceDeps {
   // How often that is checked. Short enough to free a connection promptly, long enough that the
   // sweep is invisible (one existsSync per live session).
   idleSweepMs?: number
+  // The total bytes of retained VOD output this deployment tolerates (v0.103.0). Defaults to
+  // resolveVodBudgetBytes(TRANSCODE_VOD_MAX_TOTAL_BYTES) — 16 GiB, 0 disables — overridable so
+  // the sweep's eviction can be tested without writing gigabytes.
+  vodBudgetBytes?: number
+  // How young a film session must be before the disk-bound sweep may evict it. Default
+  // VOD_EVICTION_GRACE_MS — overridable so the sweep's eviction can be tested in milliseconds.
+  vodEvictionGraceMs?: number
 }
 
 export interface TranscodeService {
@@ -517,6 +533,9 @@ export interface TranscodeService {
       idleSeconds: number
       // v0.102.0 — whose account started this, for per-account connection bucketing.
       owner: string | null
+      // v0.103.0 — whether this session retains its whole output (a film), the number the
+      // disk bound manages.
+      isVod: boolean
     }>
   >
   /** Where segments land and how much room that filesystem has left. */
@@ -656,6 +675,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
   const videoEncodeProfile = deps.videoEncodeProfile ?? resolveVideoEncodeProfile()
   const idleStopMs = deps.idleStopMs ?? 120_000
   const idleSweepMs = deps.idleSweepMs ?? 15_000
+  const vodBudgetBytes = deps.vodBudgetBytes ?? resolveVodBudgetBytes(process.env.TRANSCODE_VOD_MAX_TOTAL_BYTES)
+  const vodEvictionGraceMs = deps.vodEvictionGraceMs ?? VOD_EVICTION_GRACE_MS
 
   const transcodeSessions = new Map<string, TranscodeSession>()
 
@@ -738,6 +759,21 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     if (spaceRefusal) {
       console.error(`[transcode] refusing to start: ${spaceRefusal}`)
       throw new Error(spaceRefusal)
+    }
+    // The VOD disk bound (v0.103.0): the free-space guardrail above protects the filesystem as a
+    // whole; this one bounds what retained FILM output alone may hold, so a household of open
+    // films cannot walk the disk to that guardrail. Refusing here names the bound and the way
+    // out — the message is the whole UI this feature has, and it is enough.
+    if (isVod) {
+      let retainedVodBytes = 0
+      for (const existing of transcodeSessions.values()) {
+        if (existing.isVod) retainedVodBytes += await directorySize(existing.dir)
+      }
+      const budgetRefusal = vodStartRefusal(retainedVodBytes, vodBudgetBytes)
+      if (budgetRefusal) {
+        console.error(`[transcode] refusing to start: ${budgetRefusal}`)
+        throw new Error(budgetRefusal)
+      }
     }
     // A stop() for this exact sessionId could already have arrived (the renderer switched away
     // before this call even started) — nothing to spawn in that case.
@@ -1000,7 +1036,9 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       stderrTail: [],
       subtitleTracks: [],
       inputStreamListEnded: false,
-      owner: owner ?? null
+      owner: owner ?? null,
+      isVod,
+      startSettled: false
     }
     transcodeSessions.set(sessionId, session)
     // Ownership flag for the session directory: ffmpeg's exit handler must not clean up while
@@ -1119,6 +1157,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         const mappedTrackExists = session.subtitleTracks.some((t) => t.index === subtitleStreamIndex && t.supported)
         if (!isVod || !mappedTrackExists) {
           startSettled = true
+          session.startSettled = true
           return { sessionId, playlistPath: playlistFile, subtitleTracks: session.subtitleTracks }
         }
         videoReadyAt = Date.now()
@@ -1142,9 +1181,11 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
             ].join('\n'),
             'utf8'
           )
+          session.startSettled = true
           return { sessionId, playlistPath: masterPlaylistFile, subtitleTracks: session.subtitleTracks }
         }
         if (Date.now() - videoReadyAt > subtitleGraceMs) {
+          session.startSettled = true
           return { sessionId, playlistPath: playlistFile, subtitleTracks: session.subtitleTracks }
         }
       }
@@ -1153,6 +1194,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
         // video/audio playlist but before the subtitle rendition catches up — that's still a
         // successful transcode, just one that isn't getting subtitles, not a failure.
         if (videoReadyAt !== null) {
+          session.startSettled = true
           return { sessionId, playlistPath: playlistFile, subtitleTracks: session.subtitleTracks }
         }
         // Confirmed live against a real file (see SUBTITLE_CODEC_INCOMPATIBLE_PATTERN's own
@@ -1197,7 +1239,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
     }
     if (videoReadyAt !== null) {
       startSettled = true
-      return { sessionId, playlistPath: playlistFile, subtitleTracks: session.subtitleTracks }
+      session.startSettled = true
+          return { sessionId, playlistPath: playlistFile, subtitleTracks: session.subtitleTracks }
     }
     startSettled = true
     await stopTranscode(sessionId)
@@ -1281,6 +1324,30 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       await stopTranscode(sessionId).catch((err) => {
         console.error('[transcode] idle stop failed:', err instanceof Error ? err.message : String(err))
       })
+    }
+    // The VOD disk bound's other half (v0.103.0): evict the most-idle FILM sessions until the
+    // retained total fits. Runs after the idle stops above so abandoned sessions are already
+    // gone — what remains over the bound is genuinely being held by films nobody is fetching
+    // most. An actively-watched film is only ever evicted when it is itself the most idle.
+    if (vodBudgetBytes > 0) {
+      const vodSessions = [...transcodeSessions.entries()].filter(([, session]) => session.isVod && session.startSettled)
+      if (vodSessions.length > 0) {
+        let retainedVodBytes = 0
+        const candidates = []
+        for (const [sessionId, session] of vodSessions) {
+          const bytes = await directorySize(session.dir)
+          retainedVodBytes += bytes
+          candidates.push({ sessionId, isVod: true, idleMs: now - session.lastServedAt, bytes, ageMs: now - session.startedAt })
+        }
+        for (const sessionId of planVodEvictions(candidates, retainedVodBytes, vodBudgetBytes, vodEvictionGraceMs)) {
+          console.log(
+            `[transcode] stopping session ${sessionId.slice(0, 8)}… — retained film output is over the deployment's disk bound`
+          )
+          await stopTranscode(sessionId).catch((err) => {
+            console.error('[transcode] disk-bound stop failed:', err instanceof Error ? err.message : String(err))
+          })
+        }
+      }
     }
   }
 
@@ -1428,6 +1495,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       bytesPerSecond: number | null
       idleSeconds: number
       owner: string | null
+      isVod: boolean
     }>
   > {
     const now = Date.now()
@@ -1443,7 +1511,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
           bytes,
           bytesPerSecond: averageBytesPerSecond(bytes, runningSeconds),
           idleSeconds: Math.round((now - session.lastServedAt) / 1000),
-          owner: session.owner
+          owner: session.owner,
+          isVod: session.isVod
         }
       })
     )
