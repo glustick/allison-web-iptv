@@ -15,6 +15,31 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.106.0 — the gate the browser can actually fail: audio beyond Dolby, and a UI check CI runs.**
+
+**The undecodable-audio check knew exactly one family.** It asked the browser about Dolby (`ac-3`/
+`ec-3`) because that was the reported silent-drop; everything else — Sunderland's **HE-AACv2**
+(`mp4a.40.29`) included — passed unasked, so a browser that genuinely could not decode it had no path
+to the conversion tier. `probeableAudioCodec` now whitelists the codecs an fMP4 probe can ask about
+honestly: the Dolby spellings (unchanged), the `mp4a.40.x` ISO audio object types (AAC-LC `.2`,
+HE-AAC `.5`, HE-AACv2 `.29`), and the registered names `opus`/`flac`/`mp3`/`vorbis`/`alac`. Anything
+unmapped stays permissive — a made-up codec string makes a browser answer "no" for reasons of syntax,
+and a false "can't decode" spends a provider connection on a guess.
+
+**The scripted browser pass now runs by default.** The `ui` CI job builds the app, starts the fixture
+provider and the server exactly the way the local rig does (fixture addressed by the runner's LAN IP —
+the app refuses loopback providers by design), sets up the account, and runs `verify-ui.mjs` in real
+Chrome; the image build waits on it. The check that found the v0.100.0 `logEvent` recursion is now the
+one a future regression cannot ship past.
+
+Also corrected this round: the "provider isn't responding in the live player" entry was stale (the
+live ladder has carried the 502/504 sentence for a while), and the **Safari HEVC question was
+re-attempted and blocked by the provider itself** — every HEVC candidate channel is currently serving
+the byte-identical H.264 placeholder (same md5), so there is no real HEVC segment to measure until the
+provider recovers; the v0.105.0 probe stands ready.
+
+Tests: 1107 (5 new on the widened gate). Typecheck, lint and both builds clean.
+
 **v0.105.0 — the verification round: a scripted browser pass, and the bug it found on its first run.**
 
 The ROADMAP has asked since September for "a single scripted login → guide → play check that a
@@ -2857,10 +2882,11 @@ BBC One HD, Scripps, US local ABC/CW affiliates, NFHS, 24/7 channels):
   stream for audio reasons only considers `ac3`/`eac3`. Sunderland's feed carries **aac HE-AACv2**, which
   is a different question entirely and is not covered — the same blind spot the E-AC-3 fix closed for
   Dolby codecs, still open for everything else.
-- **Say "the provider isn't responding" in the live player too.** *Partly done.* v0.31.0 made the
-  server answer **504** with a sentence when the provider goes silent, and the *movie* player shows it.
-  The live player still surfaces hls.js's own generic network error for the same condition, so a
-  provider outage reads as an app fault on live channels.
+- **Say "the provider isn't responding" in the live player too.** *Shipped — and the entry below was
+  stale; the live player's terminal network branch has carried the same 502/504 → "The provider is not
+  responding — it may be down. Try again in a few minutes." mapping as the movie player's for a while
+  (LivePlayer's NETWORK_ERROR ladder, beside the 400/403 conversion branch). Corrected 2026-11-14 so it
+  is not proposed again.*
 
 ### 2. EPG & guide quality
 
@@ -3002,7 +3028,12 @@ v0.12.0.
   with one console line and no other symptom. Every server-side check passed while that was true. A
   script that loads the app in a real browser and asserts a `blob:` worker can be created **and answer**
   turns a silent multi-hour failure into a one-line result.
-- **Verify on Safari, not only Chrome.** *Partly closed 2026-11-07 (v0.91.0).* The harnesses drive
+- **Verify on Safari, not only Chrome.** *The HEVC half was re-attempted 2026-11-14 and is blocked by
+  the provider, not by us: every HEVC candidate channel (668, 41627, 41666, 41672, 41729, 684) served
+  the byte-identical 563 KB H.264 1080p placeholder (same md5 — the "repeating placeholder on every
+  channel" state first measured 2026-09-21). There was no real HEVC segment to hand AVFoundation. The
+  v0.105.0 probe in admin → System is the tool for the moment the provider serves real HEVC again; run
+  it in Safari on a UHD channel and the verdict settles the question.* *Partly closed 2026-11-07 (v0.91.0).* The harnesses drive
   Chrome; the user's browser is Safari, and two of the four real bugs on 2026-09-17 were **invisible
   in Chrome**. Measured in real Safari by screen capture: native HLS playback works (a 40s H.264
   stream played to the end), and **the v0.89.0 subtitle styling renders in Safari** — both were

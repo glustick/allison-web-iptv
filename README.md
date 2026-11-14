@@ -6,7 +6,18 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.105.0 — the verification round)
+## Current state (v0.106.0 — the gate the browser can actually fail)
+
+The undecodable-audio check **widened beyond Dolby**: the AAC family (`mp4a.40.x` — HE-AACv2
+included, Sunderland's blind spot) and the other named HLS codecs are now probed against the
+browser before a channel plays unconverted; unmapped strings stay permissive so nothing converts
+on a guess. And the scripted browser pass **moved into CI** — an `ui` job runs `verify-ui.mjs`
+against the fixture rig in real Chrome on every push, and the image build waits on it, so "not
+browser-verified" stops being the default state of a release. (The Safari HEVC question was
+re-attempted this round and is provider-blocked: every channel currently serves the identical
+H.264 placeholder.) 1107 tests; typecheck, lint and both builds clean.
+
+## Previous release (v0.105.0 — the verification round)
 
 `verify-ui.mjs` grew into the scripted browser pass the ROADMAP has asked for since September —
 login → play → watched toggle → the v0.102 attribution surfaces → this release's probe — and its

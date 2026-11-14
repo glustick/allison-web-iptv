@@ -40,8 +40,58 @@ jobs:
 
       - run: npm test
 
+  # The scripted browser pass (v0.106.0): the same verify-ui.mjs that found the v0.100.0
+  # logEvent recursion, run on every push that builds an image — so "not browser-verified"
+  # stops being the default state of a release. It runs the whole app from the built
+  # artifacts (dist + public) against the fixture provider, in real Chrome, and its failures
+  # block the image exactly like a failing unit test would.
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build && npm run build:client
+
+      # The fixture provider must be addressed by a non-loopback IP: the app refuses provider
+      # URLs that point at loopback (SSRF posture), which on a runner means its own LAN IP.
+      - name: Start the fixture provider
+        run: |
+          RUNNER_IP="$(hostname -I | awk '{print $1}')"
+          echo "RUNNER_IP=$RUNNER_IP" >> "$GITHUB_ENV"
+          FFMPEG="$PWD/node_modules/ffmpeg-static/ffmpeg" PORT=8091 node scripts/fixture-provider.mjs > /tmp/fixture.log 2>&1 &
+          sleep 8
+          curl -fsS "http://$RUNNER_IP:8091/player_api.php?username=demo&password=demo&action=get_live_categories" > /dev/null
+
+      - name: Start the app
+        run: |
+          DATA_DIR="$(mktemp -d)" PORT=8099 SESSION_SECRET=ci-ui-secret node dist/server/index.js > /tmp/app.log 2>&1 &
+          sleep 5
+          curl -fsS http://127.0.0.1:8099/api/health > /dev/null
+          curl -fsS -X POST http://127.0.0.1:8099/api/auth/setup -H 'content-type: application/json' \
+            -d '{"username":"chris","password":"rig-test-1","role":"admin"}' > /dev/null
+          curl -fsS -c /tmp/cookies -X POST http://127.0.0.1:8099/api/auth/login -H 'content-type: application/json' \
+            -d '{"username":"chris","password":"rig-test-1"}' > /dev/null
+          curl -fsS -b /tmp/cookies -X POST http://127.0.0.1:8099/api/session/save -H 'content-type: application/json' \
+            -d "{"server":"http://$RUNNER_IP:8091","username":"demo","password":"demo"}" > /dev/null
+
+      - name: Run the scripted UI check
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+        run: node scripts/verify-ui.mjs
+
+      - name: App log on failure
+        if: failure()
+        run: tail -100 /tmp/app.log || true
+
   build-and-push:
-    needs: check
+    needs: [check, ui]
     runs-on: ubuntu-latest
     permissions:
       contents: read
