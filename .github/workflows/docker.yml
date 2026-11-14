@@ -86,6 +86,8 @@ jobs:
       - name: Run the scripted UI check
         env:
           CHROME_BIN: /usr/bin/google-chrome
+          APP_USER: chris
+          APP_PASS: rig-test-1
         run: node scripts/verify-ui.mjs
 
       - name: App log on failure
