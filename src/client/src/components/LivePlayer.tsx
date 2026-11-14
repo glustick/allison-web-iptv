@@ -121,7 +121,11 @@ export function LivePlayer({
   const [playbackEvents, setPlaybackEvents] = useState<PlaybackEvent[]>([])
   const [showDiagnostics, setShowDiagnostics] = useState(false)
   const logEvent = useCallback((message: string): void => {
-    logEvent(message)
+    // The console line and the panel entry, both — the panel is for the viewer, the console
+    // for DevTools users, and neither was supposed to replace the other. (This body once called
+    // ITSELF where the console.warn stands — infinite recursion, found by verify-ui's rig run:
+    // the first recovery decision overflowed the stack and took the app down with it.)
+    console.warn(message)
     setPlaybackEvents((previous) => appendEvent(previous, message, new Date().toLocaleTimeString()))
   }, [])
   // A transient, self-clearing line for events the player handles on its own (a dead session

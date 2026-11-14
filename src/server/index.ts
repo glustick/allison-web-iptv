@@ -15,7 +15,7 @@ import { createTranscodeService, prepareTranscodeDir, resolveTranscodeDir } from
 import { dataDirRecoveryHint, describeDataDirMount } from './lib/dataDirMount.js'
 import { filesystemSpace, isLowSpace , LOW_SPACE_THRESHOLD_BYTES } from './lib/diskSpace.js'
 import { createFfmpegResolver } from './lib/ffmpegResolver.js'
-import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue } from './lib/sessionState.js'
+import { AUTH_COOKIE_NAME, getTargetForRequest, normalizeProxyTargetBase, parseCookieValue, resolveTargetBase } from './lib/sessionState.js'
 import {
   decryptSecret,
   decryptSessionCredentials,
@@ -327,29 +327,33 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 // clients and for single-user setups, but the actual active target lives on the auth session.
 function getProxyTargetBase(req?: IncomingMessage): string | null {
   if (!req) return defaultProxyTargetBase ? normalizeProxyTargetBase(defaultProxyTargetBase) : null
-  const target = getTargetForRequest(req.headers, defaultProxyTargetBase, sessionProxyTargets)
-  if (target) return normalizeProxyTargetBase(target)
-
-  // Fall back to the account's own saved provider. Without this, a session that never POSTed
-  // /api/connect — a fresh login, a reloaded player, or any request after a server restart —
-  // had no per-session target and every stream request failed with "No upstream Xtream server
-  // configured" (502). Found live: the provider was healthy and answered fine directly while
-  // the app rejected its own player's playlist requests, which the player could only retry
-  // silently — the "freezes and never recovers" report. The resolved target is cached on the
-  // session so the lookup happens once.
+  // The account's own saved provider (v0.105.0's scoping fix): the fallback that resolves a
+  // fresh login's provider — a session that never POSTed /api/connect after signing in, a
+  // reloaded player, or any request after a server restart (the "freezes and never recovers"
+  // report this fallback was written for). It is resolved HERE rather than left to the default
+  // because the process default is simply whichever account saved or connected LAST: before the
+  // fix, a fresh login's first proxy request rode that last writer's provider, and this very
+  // fallback was unreachable in exactly the multi-account case it existed for. The precedence
+  // itself lives in resolveTargetBase (sessionState.ts, pure + tested); the caching on the
+  // session stays here so the resolution happens once.
   const session = getAuthSession(req)
-  if (!session) return null
-  const stored = usersStore.getIptvCredentials(session.username)
-  if (!stored) return null
-  try {
-    const credentials = credentialsFromStored(stored)
-    if (!credentials) return null
-    const normalized = normalizeProxyTargetBase(credentials.server)
-    sessionProxyTargets.set(session.tokenHash, normalized)
-    return normalized
-  } catch {
-    return null
+  let ownStored: string | null = null
+  if (session) {
+    const stored = usersStore.getIptvCredentials(session.username)
+    if (stored) {
+      try {
+        const credentials = credentialsFromStored(stored)
+        if (credentials) ownStored = credentials.server
+      } catch {
+        ownStored = null
+      }
+    }
   }
+  const target = resolveTargetBase(req.headers, sessionProxyTargets, defaultProxyTargetBase, ownStored)
+  if (target && ownStored && target === normalizeProxyTargetBase(ownStored) && session) {
+    sessionProxyTargets.set(session.tokenHash, target)
+  }
+  return target
 }
 
 /**

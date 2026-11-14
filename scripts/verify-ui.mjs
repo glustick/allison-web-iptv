@@ -179,7 +179,80 @@ try {
   ).catch(() => {})
   console.log('  watched filter hides and restores the row')
 
-  console.log('PASS  login → Live TV → play → playhead advancing → watched toggle → filter')
+  // --- v0.102 attribution: the connections endpoint answers per-account buckets -------------
+  // While a stream is playing is the moment the count is non-zero. The page's own cookie rides
+  // the fetch, so this is the authenticated shape the toolbar reads.
+  // waitFor polls a synchronous expression, so the fetch stashes its answer on the window and
+  // the poll waits for it to land.
+  await d.waitFor(
+    `(() => { if (window.__conn) return true; fetch('/api/iptv/connections').then((r) => r.json()).then((j) => { window.__conn = j }).catch(() => { window.__conn = { error: true } }); return Boolean(window.__conn); })()`,
+    { timeout: 8000 }
+  ).catch(() => fail('connections endpoint did not answer', d))
+  const connections = await d.waitFor(`window.__conn`, { timeout: 3000 })
+  const bucketSum = (connections.accounts ?? []).reduce((sum, row) => sum + row.used, 0)
+  if (!Array.isArray(connections.accounts)) fail(`connections endpoint answers no accounts array: ${JSON.stringify(connections).slice(0, 200)}`, d)
+  if (bucketSum !== connections.used) fail(`account buckets (${bucketSum}) do not add up to the total (${connections.used})`, d)
+  if (connections.used < 1) fail(`connection count is ${connections.used} while a stream is playing — the ledger is not counting`, d)
+  console.log(`  connections: ${connections.used} in use, ${connections.accounts.length} account bucket(s), buckets sum to the total`)
+
+  // --- v0.102 audit filters: the Auth log narrows to one outcome -----------------------------
+  // Admin and System open in their OWN tab (v0.16.0), so there is no tab to click here —
+  // their ?tab= deep links navigate this page to the same screens instead.
+  const isAdmin = await d.waitFor(`document.querySelector('.tab')?.textContent`, { timeout: 3000 }).catch(() => null)
+  if (typeof isAdmin !== 'string') {
+    console.log('  (no tab bar — skipping the Auth log filter check)')
+  } else {
+    await d.goto(`${BASE}/?tab=admin`)
+    // The deep link's first render can land on the login screen while the session is still
+    // being confirmed — the same sign-in as at the top, run again when needed.
+    // The deep link's first render can flash the login screen while the session is being
+    // confirmed — content first, and only a PERSISTENT login card (the admin console has
+    // password fields of its own) is worth signing into again.
+    let auditReady = await d.waitFor(`Boolean(document.querySelector('.audit-outcome'))`, { timeout: 8000 }).catch(() => false)
+    if (!auditReady) {
+      const loginStays = await d.waitFor(`Boolean(document.querySelector('.login-card input[type="password"]'))`, { timeout: 4000 }).catch(() => false)
+      if (!loginStays) fail('Admin tab rendered neither the Auth log nor a login screen', d)
+      await setInput(d, '.login-card input:not([type="password"])', USER)
+      await setInput(d, '.login-card input[type="password"]', PASS)
+      await clickByText(d, 'Sign in')
+      auditReady = await d.waitFor(`Boolean(document.querySelector('.audit-outcome'))`, { timeout: 10000 }).catch(() => false)
+      if (!auditReady) fail('Auth log did not render after signing in', d)
+    }
+    const before = await d.waitFor(`document.querySelectorAll('.audit-outcome').length`, { timeout: 5000 })
+    // The outcome filter is the select whose options are outcomes ('logout' is never a role) —
+    // the admin console's role dropdown comes first in the DOM and is not this control.
+    const choseOutcome = await d.waitFor(
+      `(() => { const sel = [...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'logout')); if (!sel) return false; sel.value = 'ok'; sel.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`,
+      { timeout: 8000 }
+    )
+    if (!choseOutcome) fail('Auth log has no outcome filter select', d)
+    await d.waitFor(
+      `(() => { const rows = [...document.querySelectorAll('.audit-outcome')]; return rows.length > 0 && rows.every((r) => r.textContent.trim() === 'ok'); })()`,
+      { timeout: 8000 }
+    ).catch(() => fail('filtering the Auth log to outcome=ok left non-ok rows (or none)', d))
+    const after = await d.waitFor(`document.querySelectorAll('.audit-outcome').length`, { timeout: 5000 })
+    console.log(`  Auth log filter: ${before} rows → ${after} rows, all outcome=ok`)
+  }
+
+  // --- v0.105 Safari HEVC probe: the section is present in System -----------------------------
+  await d.goto(`${BASE}/?tab=system`)
+  {
+    const systemReady = await d.waitFor(`[...document.querySelectorAll('h2')].some((h) => h.textContent.trim() === 'Safari HEVC probe') || Boolean(document.querySelector('.login-card input[type="password"]'))`, { timeout: 8000 }).catch(() => false)
+    if (!systemReady) fail('System tab rendered neither its panels nor a login screen', d)
+    const loginStays = await d.waitFor(`Boolean(document.querySelector('.login-card input[type="password"]'))`, { timeout: 2000 }).catch(() => false)
+    if (loginStays) {
+      await setInput(d, '.login-card input:not([type="password"])', USER)
+      await setInput(d, '.login-card input[type="password"]', PASS)
+      await clickByText(d, 'Sign in')
+      await d.goto(`${BASE}/?tab=system`)
+    }
+    await d
+      .waitFor(`[...document.querySelectorAll('h2')].some((h) => h.textContent.trim() === 'Safari HEVC probe')`, { timeout: 10000 })
+      .catch(() => fail('Safari HEVC probe section missing from System', d))
+    console.log('  Safari HEVC probe section present in System')
+  }
+
+  console.log('PASS  login → Live TV → play → playhead advancing → watched toggle → filter → attribution → audit filters → probe present')
 } catch (err) {
   console.error(`FAIL  ${err instanceof Error ? err.message : String(err)}`)
   process.exitCode = 1

@@ -6,7 +6,20 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.104.0 — a login ends by time too, not only by silence)
+## Current state (v0.105.0 — the verification round)
+
+`verify-ui.mjs` grew into the scripted browser pass the ROADMAP has asked for since September —
+login → play → watched toggle → the v0.102 attribution surfaces → this release's probe — and its
+**first run found a real bug**: v0.100.0's `logEvent` in LivePlayer called itself instead of
+`console.warn`, so the first recovery decision a live stream hit crashed the whole app (five
+unverified releases carried it). Fixed. The round also fixed the scoping audit's one finding
+(a fresh login's first proxy request rode the last-connected account's provider;
+`resolveTargetBase` now owns the precedence) and added the **Safari HEVC probe** in admin →
+System — one real provider stream, native pipeline, copyable verdict — to settle the
+open-since-September Safari/HEVC question. Release journal backfilled v0.89–v0.104.
+1102 tests; typecheck, lint and both builds clean. **Browser-verified — that was the point.**
+
+## Previous release (v0.104.0 — a login ends by time too, not only by silence)
 
 Sessions gained an **absolute lifetime cap** (default 30 days, `AUTH_MAX_SESSION_AGE_HOURS`):
 the idle TTL only ends logins that go quiet, and an always-on tab heartbeats for ever — so a

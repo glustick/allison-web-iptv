@@ -15,6 +15,49 @@ the original scoping writeup this project started from.
 
 ## Current release
 
+**v0.105.0 — the verification round: a scripted browser pass, and the bug it found on its first run.**
+
+The ROADMAP has asked since September for "a single scripted login → guide → play check that a
+future change runs by default." `verify-ui.mjs` became that this round, extended past its
+v0.95.0 shape (login → play → watched toggle) with the v0.102 surfaces — the connections
+endpoint's account buckets (asserted live, mid-playback: buckets sum to the total, count ≥ 1)
+and the Auth log's outcome filter (rows narrow, every remaining row outcome=ok) — plus presence
+of this release's Safari HEVC probe. Admin/System are reached through their `?tab=` deep links
+(they open in their own tab by design), with a content-first wait because the deep link's first
+render can flash the login screen while the session is confirmed. **Full PASS twice in a row**
+against the fixture rig (fixture-provider :8091 + a local-disk app copy — the SMB share's stale
+reads make running the built app from the repo itself untrustworthy).
+
+**And it found a real bug on its first run: the app crashed on render.** v0.100.0's
+`logEvent` in LivePlayer called *itself* where `console.warn(message)` belonged — infinite
+recursion, stack overflow, the error boundary's "[app] uncaught render error" — meaning **the
+first recovery decision any live stream hit would have crashed the whole app since v0.100.0**
+(shipped, deployed, and unverified: five releases carried it). The film player (v0.101.0) got
+the same wiring right; only LivePlayer's copy recursed. One line, now with a comment that names
+the failure so it is not reintroduced by a well-meaning "simplify".
+
+Two more pieces:
+
+- **The scoping audit's one real finding, fixed.** A fresh login's first proxy request rode
+  `defaultProxyTargetBase` — simply *whichever account saved or connected last* — because that
+  default outranked the account's-own-provider fallback, which was unreachable in exactly the
+  multi-account case it was written for. `resolveTargetBase` (sessionState.ts, pure + tested)
+  now owns the precedence: override header → session's target → the caller's OWN saved provider
+  → legacy default. EPG sources were audited too: a deliberate system setting, admin-written,
+  documented as such — no change.
+- **The Safari HEVC probe** (admin → System): plays one real provider playlist through the app's
+  own relay in the browser's native HLS pipeline — no ffmpeg, no hls.js — and reports metadata /
+  video-track / playhead / the browser's own refusal as copyable lines. This is the measurement
+  that settles whether Safari plays the provider's own HEVC packaging (open since 2026-09-21);
+  run it in Safari on a UHD channel and read the verdict.
+
+Also this round, outside any release: **the release journal was backfilled** — tags existed but
+GitHub Releases stopped at v0.88.0; v0.89.0 through v0.104.0 now have releases with notes taken
+from this file, and the app's own version-check reads a real "latest" again.
+
+Tests: 1102 (4 new, on resolveTargetBase). Typecheck, lint and both builds clean. Browser-verified
+— that is the whole point of this round.
+
 **v0.104.0 — a login ends by TIME too, not only by silence.**
 
 The "durable session service" item's last honest gap: the idle TTL ends sessions that go quiet,

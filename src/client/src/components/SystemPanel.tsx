@@ -30,6 +30,7 @@ function formatBytesShort(bytes: number): string {
 import { sourceLabel } from '../lib/sourceLabel'
 import { fetchIptvConfig, saveIptvConfig } from '../lib/appAuth'
 import { DecoderCheck } from './DecoderCheck'
+import { SafariHevcProbe } from './SafariHevcProbe'
 import { ClientDecodeLoop } from './ClientDecodeLoop'
 export function SystemPanel(): JSX.Element {
   const [health, setHealth] = useState<HealthReport | null>(null)
@@ -510,6 +511,7 @@ export function SystemPanel(): JSX.Element {
       </section>
 
       <DecoderCheck />
+      <SafariHevcProbe />
       <ClientDecodeLoop />
     </div>
   )
