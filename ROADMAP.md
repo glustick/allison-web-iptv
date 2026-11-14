@@ -8,6 +8,22 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.108.0 — programme search in the guide.**
+
+The channel list has had search since the beginning; "what's on" had none. The EPG grid's
+header now carries a programme search: two characters or more, debounced 350ms, answered by a
+new `GET /api/epg/search` that filters the SAME aggregated window `/api/epg` builds (starting
+an hour in the past, so an in-progress programme is findable by its own title) by substring on
+the title, bounded at 200, sorted by start. A result click pans the grid to the programme
+(`jumpOffsetFor` places it half an hour inside the window — the grid snaps, so approximate is
+fine) and scrolls its channel's row into view via the row's composite-key data attribute.
+
+`lib/epgSearch.ts` (pure, tested) owns the jump arithmetic, the one-phrase time description
+("20:00 – 21:00", weekday named when it is not today), and resolving a result key back to an
+on-screen channel row.
+
+Tests: 1125 (6 new). Typecheck, lint and both builds clean.
+
 **v0.107.0 — auto-release at the ceiling: the grid stops its own idlest tile.**
 
 At an account's provider-stated limit the picker's answer used to be a disabled row and an

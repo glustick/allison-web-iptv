@@ -35,7 +35,7 @@ import {
   type Playlist
 } from './lib/playlists.js'
 import { createUsersStore, UserStoreError, validatePassword, validateRole, validateUsername, type UserRole } from './lib/usersStore.js'
-import { createEpgService, type EpgServiceCredentials } from './lib/epgService.js'
+import { createEpgService, type EpgServiceCredentials, type EpgWindowProgramme } from './lib/epgService.js'
 import { createSportsFixturesService } from './lib/sportsFixtures.js'
 import { createSportsFixturesStore } from './lib/sportsFixturesStore.js'
 import { createSystemEpgStore } from './lib/systemEpg.js'
@@ -2719,6 +2719,51 @@ app.get('/api/epg', requireAuth, (req, res) => {
     } catch (err) {
       console.error('[epg] aggregate failed:', err)
       res.status(502).json({ error: err instanceof Error ? err.message : 'EPG aggregation failed' })
+    }
+  })()
+})
+
+// Programme search across the aggregated guide (v0.108.0): the channel list has had search
+// since the beginning; "what's on" had none. The same aggregated window /api/epg builds is
+// filtered by title server-side, so the client gets bounded, already-matched listings rather
+// than re-deriving the whole guide. The window deliberately starts an hour in the past so an
+// in-progress programme is findable by its own title.
+app.get('/api/epg/search', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
+    const session = req.authSession as AuthSession
+    const credentials = resolveEpgCredentials(req)
+    if (!credentials) {
+      res.status(401).json({ error: 'No IPTV config on this account — finish the IPTV setup first' })
+      return
+    }
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : ''
+    if (query.length < 2) {
+      res.status(400).json({ error: 'Give the search at least two characters' })
+      return
+    }
+    const startMs = Number.isFinite(Number(req.query.start)) ? Number(req.query.start) : Date.now() - 60 * 60 * 1000
+    const endMs = Number.isFinite(Number(req.query.end)) ? Number(req.query.end) : Date.now() + 24 * 60 * 60 * 1000
+    try {
+      const window = await epgService.aggregatePlaylists({ playlists: allAccountPlaylists(session.username, credentials), epgUrls: credentials.epgUrls, startMs, endMs })
+      // REGISTERED BEFORE the /:streamId catch-all is not needed here (no path params), but the
+      // same aggregate answers; filter every stream's window listings by title, newest-start
+      // last, bounded — the guide's own ordering is by time and the client re-sorts nothing.
+      const needle = query.toLowerCase()
+      const results: Array<{ key: string; programme: EpgWindowProgramme }> = []
+      for (const [key, programmes] of Object.entries(window.listings)) {
+        for (const programme of programmes) {
+          if (programme.title.toLowerCase().includes(needle)) {
+            results.push({ key, programme })
+            if (results.length >= 200) break
+          }
+        }
+        if (results.length >= 200) break
+      }
+      results.sort((a, b) => a.programme.startMs - b.programme.startMs)
+      res.json({ ok: true, query, results })
+    } catch (err) {
+      console.error('[epg] search failed:', err)
+      res.status(502).json({ error: err instanceof Error ? err.message : 'EPG search failed' })
     }
   })()
 })

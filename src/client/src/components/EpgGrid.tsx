@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { List, useListRef } from 'react-window'
 import { pct } from '../lib/epgTime'
 import { clampScrollOffset, EPG_PAN_SNAP_MS, offsetAfterArrowKey, panAxis, windowOffsetAfterDrag } from '../lib/epgPan'
+import { channelForResult, describeResultTime, jumpOffsetFor, type EpgSearchResult } from '../lib/epgSearch'
 import { catchupForProgramme, restartRequestForProgramme } from '../lib/catchup'
 import type { Session } from '../lib/appAuth'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
@@ -17,7 +18,7 @@ import {
 import { useAggregatedEpg, type AggregatedEpgData } from '../lib/useAggregatedEpg'
 import { GuideMappingPicker } from './GuideMappingPicker'
 import { loadSavedDimension, saveDimension, useResizableDimension } from '../lib/useResizableDimension'
-import { playlistRefOf, type LiveStream, type ShortEpgProgram } from '../lib/types'
+import { liveChannelKey, playlistRefOf, type LiveStream, type ShortEpgProgram } from '../lib/types'
 import type { AlsoOnMatch } from '../lib/crossPlaylist'
 
 const HOUR_MS = 3_600_000
@@ -169,7 +170,7 @@ function EpgRow({
   const showNowLine = now >= windowStart && now <= windowEnd
 
   return (
-    <div style={style} className={isActive ? 'epg-row active' : 'epg-row'}>
+    <div style={style} className={isActive ? 'epg-row active' : 'epg-row'} data-epg-key={liveChannelKey(channel)}>
       <button
         className="epg-row-channel"
         onPointerDown={onTimelinePointerDown}
@@ -371,6 +372,11 @@ export function EpgGrid({
 }): JSX.Element {
   const [now, setNow] = useState(() => Date.now())
   const [windowOffsetMs, setWindowOffsetMs] = useState(0)
+  // v0.108.0 — programme search: debounced title search over the aggregated guide; a result
+  // click pans the window to the programme and scrolls its channel's row into view.
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<EpgSearchResult[] | null>(null)
+  const [searching, setSearching] = useState(false)
   const listRef = useListRef(null)
   // Drag-to-pan (was deliberately left out of the first pass — see this file's own doc comment
   // below). The offset lives in a ref as well as state so the drag reads the value it started
@@ -378,6 +384,37 @@ export function EpgGrid({
   // rather than a state update per move.
   const offsetRef = useRef(0)
   offsetRef.current = windowOffsetMs
+  useEffect(() => {
+    const query = searchQuery.trim()
+    if (query.length < 2) {
+      setSearchResults(null)
+      setSearching(false)
+      return
+    }
+    setSearching(true)
+    const timer = window.setTimeout(() => {
+      fetch(`/api/epg/search?q=${encodeURIComponent(query)}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((body: { results?: EpgSearchResult[] } | null) => {
+          setSearchResults(body?.results ?? [])
+        })
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearching(false))
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [searchQuery])
+  const jumpToResult = (result: EpgSearchResult): void => {
+    setSearchQuery('')
+    setWindowOffsetMs(jumpOffsetFor(result.programme.startMs, Date.now()))
+    const channel = channelForResult(channels, result.key)
+    if (channel) {
+      // The rows are keyed by composite channel key; scroll the found one into view a beat
+      // after the pan so React has re-rendered the window.
+      window.setTimeout(() => {
+        document.querySelector(`[data-epg-key="${CSS.escape(result.key)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      }, 60)
+    }
+  }
   const panRef = useRef<{
     startX: number
     startY: number
@@ -591,6 +628,45 @@ export function EpgGrid({
           <button onClick={() => setWindowOffsetMs((o) => o + HOUR_MS)} title="Later">
             ▶
           </button>
+        </div>
+        <div className="epg-grid-nav epg-programme-search" style={{ position: 'relative' }}>
+          <input
+            type="search"
+            placeholder="Search programmes…"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            aria-label="Search programmes in the guide"
+            style={{ width: '11rem' }}
+          />
+          {searchQuery.trim().length >= 2 && (
+            <div
+              style={{
+                position: 'absolute', top: '100%', left: 0, zIndex: 30, maxHeight: '16rem', overflowY: 'auto',
+                background: 'var(--panel, #16182a)', border: '1px solid var(--border, #2a2d45)',
+                borderRadius: '6px', minWidth: '20rem', marginTop: '4px'
+              }}
+            >
+              {searching && searchResults === null && <div className="epg-note" style={{ padding: '0.4rem' }}>Searching…</div>}
+              {searchResults !== null && searchResults.length === 0 && (
+                <div className="epg-note" style={{ padding: '0.4rem' }}>Nothing on in the next day{searchQuery.trim().length > 0 ? ` matches “${searchQuery.trim()}”` : ''}.</div>
+              )}
+              {searchResults?.slice(0, 30).map((result, index) => {
+                const channel = channelForResult(channels, result.key)
+                return (
+                  <button
+                    key={`${result.key}:${result.programme.startMs}:${index}`}
+                    type="button"
+                    onClick={() => jumpToResult(result)}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.35rem 0.5rem', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+                  >
+                    <strong>{result.programme.title}</strong>
+                    <span className="epg-note"> {describeResultTime(result.programme.startMs, result.programme.stopMs, Date.now())}</span>
+                    {channel && <span className="epg-note"> · {channel.name}</span>}
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
         <div
           className="epg-time-header-track"

@@ -6,7 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.107.0 — auto-release at the ceiling)
+## Current state (v0.108.0 — programme search in the guide)
+
+The EPG grid gained a **programme search**: type a title, see everything matching across the
+aggregated guide for the next day (in-progress programmes included), and a click pans the grid
+to the programme and scrolls its channel's row into view. Server-side title filtering over the
+same window the guide builds, bounded and sorted by start. 1125 tests; typecheck, lint and both
+builds clean.
+
+## Previous release (v0.107.0 — auto-release at the ceiling)
 
 At an account's provider-stated limit, adding a multi-view tile now **stops that account's
 idlest tile automatically** (toolbar toggle, default on, and the toolbar names the tile it
