@@ -29,6 +29,9 @@ export interface ConnectionSnapshot {
   /** The same count bucketed by account (v0.102.0) — '' is traffic the server could not
    *  attribute. Absent on older servers; everything that reads it must survive its absence. */
   accounts?: Array<{ username: string; streams: number; transcodes: number; used: number }>
+  /** The individual active streams (v0.107.0) — key + idle reading, the auto-release planner's
+   *  input. Absent on older servers; read it with ?? []. */
+  streams?: Array<{ key: string; idleMs: number; account: string | null }>
 }
 
 export interface ConnectionStatus {
@@ -133,6 +136,7 @@ export function useConnectionCount(pollMs = 15_000): ConnectionSnapshot | null {
               streamCount?: number
               transcodes?: number
               accounts?: Array<{ username: string; streams: number; transcodes: number; used: number }>
+              streams?: Array<{ key: string; idleMs: number; account: string | null }>
             } | null
           ) => {
           if (!active || !body || typeof body.used !== 'number') return
@@ -141,6 +145,12 @@ export function useConnectionCount(pollMs = 15_000): ConnectionSnapshot | null {
             used: body.used,
             streamCount: body.streamCount ?? body.used,
             transcodes: body.transcodes ?? 0,
+            streams: Array.isArray(body.streams)
+              ? body.streams.filter(
+                  (row): row is { key: string; idleMs: number; account: string | null } =>
+                    typeof row?.key === 'string' && Number.isFinite(row.idleMs)
+                )
+              : undefined,
             accounts: Array.isArray(body.accounts)
               ? body.accounts.filter(
                   (row): row is { username: string; streams: number; transcodes: number; used: number } =>

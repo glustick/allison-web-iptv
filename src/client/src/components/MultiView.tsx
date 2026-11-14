@@ -10,6 +10,7 @@ import {
   type MultiViewSlot
 } from '../lib/multiViewPrefs'
 import { accountAttribution, connectionStatus, useConnectionCount, type ConnectionSnapshot, type PlaylistLimits } from '../lib/connectionBudget'
+import { planAutoRelease, tileLedgerKey, type ReleaseCandidate } from '../lib/connectionRelease'
 import { useMultiViewTile } from '../lib/useMultiViewTile'
 import { MultiViewPicker } from './MultiViewPicker'
 
@@ -117,6 +118,13 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
   // The live count behind the toolbar's sentence and the picker's warning (v0.85.0) — polled
   // only while the grid is mounted, which is the only surface that adds connections in bulk.
   const connections: ConnectionSnapshot | null = useConnectionCount()
+  // v0.107.0 — what the last auto-release stopped, shown in the toolbar until it fades.
+  const [releaseNote, setReleaseNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (!releaseNote) return
+    const timer = window.setTimeout(() => setReleaseNote(null), 8000)
+    return () => window.clearTimeout(timer)
+  }, [releaseNote])
   // The primary's own number when the provider stated one: the sentence says it exactly instead
   // of "about 2" (v0.86.0). '' is the primary's key in the limits map.
   const connectionNote = connectionStatus(connections, limits[''] ?? null)
@@ -132,14 +140,14 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
   const setLayout = (layout: MultiViewLayout): void => {
     // A dropped tile's audio goes with it; the surviving indices keep their meaning.
     setActiveAudio((current) => (current !== null && current >= layout ? null : current))
-    setPrefs((prev) => ({ layout, slots: resizeSlots(prev.slots, layout) }))
+    setPrefs((prev) => ({ ...prev, layout, slots: resizeSlots(prev.slots, layout) }))
   }
 
   const assign = (index: number, slot: MultiViewSlot): void => {
     setPrefs((prev) => {
       const slots = resizeSlots([...prev.slots], prev.layout)
       slots[index] = slot
-      return { layout: prev.layout, slots }
+      return { ...prev, slots }
     })
     setPickingSlot(null)
   }
@@ -148,9 +156,35 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
     setPrefs((prev) => {
       const slots = resizeSlots([...prev.slots], prev.layout)
       slots[index] = null
-      return { layout: prev.layout, slots }
+      return { ...prev, slots }
     })
     if (activeAudio === index) setActiveAudio(null)
+  }
+
+  // v0.107.0 — auto-release at the account's ceiling. Called by the picker when the row it is
+  // about to assign belongs to an account already AT its provider-stated limit: stop that
+  // account's idlest tile so the new one can play, and say which tile went. False when there is
+  // nothing worth stopping (no plan) — the picker then falls back to the old blocked row.
+  const autoReleaseFor = (accountKey: string, channelName: string): boolean => {
+    const candidates: ReleaseCandidate[] = prefs.slots
+      .map((slot, index) => (slot && (slot.playlistId ?? '') === accountKey ? { slot, index } : null))
+      .filter((entry): entry is { slot: MultiViewSlot; index: number } => entry !== null)
+      .map(({ slot, index }) => ({
+        slotIndex: index,
+        slot,
+        idleMs: (connections?.streams ?? []).find((stream) => stream.key === tileLedgerKey(slot))?.idleMs ?? null,
+        isAudible: activeAudio === index
+      }))
+    const plan = planAutoRelease(
+      candidates,
+      candidates.length,
+      limits[accountKey] ?? null,
+      channelName
+    )
+    if (!plan) return false
+    remove(plan.slotIndex)
+    setReleaseNote(plan.note)
+    return true
   }
 
   return (
@@ -169,7 +203,16 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
             </button>
           ))}
         </span>
+        <button
+          type="button"
+          className="admin-small-btn"
+          title={prefs.autoRelease ? 'At an account\'s provider limit, adding a tile stops that account\'s idlest tile automatically' : 'Auto-release at the limit is off — rows stay blocked at the account\'s provider limit'}
+          onClick={() => setPrefs((prev) => ({ ...prev, autoRelease: !prev.autoRelease }))}
+        >
+          {prefs.autoRelease ? 'Auto-release ✓' : 'Auto-release ✕'}
+        </button>
         <span className="epg-note">{connectionNote.text}{accountAttribution(connections)}</span>
+        {releaseNote && <span className="epg-note">{releaseNote}</span>}
       </div>
       <div className={`multiview-grid multiview-grid--${prefs.layout}`}>
         {prefs.slots.map((slot, index) =>
@@ -210,6 +253,8 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
           connections={connections}
           limits={limits}
           slots={prefs.slots}
+          autoRelease={prefs.autoRelease}
+          onAutoRelease={autoReleaseFor}
           onAssign={(slot) => assign(pickingSlot, slot)}
           onClose={() => setPickingSlot(null)}
         />

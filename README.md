@@ -6,7 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.106.0 — the gate the browser can actually fail)
+## Current state (v0.107.0 — auto-release at the ceiling)
+
+At an account's provider-stated limit, adding a multi-view tile now **stops that account's
+idlest tile automatically** (toolbar toggle, default on, and the toolbar names the tile it
+stopped) instead of showing a blocked row. Only known ceilings act; the audible tile is never
+the one stopped. 1119 tests; typecheck, lint and both builds clean.
+
+## Previous release (v0.106.0 — the gate the browser can actually fail)
 
 The undecodable-audio check **widened beyond Dolby**: the AAC family (`mp4a.40.x` — HE-AACv2
 included, Sunderland's blind spot) and the other named HLS codecs are now probed against the

@@ -33,6 +33,12 @@ export interface MultiViewPickerProps {
   limits: PlaylistLimits
   /** The current tile set — an account's own tiles are the connections it is holding. */
   slots: Array<MultiViewSlot | null>
+  /** v0.107.0 — auto-release at the ceiling: when ON, a row whose account is at its KNOWN
+   *  provider limit stays clickable if the grid can stop one of that account's tiles for it. */
+  autoRelease: boolean
+  /** Stops the account's idlest tile (MultiView's planner) — returns false when there is
+   *  nothing worth stopping, in which case the row keeps its old blocked shape. */
+  onAutoRelease: (accountKey: string, channelName: string) => boolean
   onAssign: (slot: MultiViewSlot) => void
   onClose: () => void
 }
@@ -58,6 +64,8 @@ export function MultiViewPicker({
   connections,
   limits,
   slots,
+  autoRelease,
+  onAutoRelease,
   onAssign,
   onClose
 }: MultiViewPickerProps): JSX.Element {
@@ -180,7 +188,11 @@ export function MultiViewPicker({
             // Judged against the row's OWN account: its tiles so far vs its provider limit.
             const accountKey = row.playlistId ?? ''
             const gate = tileGate(accountTileUsage(slots, accountKey), limits[accountKey] ?? null, connections)
-            const blocked = gate === 'block'
+            // v0.107.0 — a blocked account's rows stay clickable when auto-release can clear one
+            // of ITS OWN tiles for the newcomer; the click tries the release first and falls back
+            // to the old blocked shape when the planner says there is nothing worth stopping.
+            const releasable = gate === 'block' && autoRelease
+            const blocked = gate === 'block' && !releasable
             return (
             <button
               type="button"
@@ -190,11 +202,14 @@ export function MultiViewPicker({
               title={
                 blocked
                   ? `This account already holds ${accountTileUsage(slots, accountKey)} of its ${limits[accountKey]} allowed connections — remove one of its tiles first.`
-                  : undefined
+                  : releasable
+                    ? `This account is at its ${limits[accountKey]}-stream limit — its idlest tile will be stopped so this can play.`
+                    : undefined
               }
-              onClick={() =>
+              onClick={() => {
+                if (releasable && !onAutoRelease(accountKey, row.name)) return
                 onAssign({ streamId: row.streamId, name: row.name, playlistId: row.playlistId })
-              }
+              }}
             >
               <span className="multiview-picker-name">
                 {row.icon ? <img src={row.icon} alt="" loading="lazy" /> : null}
@@ -202,6 +217,7 @@ export function MultiViewPicker({
               </span>
               {row.playlistLabel ? <span className="multiview-picker-badge">{row.playlistLabel}</span> : null}
               {blocked ? <span className="multiview-picker-badge">at limit</span> : null}
+              {releasable ? <span className="multiview-picker-badge">auto-stops idlest</span> : null}
             </button>
             )
           })}

@@ -27,9 +27,16 @@ export interface MultiViewSlot {
 export interface MultiViewPrefs {
   layout: MultiViewLayout
   slots: Array<MultiViewSlot | null>
+  /**
+   * Whether adding a tile to an account already AT its provider-stated limit may stop that
+   * account's idlest tile automatically (v0.107.0) — the alternative is the blocked row and a
+   * hunt for the holding tab. Default ON: tiles are muted background surfaces and the toolbar
+   * says which one went.
+   */
+  autoRelease: boolean
 }
 
-export const DEFAULT_MULTI_VIEW_PREFS: MultiViewPrefs = { layout: 2, slots: [null, null] }
+export const DEFAULT_MULTI_VIEW_PREFS: MultiViewPrefs = { layout: 2, slots: [null, null], autoRelease: true }
 
 /**
  * Grow pads with empty slots, shrink drops the overflow — the desktop store's resize semantics,
@@ -66,10 +73,13 @@ export function loadMultiViewPrefs(storage: Pick<Storage, 'getItem'> | null = sa
   try {
     const raw = storage.getItem(KEY)
     if (!raw) return DEFAULT_MULTI_VIEW_PREFS
-    const parsed = JSON.parse(raw) as { layout?: unknown; slots?: unknown }
+    const parsed = JSON.parse(raw) as { layout?: unknown; slots?: unknown; autoRelease?: unknown }
     const layout: MultiViewLayout = parsed.layout === 4 ? 4 : 2
-    if (!Array.isArray(parsed.slots)) return { layout, slots: resizeSlots([], layout) }
-    return { layout, slots: resizeSlots(parsed.slots.map(parseSlot), layout) }
+    // autoRelease is absent on every pre-v0.107 store, and defaults ON — `=== false` is the only
+    // way an operator has ever said no.
+    const autoRelease = parsed.autoRelease !== false
+    if (!Array.isArray(parsed.slots)) return { layout, slots: resizeSlots([], layout), autoRelease }
+    return { layout, slots: resizeSlots(parsed.slots.map(parseSlot), layout), autoRelease }
   } catch {
     return DEFAULT_MULTI_VIEW_PREFS
   }

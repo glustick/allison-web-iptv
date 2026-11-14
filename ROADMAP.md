@@ -8,6 +8,26 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.107.0 — auto-release at the ceiling: the grid stops its own idlest tile.**
+
+At an account's provider-stated limit the picker's answer used to be a disabled row and an
+instruction to hunt for the holding tab. Now, when auto-release is on (per-device toggle in the
+toolbar, default on), a blocked account's rows stay clickable with an "auto-stops idlest" badge,
+and the click stops that account's idlest tile so the newcomer can play — the toolbar says which
+tile went and why, fading after eight seconds.
+
+`lib/connectionRelease.ts` (pure, tested) owns the decision, with the budget's honesty rules
+baked in: only a KNOWN ceiling ever acts (v0.86.0's rule — an invented number never does), only
+the same account's tiles are candidates, the audible tile is never stopped (sound is the
+strongest watching-signal there is), and a tile with no ledger presence is not worth stopping —
+it holds nothing to free. The idle ranking comes from the ledger the connection count already
+polls (`/api/iptv/connections` now feeds its per-stream idle readings to the client). Also fixed
+in passing: the grid's prefs updaters rebuilt `{ layout, slots }` literals, which would have
+dropped the new flag on every tile change — they spread `...prev` now.
+
+Tests: 1119 (12 new: the planner's shapes and key derivation; prefs round-trip gained
+autoRelease). Typecheck, lint and both builds clean.
+
 **v0.106.0 — the gate the browser can actually fail: audio beyond Dolby, and a UI check CI runs.**
 
 **The undecodable-audio check knew exactly one family.** It asked the browser about Dolby (`ac-3`/
