@@ -538,8 +538,17 @@ export interface TranscodeService {
       isVod: boolean
     }>
   >
-  /** Where segments land and how much room that filesystem has left. */
-  storage(): Promise<{ dir: string; freeBytes: number | null; totalBytes: number | null }>
+  /** Where segments land, how much room that filesystem has left, and (v0.109.0) the VOD
+   *  bound's own numbers: the configured total and what retained film output holds against it
+   *  right now — the System tab's pressure gauge, so the bound is a visible fact rather than a
+   *  refusal waiting to happen. */
+  storage(): Promise<{
+    dir: string
+    freeBytes: number | null
+    totalBytes: number | null
+    vodBudgetBytes: number
+    vodRetainedBytes: number
+  }>
   startTranscode(
     sourceUrl: string,
     isVod: boolean,
@@ -1519,9 +1528,25 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
   }
 
   /** Where segments are being written, and how much room is left there. */
-  async function storage(): Promise<{ dir: string; freeBytes: number | null; totalBytes: number | null }> {
+  async function storage(): Promise<{
+    dir: string
+    freeBytes: number | null
+    totalBytes: number | null
+    vodBudgetBytes: number
+    vodRetainedBytes: number
+  }> {
     const space = await filesystemSpace(tmpDir)
-    return { dir: tmpDir, freeBytes: space?.freeBytes ?? null, totalBytes: space?.totalBytes ?? null }
+    let vodRetainedBytes = 0
+    for (const session of transcodeSessions.values()) {
+      if (session.isVod) vodRetainedBytes += await directorySize(session.dir)
+    }
+    return {
+      dir: tmpDir,
+      freeBytes: space?.freeBytes ?? null,
+      totalBytes: space?.totalBytes ?? null,
+      vodBudgetBytes,
+      vodRetainedBytes
+    }
   }
 
   function isSessionAlive(sessionId: string): boolean {

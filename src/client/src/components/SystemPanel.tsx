@@ -361,6 +361,25 @@ export function SystemPanel(): JSX.Element {
 
       <section className="admin-section">
         <h2>Active transcodes</h2>
+        {health && health.transcode.storage.vodBudgetBytes > 0 && (() => {
+          const { vodBudgetBytes, vodRetainedBytes } = health.transcode.storage
+          const films = health.transcode.active
+            .filter((session) => session.isVod)
+            .sort((a, b) => b.idleSeconds - a.idleSeconds)
+          const pct = Math.round((vodRetainedBytes / vodBudgetBytes) * 100)
+          return (
+            <p className="setup-hint" style={{ marginBottom: '0.5rem' }}>
+              <strong>Film retention:</strong> {formatBytesShort(vodRetainedBytes)} of {formatBytesShort(vodBudgetBytes)} ({pct}%)
+              {films.length > 0 && (
+                <>
+                  {' '}— most idle first (the order the bound would evict):{' '}
+                  {films.map((f) => `${f.sessionId.slice(0, 8)}… ${formatBytesShort(f.bytes)}, ${f.idleSeconds}s idle`).join(' · ')}
+                </>
+              )}
+              {pct >= 90 && ' — near the bound: the next film may be refused or the idlest evicted.'}
+            </p>
+          )
+        })()}
         <div className="admin-table-wrap">
           <table className="admin-table">
             <thead>

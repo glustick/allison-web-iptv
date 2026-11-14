@@ -8,6 +8,20 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.109.0 — the VOD disk bound, visible.**
+
+v0.103.0 enforced `TRANSCODE_VOD_MAX_TOTAL_BYTES` silently: a refusal message at start and
+container-log lines at eviction, nothing in the UI until something would not play. The System
+tab's Active transcodes section now leads with the pressure gauge: **retained film output N of
+the bound (P%)**, each open film listed most-idle-first — the exact order the bound's sweep
+would evict — with its bytes and idle reading, and a plain sentence at 90%+ ("near the bound:
+the next film may be refused or the idlest evicted"). A disabled bound (0) shows nothing,
+because there is nothing to be pressured about. `storage()` answers the two numbers beside its
+free-space reading.
+
+Tests: 1125 (unchanged — the gauge is prose over numbers stats() already tests). Typecheck,
+lint and both builds clean.
+
 **v0.108.0 — programme search in the guide.**
 
 The channel list has had search since the beginning; "what's on" had none. The EPG grid's

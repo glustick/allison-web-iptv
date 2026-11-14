@@ -81,12 +81,21 @@ export interface HealthReport {
       /** Average output rate in bytes/second since the session started (null under 1s). Every live
        *  segment is relayed through this host, so this is the bandwidth it carries for one viewer. */
       bytesPerSecond: number | null
+      /** v0.109.0 — whether this session retains its whole output (a film): the disk-bound row. */
+      isVod: boolean
       /** Seconds since anything fetched this session's output. The server stops a session at 120. */
       idleSeconds: number
     }>
     /** Where transcoded segments are written, and the free space there. A VOD session keeps every
      *  segment until it stops, so this is the number that tells you whether a film will fit. */
-    storage: { dir: string; freeBytes: number | null; totalBytes: number | null }
+    storage: {
+      dir: string
+      freeBytes: number | null
+      totalBytes: number | null
+      /** v0.109.0 — the VOD disk bound's own numbers (0 = the bound is disabled). */
+      vodBudgetBytes: number
+      vodRetainedBytes: number
+    }
   }
   search: SearchStatus
   provider: Record<string, unknown> & { reachable?: boolean; error?: string; configured?: boolean }

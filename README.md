@@ -6,7 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.108.0 — programme search in the guide)
+## Current state (v0.109.0 — the VOD disk bound, visible)
+
+System → Active transcodes now leads with the **film-retention gauge**: retained VOD output
+against `TRANSCODE_VOD_MAX_TOTAL_BYTES`, each open film shown most-idle-first (the order the
+bound's sweep would evict), with a warning sentence near the bound. The bound stops being a
+refusal waiting to happen and becomes a fact on the screen. 1125 tests; typecheck, lint and
+both builds clean.
+
+## Previous release (v0.108.0 — programme search in the guide)
 
 The EPG grid gained a **programme search**: type a title, see everything matching across the
 aggregated guide for the next day (in-progress programmes included), and a click pans the grid
