@@ -78,8 +78,10 @@ jobs:
             -d '{"username":"chris","password":"rig-test-1","role":"admin"}' > /dev/null
           curl -fsS -c /tmp/cookies -X POST http://127.0.0.1:8099/api/auth/login -H 'content-type: application/json' \
             -d '{"username":"chris","password":"rig-test-1"}' > /dev/null
+          # Single-quoted JSON with the IP spliced in — double quotes around a body containing
+          # $VARS are where shells mangle JSON (the first attempt died exactly here).
           curl -fsS -b /tmp/cookies -X POST http://127.0.0.1:8099/api/session/save -H 'content-type: application/json' \
-            -d "{"server":"http://$RUNNER_IP:8091","username":"demo","password":"demo"}" > /dev/null
+            -d '{"server":"http://'"$RUNNER_IP"':8091","username":"demo","password":"demo"}' > /dev/null
 
       - name: Run the scripted UI check
         env:
