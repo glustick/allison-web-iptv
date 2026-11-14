@@ -237,14 +237,18 @@ try {
   // --- v0.105 Safari HEVC probe: the section is present in System -----------------------------
   await d.goto(`${BASE}/?tab=system`)
   {
-    const systemReady = await d.waitFor(`[...document.querySelectorAll('h2')].some((h) => h.textContent.trim() === 'Safari HEVC probe') || Boolean(document.querySelector('.login-card input[type="password"]'))`, { timeout: 8000 }).catch(() => false)
-    if (!systemReady) fail('System tab rendered neither its panels nor a login screen', d)
-    const loginStays = await d.waitFor(`Boolean(document.querySelector('.login-card input[type="password"]'))`, { timeout: 2000 }).catch(() => false)
-    if (loginStays) {
+    // Content-first, exactly like the admin check above: the deep link's first render can flash
+    // the login screen while the session is confirmed, and matching the flash (this once did)
+    // races the re-login into a card that has already been replaced by content.
+    let systemReady = await d.waitFor(`[...document.querySelectorAll('h2')].some((h) => h.textContent.trim() === 'Safari HEVC probe')`, { timeout: 8000 }).catch(() => false)
+    if (!systemReady) {
+      const loginStays = await d.waitFor(`Boolean(document.querySelector('.login-card input[type="password"]'))`, { timeout: 4000 }).catch(() => false)
+      if (!loginStays) fail('System tab rendered neither its panels nor a login screen', d)
       await setInput(d, '.login-card input:not([type="password"])', USER)
       await setInput(d, '.login-card input[type="password"]', PASS)
       await clickByText(d, 'Sign in')
-      await d.goto(`${BASE}/?tab=system`)
+      systemReady = await d.waitFor(`[...document.querySelectorAll('h2')].some((h) => h.textContent.trim() === 'Safari HEVC probe')`, { timeout: 10000 }).catch(() => false)
+      if (!systemReady) fail('System tab did not render its panels after signing in', d)
     }
     await d
       .waitFor(`[...document.querySelectorAll('h2')].some((h) => h.textContent.trim() === 'Safari HEVC probe')`, { timeout: 10000 })
