@@ -3,6 +3,7 @@ import { List, useListRef } from 'react-window'
 import { pct } from '../lib/epgTime'
 import { clampScrollOffset, EPG_PAN_SNAP_MS, offsetAfterArrowKey, panAxis, windowOffsetAfterDrag } from '../lib/epgPan'
 import { channelForResult, describeResultTime, jumpOffsetFor, type EpgSearchResult } from '../lib/epgSearch'
+import { readRecentSearches, rememberSearch } from '../lib/recentSearches'
 import { catchupForProgramme, restartRequestForProgramme } from '../lib/catchup'
 import type { Session } from '../lib/appAuth'
 import { useShortEpgCache } from '../lib/useShortEpgCache'
@@ -377,6 +378,10 @@ export function EpgGrid({
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<EpgSearchResult[] | null>(null)
   const [searching, setSearching] = useState(false)
+  // v0.112.0 — the last five programme searches, recorded only when a result is acted on (the
+  // same discipline the channel search's history carries: record intent, not keystrokes).
+  const PROGRAMME_SEARCH_KEY = 'iptv:recent-programme-searches'
+  const [recentProgrammeSearches, setRecentProgrammeSearches] = useState<string[]>(() => readRecentSearches(undefined, PROGRAMME_SEARCH_KEY))
   const listRef = useListRef(null)
   // Drag-to-pan (was deliberately left out of the first pass — see this file's own doc comment
   // below). The offset lives in a ref as well as state so the drag reads the value it started
@@ -404,6 +409,7 @@ export function EpgGrid({
     return () => window.clearTimeout(timer)
   }, [searchQuery])
   const jumpToResult = (result: EpgSearchResult): void => {
+    setRecentProgrammeSearches(rememberSearch(searchQuery, undefined, PROGRAMME_SEARCH_KEY))
     setSearchQuery('')
     setWindowOffsetMs(jumpOffsetFor(result.programme.startMs, Date.now()))
     const channel = channelForResult(channels, result.key)
@@ -638,6 +644,27 @@ export function EpgGrid({
             aria-label="Search programmes in the guide"
             style={{ width: '11rem' }}
           />
+          {searchQuery.trim().length < 2 && recentProgrammeSearches.length > 0 && (
+            <div
+              style={{
+                position: 'absolute', top: '100%', left: 0, zIndex: 30,
+                background: 'var(--panel, #16182a)', border: '1px solid var(--border, #2a2d45)',
+                borderRadius: '6px', minWidth: '16rem', marginTop: '4px', padding: '0.35rem 0.5rem'
+              }}
+            >
+              <div className="epg-note" style={{ marginBottom: '0.25rem' }}>Recent programme searches</div>
+              {recentProgrammeSearches.map((recent) => (
+                <button
+                  key={recent}
+                  type="button"
+                  onClick={() => setSearchQuery(recent)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.25rem 0.35rem', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+                >
+                  ↻ {recent}
+                </button>
+              ))}
+            </div>
+          )}
           {searchQuery.trim().length >= 2 && (
             <div
               style={{
@@ -662,6 +689,22 @@ export function EpgGrid({
                     <strong>{result.programme.title}</strong>
                     <span className="epg-note"> {describeResultTime(result.programme.startMs, result.programme.stopMs, Date.now())}</span>
                     {channel && <span className="epg-note"> · {channel.name}</span>}
+                    {/* v0.111.0 — finding a future programme in search converts straight into the
+                        guide's own reminder, without first jumping to its row. */}
+                    {channel && result.programme.startMs > Date.now() && (
+                      <button
+                        type="button"
+                        className={`epg-remind${reminders.some((r) => r.id === reminderId(channel.stream_id, playlistRefOf(channel), result.programme.startMs)) ? ' is-set' : ''}`}
+                        style={{ position: 'static', marginLeft: '0.4rem' }}
+                        title={reminders.some((r) => r.id === reminderId(channel.stream_id, playlistRefOf(channel), result.programme.startMs)) ? `Reminder set — click to remove` : `Remind me when ${result.programme.title} starts`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          toggleReminder(channel, { startMs: result.programme.startMs, stopMs: result.programme.stopMs, title: result.programme.title })
+                        }}
+                      >
+                        🔔
+                      </button>
+                    )}
                   </button>
                 )
               })}

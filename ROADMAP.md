@@ -8,6 +8,24 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.110.0 — the off-air channel comes back by itself, and search gets a memory and a bell.**
+
+Three small honest pieces:
+
+- **Off-air auto-resume** (ported from the desktop's 0.31.0): the not-broadcasting declaration
+  (v0.74.0) was terminal until a human pressed Retry. `lib/offAirProbe.ts` (pure, tested) now
+  re-fetches the playlist alone every 30s after the declaration — one request per interval, a
+  rounding error next to the ladder the declaration paused — and the moment the window moves,
+  playback resumes on its own, logged in the Diagnostics panel. Bounded at an hour so an
+  abandoned tab does not probe a dead channel for ever.
+- **Reminders from search results** (v0.111 work): a future programme found by the guide search
+  carries the grid's own 🔔 — set or remove without first jumping to its row.
+- **Recent programme searches** (v0.112 work): the last five programme searches per device,
+  recorded only when a result is acted on (the channel search's own discipline — intent, not
+  keystrokes), offered as one-click chips when the field is empty.
+
+Tests: 1128 (7 new, on the probe's pure verdicts). Typecheck, lint and both builds clean.
+
 **v0.109.0 — the VOD disk bound, visible.**
 
 v0.103.0 enforced `TRANSCODE_VOD_MAX_TOTAL_BYTES` silently: a refusal message at start and

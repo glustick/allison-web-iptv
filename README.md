@@ -6,7 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.109.0 — the VOD disk bound, visible)
+## Current state (v0.110.0 — off-air auto-resume + search memory and bell)
+
+An off-air channel now **comes back by itself**: after the not-broadcasting declaration, the
+player re-probes its playlist every 30 seconds (bounded at an hour) and resumes the moment the
+window advances. Programme search gained the grid's 🔔 **reminder button on future results** and
+**recent-searches chips** (last five, per device). 1128 tests; typecheck, lint and both builds clean.
+
+## Previous release (v0.109.0 — the VOD disk bound, visible)
 
 System → Active transcodes now leads with the **film-retention gauge**: retained VOD output
 against `TRANSCODE_VOD_MAX_TOTAL_BYTES`, each open film shown most-idle-first (the order the

@@ -23,11 +23,12 @@ function safeStorage(): Storage | null {
 }
 
 export function readRecentSearches(
-  storage: Pick<Storage, 'getItem'> | null = safeStorage()
+  storage: Pick<Storage, 'getItem'> | null = safeStorage(),
+  key: string = KEY
 ): string[] {
   if (!storage) return []
   try {
-    const raw = storage.getItem(KEY)
+    const raw = storage.getItem(key)
     if (!raw) return []
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
@@ -47,15 +48,16 @@ export function readRecentSearches(
  */
 export function rememberSearch(
   query: string,
-  storage: Pick<Storage, 'getItem' | 'setItem'> | null = safeStorage()
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null = safeStorage(),
+  key: string = KEY
 ): string[] {
   const trimmed = query.trim().replace(/\s+/g, ' ')
-  if (trimmed.length < MIN_LENGTH) return readRecentSearches(storage)
-  const existing = readRecentSearches(storage)
+  if (trimmed.length < MIN_LENGTH) return readRecentSearches(storage, key)
+  const existing = readRecentSearches(storage, key)
   const next = [trimmed, ...existing.filter((entry) => entry.toLowerCase() !== trimmed.toLowerCase())].slice(0, MAX)
   if (!storage) return existing
   try {
-    storage.setItem(KEY, JSON.stringify(next))
+    storage.setItem(key, JSON.stringify(next))
   } catch {
     // A full store is not worth failing a search over — but it must not *claim* the query was
     // remembered either: the list this returns is what the panel will show, and a row that

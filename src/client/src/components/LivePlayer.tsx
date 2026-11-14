@@ -21,6 +21,7 @@ import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { shouldAcceptVisibleEvent, shouldAutoRevive, shouldKickRecovery } from '../lib/reviveOnVisible'
 import { createPlaylistStallTracker } from '../lib/playlistStall'
+import { OFF_AIR_PROBE_MS, parsePlaylistWindow, probeVerdict, type PlaylistWindow } from '../lib/offAirProbe'
 import { isDeadSessionTerminal, shouldRestartDeadSession, SESSION_HEALTH_POLL_MS } from '../lib/sessionHealth'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
@@ -334,6 +335,7 @@ export function LivePlayer({
     let mediaErrorRecoveryCount = 0
     let errorResetTimer: ReturnType<typeof setTimeout> | null = null
     let networkRetryTimer: ReturnType<typeof setTimeout> | null = null
+      let offAirProbeTimer: number | null = null
 
     const handleWaiting = (): void => {
       // Still recovering — don't let a stretch of genuinely uninterrupted playback earlier
@@ -645,6 +647,34 @@ let stallCount = 0
           'This channel does not appear to be broadcasting right now — its playlist has not advanced for 30 seconds. ' +
             'Automatic retries are paused to spare the provider connection; press Retry to check again.'
         )
+        // Off-air auto-resume (v0.110.0, ported from the desktop's 0.31.0): the declaration is
+        // terminal for the LADDER, not for ever — this probe re-fetches the playlist alone every
+        // 30s and resumes the moment the window moves, bounded at an hour so an abandoned tab is
+        // not probing a dead channel indefinitely. One playlist request per interval is a
+        // rounding error next to the ladder the declaration paused.
+        const frozen: PlaylistWindow = { startSN: details.startSN, endSN: details.endSN }
+        let probes = 0
+        offAirProbeTimer = window.setInterval(() => {
+          void fetch(url)
+            .then((res) => (res.ok ? res.text() : null))
+            .then((text) => (text === null ? null : parsePlaylistWindow(text)))
+            .then((fresh) => {
+              const verdict = probeVerdict(frozen, fresh, probes)
+              probes += 1
+              if (verdict === 'give-up') {
+                window.clearInterval(offAirProbeTimer ?? undefined)
+                offAirProbeTimer = null
+                return
+              }
+              if (verdict !== 'resume') return
+              window.clearInterval(offAirProbeTimer ?? undefined)
+              offAirProbeTimer = null
+              logEvent('[player] off-air channel is broadcasting again — resuming')
+              setError(null)
+              setReloadTick((t) => t + 1)
+            })
+            .catch(() => {})
+        }, OFF_AIR_PROBE_MS)
       })
       instance.on(Hls.Events.MANIFEST_PARSED, () => {
         // Proactive rather than waiting for an error that may never come: if the stream's audio
@@ -738,6 +768,7 @@ let stallCount = 0
             networkRetryCount += 1
             if (networkRetryCount <= MAX_NETWORK_RETRIES) {
               if (networkRetryTimer) clearTimeout(networkRetryTimer)
+      if (offAirProbeTimer !== null) window.clearInterval(offAirProbeTimer)
               networkRetryTimer = setTimeout(() => instance.startLoad(), NETWORK_RETRY_DELAY_MS)
             } else {
               fatalErrorShown = true
