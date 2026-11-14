@@ -71,7 +71,7 @@ jobs:
 
       - name: Start the app
         run: |
-          DATA_DIR="$(mktemp -d)" PORT=8099 SESSION_SECRET=ci-ui-secret node dist/server/index.js > /tmp/app.log 2>&1 &
+          DATA_DIR="$(mktemp -d)" PORT=8099 SESSION_SECRET=ci-ui-secret-0123456789 node dist/server/index.js > /tmp/app.log 2>&1 &
           sleep 5
           curl -fsS http://127.0.0.1:8099/api/health > /dev/null
           curl -fsS -X POST http://127.0.0.1:8099/api/auth/setup -H 'content-type: application/json' \
