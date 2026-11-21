@@ -8,6 +8,27 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.111.0 — the multi-view round: tiles you can re-point, search that reaches the weekend, and a way back.**
+
+Three gaps verified against the code before building (the reminders panel and the shortcuts help
+both already existed — checked, not rebuilt):
+
+- **Change a playing tile's channel in place.** A filled tile had only ⤢ and ✕ — changing its
+  channel meant remove-then-re-add, losing the slot's place. Each tile now carries ⇄, which opens
+  the picker for that slot; assigning over a filled slot replaces the channel and the tile keeps
+  its position (and its audio state).
+- **Programme search reaches the weekend, and shows what it found.** The route has accepted
+  start/end since v0.108; the UI was pinned to its 24h default, which hid Sunday's fixtures found
+  on Friday. A range select (24 hours / 3 days / 7 days) feeds the same endpoint, and each result
+  now shows the first line of its description — often the only thing distinguishing two
+  same-titled episodes.
+- **Undo for auto-release.** v0.107.0 stops an account's idlest tile in one click; now the
+  toolbar's note carries an **Undo** for as long as the slot is still empty — stopping a tile is
+  fearless when bringing it back is one click too.
+
+Tests: 1128 (unchanged — all three are wiring over tested primitives). Typecheck, lint and both
+builds clean.
+
 **v0.110.0 — the off-air channel comes back by itself, and search gets a memory and a bell.**
 
 Three small honest pieces:

@@ -382,6 +382,9 @@ export function EpgGrid({
   // same discipline the channel search's history carries: record intent, not keystrokes).
   const PROGRAMME_SEARCH_KEY = 'iptv:recent-programme-searches'
   const [recentProgrammeSearches, setRecentProgrammeSearches] = useState<string[]>(() => readRecentSearches(undefined, PROGRAMME_SEARCH_KEY))
+  // v0.112.0 — how far ahead the programme search looks. The route has always accepted
+  // start/end; the UI was pinned to its 24h default, which hid weekend fixtures found midweek.
+  const [searchRangeMs, setSearchRangeMs] = useState(24 * 60 * 60 * 1000)
   const listRef = useListRef(null)
   // Drag-to-pan (was deliberately left out of the first pass — see this file's own doc comment
   // below). The offset lives in a ref as well as state so the drag reads the value it started
@@ -398,7 +401,8 @@ export function EpgGrid({
     }
     setSearching(true)
     const timer = window.setTimeout(() => {
-      fetch(`/api/epg/search?q=${encodeURIComponent(query)}`)
+      const params = new URLSearchParams({ q: query, start: String(Date.now() - 60 * 60 * 1000), end: String(Date.now() + searchRangeMs) })
+      fetch(`/api/epg/search?${params.toString()}`)
         .then((res) => (res.ok ? res.json() : null))
         .then((body: { results?: EpgSearchResult[] } | null) => {
           setSearchResults(body?.results ?? [])
@@ -407,7 +411,7 @@ export function EpgGrid({
         .finally(() => setSearching(false))
     }, 350)
     return () => window.clearTimeout(timer)
-  }, [searchQuery])
+  }, [searchQuery, searchRangeMs])
   const jumpToResult = (result: EpgSearchResult): void => {
     setRecentProgrammeSearches(rememberSearch(searchQuery, undefined, PROGRAMME_SEARCH_KEY))
     setSearchQuery('')
@@ -644,6 +648,16 @@ export function EpgGrid({
             aria-label="Search programmes in the guide"
             style={{ width: '11rem' }}
           />
+          <select
+            value={searchRangeMs}
+            onChange={(event) => setSearchRangeMs(Number(event.target.value))}
+            aria-label="How far ahead to search"
+            style={{ width: 'auto' }}
+          >
+            <option value={24 * 60 * 60 * 1000}>24 hours</option>
+            <option value={3 * 24 * 60 * 60 * 1000}>3 days</option>
+            <option value={7 * 24 * 60 * 60 * 1000}>7 days</option>
+          </select>
           {searchQuery.trim().length < 2 && recentProgrammeSearches.length > 0 && (
             <div
               style={{
@@ -689,6 +703,15 @@ export function EpgGrid({
                     <strong>{result.programme.title}</strong>
                     <span className="epg-note"> {describeResultTime(result.programme.startMs, result.programme.stopMs, Date.now())}</span>
                     {channel && <span className="epg-note"> · {channel.name}</span>}
+                    {/* v0.112.0 — the description travels with every result; showing its first
+                        line is often what actually distinguishes two same-titled episodes. */}
+                    {result.programme.description && (
+                      <div className="epg-note" style={{ opacity: 0.8, marginTop: '0.1rem' }}>
+                        {result.programme.description.length > 140
+                          ? result.programme.description.slice(0, 140) + '…'
+                          : result.programme.description}
+                      </div>
+                    )}
                     {/* v0.111.0 — finding a future programme in search converts straight into the
                         guide's own reminder, without first jumping to its row. */}
                     {channel && result.programme.startMs > Date.now() && (

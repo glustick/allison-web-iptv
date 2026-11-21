@@ -51,6 +51,7 @@ function TileView({
   activeAudio,
   url,
   onToggleAudio,
+  onChangeChannel,
   onRemove,
   onPlayInMain
 }: {
@@ -59,6 +60,8 @@ function TileView({
   activeAudio: number | null
   url: string
   onToggleAudio: (index: number) => void
+  /** Re-open the picker for this slot — change the channel without tearing the tile down (v0.111.0). */
+  onChangeChannel: (index: number) => void
   onRemove: (index: number) => void
   onPlayInMain: (slot: MultiViewSlot) => void
 }): JSX.Element {
@@ -95,6 +98,14 @@ function TileView({
           <button
             type="button"
             className="admin-small-btn"
+            title="Change this tile's channel"
+            onClick={() => onChangeChannel(index)}
+          >
+            ⇄
+          </button>
+          <button
+            type="button"
+            className="admin-small-btn"
             title="Remove this tile"
             onClick={() => onRemove(index)}
           >
@@ -120,10 +131,18 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
   const connections: ConnectionSnapshot | null = useConnectionCount()
   // v0.107.0 — what the last auto-release stopped, shown in the toolbar until it fades.
   const [releaseNote, setReleaseNote] = useState<string | null>(null)
+  // v0.113.0 — the tile the release stopped, kept for Undo. Stopping a tile is one click;
+  // bringing it back should be too (and it is only possible while the slot is still empty —
+  // assigning over it first is the viewer's own statement).
+  const [lastReleased, setLastReleased] = useState<{ slotIndex: number; slot: MultiViewSlot } | null>(null)
+  const releaseTimerRef = useRef<number | null>(null)
   useEffect(() => {
     if (!releaseNote) return
-    const timer = window.setTimeout(() => setReleaseNote(null), 8000)
-    return () => window.clearTimeout(timer)
+    if (releaseTimerRef.current !== null) window.clearTimeout(releaseTimerRef.current)
+    releaseTimerRef.current = window.setTimeout(() => setReleaseNote(null), 8000)
+    return () => {
+      if (releaseTimerRef.current !== null) window.clearTimeout(releaseTimerRef.current)
+    }
   }, [releaseNote])
   // The primary's own number when the provider stated one: the sentence says it exactly instead
   // of "about 2" (v0.86.0). '' is the primary's key in the limits map.
@@ -182,9 +201,24 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
       channelName
     )
     if (!plan) return false
+    const stopped = prefs.slots[plan.slotIndex]
     remove(plan.slotIndex)
+    if (stopped) setLastReleased({ slotIndex: plan.slotIndex, slot: stopped })
     setReleaseNote(plan.note)
     return true
+  }
+
+  // v0.113.0 — put back the tile auto-release stopped, if its slot is still empty.
+  const undoRelease = (): void => {
+    if (!lastReleased) return
+    setPrefs((prev) => {
+      const slots = resizeSlots([...prev.slots], prev.layout)
+      if (slots[lastReleased.slotIndex] !== null) return prev
+      slots[lastReleased.slotIndex] = lastReleased.slot
+      return { ...prev, slots }
+    })
+    setLastReleased(null)
+    setReleaseNote(null)
   }
 
   return (
@@ -212,7 +246,16 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
           {prefs.autoRelease ? 'Auto-release ✓' : 'Auto-release ✕'}
         </button>
         <span className="epg-note">{connectionNote.text}{accountAttribution(connections)}</span>
-        {releaseNote && <span className="epg-note">{releaseNote}</span>}
+        {releaseNote && (
+          <>
+            <span className="epg-note">{releaseNote}</span>
+            {lastReleased && prefs.slots[lastReleased.slotIndex] === null && (
+              <button type="button" className="admin-small-btn" onClick={undoRelease} title="Put the stopped tile back">
+                Undo
+              </button>
+            )}
+          </>
+        )}
       </div>
       <div className={`multiview-grid multiview-grid--${prefs.layout}`}>
         {prefs.slots.map((slot, index) =>
@@ -228,6 +271,7 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
                   : client.getStreamUrl('live', slot.streamId, 'm3u8')
               }
               onToggleAudio={(clicked) => setActiveAudio((current) => toggleActiveAudio(current, clicked))}
+              onChangeChannel={setPickingSlot}
               onRemove={remove}
               onPlayInMain={onPlayInMain}
             />

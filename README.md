@@ -6,7 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.110.0 — off-air auto-resume + search memory and bell)
+## Current state (v0.111.0 — the multi-view round)
+
+Playing tiles gained a **⇄ change-channel** button (re-point a tile without losing its slot);
+programme search gained a **range select** (24h/3 days/7 days) and **description snippets** on
+results; auto-release gained **Undo** in the toolbar note. 1128 tests; typecheck, lint and both
+builds clean.
+
+## Previous release (v0.110.0 — off-air auto-resume + search memory and bell)
 
 An off-air channel now **comes back by itself**: after the not-broadcasting declaration, the
 player re-probes its playlist every 30 seconds (bounded at an hour) and resumes the moment the
