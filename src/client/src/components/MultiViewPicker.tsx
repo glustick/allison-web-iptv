@@ -25,6 +25,8 @@ export interface MultiViewPickerProps {
   client: XtreamClient
   categories: Category[]
   favourites: Array<{ streamId: number; name: string; playlistId?: string }>
+  /** v0.116.0 - the account's recently-watched channels, for a Recent scope in the picker. */
+  recent: Array<{ streamId: number; name: string; playlistId?: string }>
   playlists: Array<{ id: string; label: string; channels: LiveStream[] }>
   /** The live connection count (null while unknown) — gates the add-at-the-ceiling warning. */
   connections: ConnectionSnapshot | null
@@ -60,6 +62,7 @@ export function MultiViewPicker({
   client,
   categories,
   favourites,
+  recent,
   playlists,
   connections,
   limits,
@@ -103,7 +106,18 @@ export function MultiViewPicker({
   const rows = useMemo<PickerRow[]>(() => {
     const term = filter.trim().toLowerCase()
     let all: PickerRow[] = []
-    if (scope === 'fav') {
+    if (scope === 'recent') {
+      // v0.116.0 - retile what you actually watched: the history's distinct channels, most
+      // recent first, capped like every other scope.
+      all = recent.slice(0, MAX_ROWS).map((entry, index) => ({
+        key: `recent:${entry.playlistId ?? ''}:${entry.streamId}:${index}`,
+        streamId: entry.streamId,
+        name: entry.name,
+        playlistId: entry.playlistId,
+        playlistLabel: entry.playlistId ? playlists.find((p) => p.id === entry.playlistId)?.label : undefined,
+        icon: ''
+      }))
+    } else if (scope === 'fav') {
       all = favourites.map((favourite) => ({
         key: `fav:${favourite.playlistId ?? ''}:${favourite.streamId}`,
         streamId: favourite.streamId,
@@ -154,6 +168,7 @@ export function MultiViewPicker({
         <div className="multiview-picker-scopes">
           <select value={scope} onChange={(event) => setScope(event.target.value)}>
             <option value="fav">★ Favourites ({favourites.length})</option>
+            {recent.length > 0 && <option value="recent">Recently watched ({recent.length})</option>}
             <option value="all">Main — all channels</option>
             {categories.map((category) => (
               <option key={category.category_id} value={`cat:${category.category_id}`}>

@@ -8,6 +8,33 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.116.0 — ten more, the trust-the-surface round.**
+
+Every candidate verified first; "return to live" during catch-up already existed and was dropped.
+
+1. **The auth trail answers "that afternoon"** — the Auth log gains from/until date inputs,
+   narrowed server-side after the bounded read.
+2. **The webhook is testable** — System's Provider alerts gains Send test: a harmless probe
+   posted to every saved webhook, reported per destination (a household with two channels needs
+   to know which one is broken).
+3. **The guide header says which day it is** — panned to tomorrow, the ticks stop being a
+   floating list of hours.
+4. **Season headers gained ▶ Play next** — the first unwatched episode of that season, the
+   series-level Continue bar extended downward.
+5. **Tiles gained Retry** — a failed tile was remove-and-re-add; one click now remounts the
+   player (a fresh attach to the same URL, no ledger change).
+6. **The login password shows itself** — the eye; TVs and laptops alike mis-key long passwords.
+7. **The guide's toggles persist per device** — With guide and ★ Favourites survive a reload.
+8. **The multi-view picker gained a Recent scope** — retile what you actually watched, straight
+   from the history view.
+9. **The film player gained the stats panel** — resolution, playhead, buffered ahead, dropped
+   frames; no hls.js, so bandwidth reads as unknown, honestly.
+10. **Diagnostics panels gained Copy** — one click hands the recovery log to whoever is helping;
+    the panel existed for exactly that, and pasting from a console was its whole job.
+
+Tests: 1128 (unchanged — display, persistence, and one endpoint over tested primitives).
+Typecheck, lint and both builds clean.
+
 **v0.115.0 — ten more, the living-room edition.**
 
 Every piece verified as a real gap first; four candidates died in verification (the sleep timer's

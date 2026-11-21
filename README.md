@@ -6,7 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.115.0 — ten more, the living-room edition)
+## Current state (v0.116.0 — ten more, the trust-the-surface round)
+
+Auth log **date range**; **Send test** for the Discord webhook; the guide header **says the
+day**; season **▶ Play next**; tile **Retry**; a login **password eye**; guide toggles
+**persist per device**; the picker's **Recent** scope; the **film player's stats panel**;
+**Copy** on the diagnostics panels. 1128 tests; typecheck, lint and both builds clean.
+
+## Previous release (v0.115.0 — ten more, the living-room edition)
 
 **Channel-number jump** (type digits in Live TV), guide filter **matches numbers**, **/**
 focuses it, **"With guide"** toggle, **480p** quality, **episode filter** in a series, the

@@ -1153,6 +1153,21 @@ let stallCount = 0
         </button>
         {showDiagnostics && (
           <div className="player-diagnostics" role="log" aria-label="Player events">
+            {/* v0.116.0 — Copy: the panel exists so the freeze is diagnosable without a console. */}
+            {playbackEvents.length > 0 && (
+              <button
+                type="button"
+                className="admin-small-btn"
+                style={{ position: 'absolute', top: 4, right: 4 }}
+                onClick={() =>
+                  void navigator.clipboard
+                    ?.writeText(playbackEvents.map((event) => `${event.at} ${event.message}`).join('\n'))
+                    .catch(() => {})
+                }
+              >
+                Copy
+              </button>
+            )}
             {playbackEvents.length === 0 ? (
               <div className="player-diagnostics-empty">No player events yet.</div>
             ) : (

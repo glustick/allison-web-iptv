@@ -159,6 +159,10 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
   // v0.115.0 — free-text over the loaded rows (username/ip/user-agent), plus click-a-username:
   // the server filters by account and outcome; the text narrows what those returned.
   const [auditText, setAuditText] = useState('')
+  // v0.116.0 — the date range: from/until narrowed server-side; the text search still narrows
+  // what the range returned.
+  const [auditFrom, setAuditFrom] = useState('')
+  const [auditUntil, setAuditUntil] = useState('')
   const shownAudit = auditText.trim().length > 0
     ? auditEntries.filter((entry) =>
         [entry.username, entry.ip, entry.userAgent].some((field) =>
@@ -172,11 +176,14 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
     } catch {
       // A full or unavailable store is not worth failing the log over.
     }
-  }, [auditUser, auditOutcome])
+  }, [auditUser, auditOutcome, auditFrom, auditUntil])
   const refreshAudit = useCallback(
     async (username: string, outcome: string): Promise<void> => {
       try {
-        const res = await fetch(`/api/admin/audit?${auditFilterQuery(username, outcome)}`)
+        const params = new URLSearchParams(auditFilterQuery(username, outcome))
+        if (auditFrom) params.set('from', new Date(`${auditFrom}T00:00:00`).toISOString())
+        if (auditUntil) params.set('until', new Date(`${auditUntil}T23:59:59`).toISOString())
+        const res = await fetch(`/api/admin/audit?${params.toString()}`)
         if (!res.ok) return
         const data = (await res.json()) as { entries?: AuditEntry[] }
         setAuditEntries(data.entries ?? [])
@@ -191,7 +198,7 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
     void refreshAudit(auditUser, auditOutcome)
     const poll = window.setInterval(() => void refreshAudit(auditUser, auditOutcome), AUDIT_POLL_MS)
     return () => window.clearInterval(poll)
-  }, [refreshAudit, auditUser, auditOutcome])
+  }, [refreshAudit, auditUser, auditOutcome, auditFrom, auditUntil])
 
   useEffect(() => {
     void refresh()
@@ -294,6 +301,29 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
       await refresh()
     } catch (err) {
       setAlertError(err instanceof Error ? err.message : 'Could not save the webhook')
+    } finally {
+      setAlertBusy(false)
+    }
+  }
+
+  // v0.116.0 — posts a harmless probe to the SAVED webhook(s) and reports per destination: a
+  // household with two channels needs to know which one is broken.
+  async function testAlertWebhook(): Promise<void> {
+    setAlertBusy(true); setAlertError(null); setAlertNote(null)
+    try {
+      const res = await fetch('/api/admin/alerts/test', { method: 'POST' })
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string
+        results?: Array<{ url: string; delivered: boolean }>
+      }
+      if (!res.ok) throw new Error(data.error ?? 'Could not test the webhook')
+      setAlertNote(
+        (data.results ?? [])
+          .map((result) => `${result.url}: ${result.delivered ? 'delivered' : 'FAILED'}`)
+          .join(' · ')
+      )
+    } catch (err) {
+      setAlertError(err instanceof Error ? err.message : 'Could not test the webhook')
     } finally {
       setAlertBusy(false)
     }
@@ -570,6 +600,20 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
             onChange={(event) => setAuditUser(event.target.value)}
           />
           <input
+            type="date"
+            aria-label="From date"
+            title="From date"
+            value={auditFrom}
+            onChange={(event) => setAuditFrom(event.target.value)}
+          />
+          <input
+            type="date"
+            aria-label="Until date"
+            title="Until date"
+            value={auditUntil}
+            onChange={(event) => setAuditUntil(event.target.value)}
+          />
+          <input
             className="multiview-picker-filter"
             type="search"
             placeholder="Search rows (name, IP, device)…"
@@ -595,6 +639,8 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
                 setAuditUser('')
                 setAuditOutcome('')
                 setAuditText('')
+                setAuditFrom('')
+                setAuditUntil('')
               }}
             >
               Clear
@@ -687,6 +733,14 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
                 style={{ width: 460 }}
               />
             </label>
+            <button
+              type="button"
+              onClick={() => void testAlertWebhook()}
+              disabled={alertBusy || !alertInfo?.webhookSet}
+              title="Post a harmless probe message to the saved webhook(s)"
+            >
+              Send test
+            </button>
             <button type="button" onClick={() => void saveAlertWebhook()} disabled={alertBusy}>
               {alertBusy ? 'Saving…' : 'Save'}
             </button>

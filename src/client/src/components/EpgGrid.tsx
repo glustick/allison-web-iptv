@@ -50,6 +50,15 @@ function formatHour(t: number): string {
   return new Date(t).toLocaleTimeString([], { hour: 'numeric' })
 }
 
+/** v0.115→116 — when the window has been panned to another day, the ticks alone read as a
+ *  list of hours with no anchor; the header says which day it is. */
+function formatHeaderDay(t: number): string | null {
+  const now = new Date()
+  const then = new Date(t)
+  if (then.toDateString() === now.toDateString()) return null
+  return then.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })
+}
+
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
@@ -459,7 +468,21 @@ export function EpgGrid({
   const { shortEpgByStream, request } = useShortEpgCache(session)
   // Favourites-only (v0.93.0): the guide is where a hundred channels become a wall, and the handful
   // someone actually watches is the useful view of it.
-  const [favouritesOnly, setFavouritesOnly] = useState(false)
+  // v0.116.0 — both toggles persist per device (localStorage beside the other prefs): an admin
+  // who always runs "With guide" should not re-tick it every visit.
+  const GUIDE_TOGGLE_KEY = 'iptv:epg-guide-toggles'
+  const readGuideToggles = (): { favouritesOnly: boolean; guideOnly: boolean } => {
+    try {
+      const raw = window.localStorage.getItem(GUIDE_TOGGLE_KEY)
+      if (!raw) return { favouritesOnly: false, guideOnly: false }
+      const parsed = JSON.parse(raw) as { favouritesOnly?: unknown; guideOnly?: unknown }
+      return { favouritesOnly: parsed.favouritesOnly === true, guideOnly: parsed.guideOnly === true }
+    } catch {
+      return { favouritesOnly: false, guideOnly: false }
+    }
+  }
+  const savedToggles = readGuideToggles()
+  const [favouritesOnly, setFavouritesOnly] = useState(savedToggles.favouritesOnly)
   // v0.113.0 — a name filter over the guide's rows, composing with the favourites toggle. With a
   // 12k-channel catalogue behind 'All', typing three characters is the difference between the
   // guide and a haystack.
@@ -481,7 +504,14 @@ export function EpgGrid({
   // v0.115.0 — "with guide only": a channel the matcher never connected shows an empty row and
   // a Map… button; when the viewer wants programmes rather than mapping work, those rows are
   // noise. listings here is the aggregated window's own record.
-  const [guideOnly, setGuideOnly] = useState(false)
+  const [guideOnly, setGuideOnly] = useState(savedToggles.guideOnly)
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(GUIDE_TOGGLE_KEY, JSON.stringify({ favouritesOnly, guideOnly }))
+    } catch {
+      // A full or unavailable store is not worth failing the grid over.
+    }
+  }, [favouritesOnly, guideOnly])
   const shownChannels = useMemo(() => {
     let rows = channels
     if (favouritesOnly) {
@@ -822,6 +852,10 @@ export function EpgGrid({
               {formatHour(t)}
             </span>
           ))}
+          {(() => {
+            const day = formatHeaderDay(windowStart)
+            return day ? <span className="epg-note" style={{ marginLeft: '0.5rem' }}>{day}</span> : null
+          })()}
         </div>
         {aggregated.status === 'loading' && aggregated.data === null && (
           <div className="epg-time-header-controls">Loading guide…</div>

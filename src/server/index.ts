@@ -777,6 +777,17 @@ app.post('/api/auth/activity', requireAuth, (req, res) => {
 // The sign-in trail: who, when, from where, and whether it worked. In memory for the session and
 // mirrored to the container log (see lib/authAudit.ts), because a deploy restarts the app.
 app.get('/api/admin/audit', requireAuth, requireAdmin, (req, res) => {
+  // v0.116.0 — an optional from/until (ISO timestamps or epoch ms) narrowing the trail: the
+  // question an audit answers is usually "that afternoon", not "everything ever".
+  const parseWhen = (raw: unknown): number | null => {
+    if (typeof raw !== 'string' || raw.trim().length === 0) return null
+    const asNumber = Number(raw)
+    if (Number.isFinite(asNumber) && asNumber > 0) return asNumber
+    const parsed = Date.parse(raw)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  const fromMs = parseWhen(req.query.from)
+  const untilMs = parseWhen(req.query.until)
   const limit = Number(req.query.limit)
   // v0.102.0 — the Auth log's filters: any combination of account and outcome. The outcome is
   // validated against the type's own members rather than trusted; an unknown one answers empty
@@ -790,13 +801,20 @@ app.get('/api/admin/audit', requireAuth, requireAdmin, (req, res) => {
   const username = typeof req.query.username === 'string' && req.query.username.trim().length > 0
     ? req.query.username.trim()
     : undefined
-  res.json({
-    entries: authAudit.recentFiltered({
-      username,
-      outcome,
-      limit: Number.isFinite(limit) && limit > 0 ? limit : 50
-    })
+  // The date range narrows AFTER the read (the store itself caps at 1000 rows, so the scan
+  // is bounded by construction); the limit applies to what the range returned.
+  const rows = authAudit.recentFiltered({
+    username,
+    outcome,
+    limit: 500
   })
+  const ranged = rows.filter((entry) => {
+    const at = Date.parse(entry.at)
+    if (fromMs !== null && at < fromMs) return false
+    if (untilMs !== null && at > untilMs) return false
+    return true
+  })
+  res.json({ entries: ranged.slice(0, Number.isFinite(limit) && limit > 0 ? limit : 50) })
 })
 
 app.get('/api/admin/alerts', requireAuth, requireAdmin, (req, res) => {
@@ -842,6 +860,31 @@ app.post('/api/admin/alerts', requireAuth, requireAdmin, (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Could not save the alert setting' })
   }
+})
+
+// The webhook test (v0.116.0): posts a harmless probe message to the SAVED webhook(s) and
+// answers per-URL, because a household with two destinations needs to know WHICH one is
+// broken. Read-only — it sends nothing about the account, only that the pipe works.
+app.post('/api/admin/alerts/test', requireAuth, requireAdmin, (req, res) => {
+  void (async (): Promise<void> => {
+    const session = req.authSession as AuthSession
+    const credentials = resolveAccountCredentials(session.username)
+    const webhook = credentials?.alertWebhook
+    if (!webhook || !isDiscordWebhookUrl(webhook)) {
+      res.status(409).json({ error: 'No webhook is configured to test' })
+      return
+    }
+    const urls = webhook.split(',').map((part) => part.trim()).filter(Boolean)
+    const results = await Promise.all(
+      urls.map(async (url) => ({
+        url: url.replace(/(https:\/\/discord\.com\/api\/webhooks\/\d{8,})\/.*/, '$1/…'),
+        delivered: await postDiscordWebhook(url, {
+          content: 'Allison Web IPTV: test alert — the pipe is working.'
+        })
+      }))
+    )
+    res.json({ ok: true, results })
+  })()
 })
 
 app.get('/api/admin/sessions', requireAuth, requireAdmin, (_req, res) => {

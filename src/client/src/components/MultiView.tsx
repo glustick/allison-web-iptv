@@ -37,6 +37,8 @@ export interface MultiViewProps {
   client: XtreamClient
   categories: Category[]
   favourites: Array<{ streamId: number; name: string; playlistId?: string }>
+  /** The account's recently-watched channels (v0.116.0) — the picker's Recent scope. */
+  recent: Array<{ streamId: number; name: string; playlistId?: string }>
   playlists: Array<{ id: string; label: string; channels: LiveStream[] }>
   /** Per-account connection ceilings from the provider (v0.86.0); the toolbar's sentence and the
    *  picker's block use the account's own number when it is known. */
@@ -70,7 +72,10 @@ function TileView({
   onRemove: (index: number) => void
   onPlayInMain: (slot: MultiViewSlot) => void
 }): JSX.Element {
+  const [retryNonce, setRetryNonce] = useState(0)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  // The retry remounts the VIDEO ELEMENT (key on retryNonce): a fresh hls.js attach to the same
+  // URL, no ledger-key change, no playlist fetch beyond the attach itself.
   const { error } = useMultiViewTile(videoRef, url)
   const isActive = activeAudio === index
   // The audio toggle applies to the element directly — never a re-attach (that would reload the
@@ -85,7 +90,7 @@ function TileView({
       onClick={() => onToggleAudio(index)}
       title={isActive ? 'Mute this tile' : 'Listen to this tile'}
     >
-      <video ref={videoRef} autoPlay playsInline />
+      <video key={retryNonce} ref={videoRef} autoPlay playsInline />
       <div className="multiview-tile-overlay">
         <span className="multiview-tile-name">
           {isActive ? '🔊 ' : '🔇 '}
@@ -129,13 +134,17 @@ function TileView({
       {error && (
         <div className="multiview-tile-error" onClick={(event) => event.stopPropagation()}>
           {error} — this channel can’t decode as a tile; try it in the main player.
+          {/* v0.116.0 — a frozen tile needed remove-and-re-add; Retry is one click. */}
+          <button type="button" className="admin-small-btn" onClick={() => setRetryNonce((n) => n + 1)}>
+            Retry
+          </button>
         </div>
       )}
     </div>
   )
 }
 
-export function MultiView({ client, categories, favourites, playlists, limits, onPlayInMain }: MultiViewProps): JSX.Element {
+export function MultiView({ client, categories, favourites, recent, playlists, limits, onPlayInMain }: MultiViewProps): JSX.Element {
   const [prefs, setPrefs] = useState(() => loadMultiViewPrefs())
   // The audible tile persists per device (v0.115.0): a reloaded tab restores which tile was
   // making sound instead of dropping every tile to mute. Clamped to the current layout.
@@ -345,6 +354,7 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
           client={client}
           categories={categories}
           favourites={favourites}
+          recent={recent}
           playlists={playlists}
           connections={connections}
           limits={limits}

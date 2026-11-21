@@ -1104,6 +1104,7 @@ export function LiveTv({
                 name: favourite.name,
                 playlistId: favourite.playlistId
               }))}
+              recent={historyChannels.map((row) => ({ streamId: row.stream_id, name: row.name, playlistId: playlistRefOf(row) }))}
               playlists={additional.map((entry) => ({ id: entry.id, label: entry.label, channels: entry.channels }))}
               onPlayInMain={(slot) => {
                 const playlist = slot.playlistId ? additional.find((entry) => entry.id === slot.playlistId) : undefined

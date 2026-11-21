@@ -16,6 +16,7 @@ import { SubtitleStyleButton } from './SubtitleStyleButton'
 import { PlayerMenu } from './PlayerMenu'
 import { appendEvent, type PlaybackEvent } from '../lib/playbackEvents'
 import { SleepTimerButton } from './SleepTimerButton'
+import { MediaStats } from './MediaStats'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
 const SILENT_AUDIO_CHECK_INTERVAL_MS = 1000
@@ -69,6 +70,9 @@ export function NativeVideoPlayer({
   // problem a stuck channel does — the decisions were only in a console.
   const [playbackEvents, setPlaybackEvents] = useState<PlaybackEvent[]>([])
   const [showDiagnostics, setShowDiagnostics] = useState(false)
+  // v0.116.0 — the live player's stats panel, on the film player: resolution, playhead,
+  // buffered ahead, dropped frames. No hls.js engine here, so bandwidth reads as unknown.
+  const [showStats, setShowStats] = useState(false)
   const logEvent = useCallback((message: string): void => {
     console.warn(message)
     setPlaybackEvents((previous) => appendEvent(previous, message, new Date().toLocaleTimeString()))
@@ -417,14 +421,48 @@ export function NativeVideoPlayer({
         <button
           type="button"
           className="admin-small-btn"
+          aria-pressed={showStats}
+          onClick={() => setShowStats((value) => !value)}
+        >
+          {showStats ? 'Hide stats' : 'Stats'}
+        </button>
+        <button
+          type="button"
+          className="admin-small-btn"
           aria-pressed={showDiagnostics}
           onClick={() => setShowDiagnostics((value) => !value)}
           title="What this title's playback has tried, in order"
         >
           {showDiagnostics ? 'Hide diagnostics' : 'Diagnostics'}
         </button>
+        {showStats && (
+          <MediaStats
+            video={videoRef.current}
+            engine={null}
+            videoCodec={null}
+            audioTrackCount={null}
+            plan={"film (native video element)"}
+            readBandwidth={() => null}
+          />
+        )}
         {showDiagnostics && (
           <div className="player-diagnostics" role="log" aria-label="Player events">
+            {/* v0.116.0 — Copy: the panel exists so the freeze is diagnosable without a console;
+                one click hands the record to whoever is helping. */}
+            {playbackEvents.length > 0 && (
+              <button
+                type="button"
+                className="admin-small-btn"
+                style={{ position: 'absolute', top: 4, right: 4 }}
+                onClick={() =>
+                  void navigator.clipboard
+                    ?.writeText(playbackEvents.map((event) => `${event.at} ${event.message}`).join('\n'))
+                    .catch(() => {})
+                }
+              >
+                Copy
+              </button>
+            )}
             {playbackEvents.length === 0 ? (
               <div className="player-diagnostics-empty">No player events yet.</div>
             ) : (

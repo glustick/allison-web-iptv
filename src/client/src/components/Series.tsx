@@ -216,16 +216,31 @@ function EpisodeList({
                   {watchedCount > 0 ? ` · ${watchedCount}/${all.length} watched` : ''}
                 </span>
                 {remaining > 0 && (
-                  // Catching up is one intent, not one click per episode. The server takes the
-                  // whole batch in a transaction (v0.98.0), so this is one round trip.
-                  <button
-                    type="button"
-                    className="admin-small-btn"
-                    title={`Mark the remaining ${remaining} episode${remaining === 1 ? '' : 's'} of this season watched`}
-                    onClick={() => onMarkSeason(all)}
-                  >
-                    ✓ Mark season
-                  </button>
+                  <>
+                    {/* v0.116.0 — the season header's Play: the first unwatched episode of THIS
+                        season, the same continuation the Continue bar offers at series level. */}
+                    <span style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        type="button"
+                        className="admin-small-btn"
+                        title={`Play the first unwatched episode of this season`}
+                        onClick={() => {
+                          const first = all.find((episode) => !watchedFor(Number(episode.id)))
+                          if (first) onPlay(first, resumeFor(Number(first.id))?.positionSeconds ?? 0)
+                        }}
+                      >
+                        ▶ Play next
+                      </button>
+                      <button
+                        type="button"
+                        className="admin-small-btn"
+                        title={`Mark the remaining ${remaining} episode${remaining === 1 ? '' : 's'} of this season watched`}
+                        onClick={() => onMarkSeason(all)}
+                      >
+                        ✓ Mark season
+                      </button>
+                    </span>
+                  </>
                 )}
               </div>
             )
