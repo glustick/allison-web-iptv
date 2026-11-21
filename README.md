@@ -6,7 +6,13 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.112.0 — the ops round)
+## Current state (v0.113.0 — see the walls)
+
+The guide gained a **channel-name filter** (composes with favourites-only); System gained
+**Backup-portal failovers** (a bounded ring, newest first — when, which direction, why); the
+Auth log's **filters persist per device**. 1128 tests; typecheck, lint and both builds clean.
+
+## Previous release (v0.112.0 — the ops round)
 
 System → Active transcodes gained **Account** and **Source** columns (whose session, reading
 what — provider credentials never reach the table). The playlists panel states each playlist's

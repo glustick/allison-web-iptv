@@ -463,6 +463,34 @@ export function SystemPanel(): JSX.Element {
       </section>
 
       <section className="admin-section">
+        <div className="epg-section-head">
+          <h2>Backup-portal failovers</h2>
+        </div>
+        <p className="setup-hint">
+          The last times a primary portal failed and traffic moved to its backup, newest first.
+          Empty means the primary has carried everything; the durable record lives in the container
+          log, and the in-memory ring holds the last twenty events.
+        </p>
+        {health?.failoverEvents && health.failoverEvents.length > 0 ? (
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <tbody>
+                {health.failoverEvents.map((event, index) => (
+                  <tr key={`${event.at}:${index}`}>
+                    <td>{new Date(event.at).toLocaleTimeString()}</td>
+                    <td>{event.direction === 'to-backup' ? 'primary → backup' : 'backup → primary'}</td>
+                    <td>{event.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="setup-hint">None recorded since the server started.</p>
+        )}
+      </section>
+
+      <section className="admin-section">
         <h2>Backup &amp; restore</h2>
         <p className="setup-hint">
           The database holds every account, credential, favourite, category and resume point. A daily snapshot is written to

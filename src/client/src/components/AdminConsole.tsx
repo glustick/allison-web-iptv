@@ -136,8 +136,33 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([])
   // v0.102.0 — the filters: any account, any outcome, both optional. Changing either re-fetches
   // immediately (the poll carries the current pair forward).
-  const [auditUser, setAuditUser] = useState('')
-  const [auditOutcome, setAuditOutcome] = useState('')
+  // v0.113.0 — the filters survive a reload, per device: an admin who always watches one
+  // account's failures should not re-select them every visit. Same localStorage pattern as
+  // every other per-device convenience here.
+  const AUDIT_FILTERS_KEY = 'admin:audit-filters'
+  const readAuditFilters = (): { user: string; outcome: string } => {
+    try {
+      const raw = window.localStorage.getItem(AUDIT_FILTERS_KEY)
+      if (!raw) return { user: '', outcome: '' }
+      const parsed = JSON.parse(raw) as { user?: unknown; outcome?: unknown }
+      return {
+        user: typeof parsed.user === 'string' ? parsed.user : '',
+        outcome: typeof parsed.outcome === 'string' ? parsed.outcome : ''
+      }
+    } catch {
+      return { user: '', outcome: '' }
+    }
+  }
+  const savedFilters = readAuditFilters()
+  const [auditUser, setAuditUser] = useState(savedFilters.user)
+  const [auditOutcome, setAuditOutcome] = useState(savedFilters.outcome)
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(AUDIT_FILTERS_KEY, JSON.stringify({ user: auditUser, outcome: auditOutcome }))
+    } catch {
+      // A full or unavailable store is not worth failing the log over.
+    }
+  }, [auditUser, auditOutcome])
   const refreshAudit = useCallback(
     async (username: string, outcome: string): Promise<void> => {
       try {

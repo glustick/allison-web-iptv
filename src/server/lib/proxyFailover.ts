@@ -74,3 +74,39 @@ export function notePrimaryFailure(
 export function notePrimarySuccess(state: FailoverState, primary: string): void {
   state.backupUntil.delete(primary)
 }
+
+// --- The failover record (v0.113.0) -----------------------------------------------------------
+// The failover itself was always logged; nothing ANSWERED "has the backup portal been carrying
+// traffic, and when did it last happen?" without grepping the container log. This bounded ring
+// keeps the last few events in memory — enough to answer that in the System tab, not enough to
+// matter if it grows unbounded.
+
+export interface FailoverEvent {
+  /** The primary portal that failed. */
+  primary: string
+  /** Which way the request went. */
+  direction: 'to-backup' | 'to-primary'
+  /** Why: the transport error's message, or the primary's status code. */
+  reason: string
+  at: number
+}
+
+const MAX_FAILOVER_EVENTS = 20
+
+export interface FailoverMemory {
+  events: FailoverEvent[]
+  record(event: Omit<FailoverEvent, 'at'> & { at?: number }): void
+}
+
+export function createFailoverMemory(limit: number = MAX_FAILOVER_EVENTS): FailoverMemory {
+  const events: FailoverEvent[] = []
+  return {
+    get events(): FailoverEvent[] {
+      return [...events]
+    },
+    record(event) {
+      events.unshift({ ...event, at: event.at ?? Date.now() })
+      if (events.length > limit) events.length = limit
+    }
+  }
+}

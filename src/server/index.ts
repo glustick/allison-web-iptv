@@ -9,6 +9,7 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import { createRequire } from 'module'
 import { createProxyServer, type ProxyServerDeps } from './lib/proxyServer.js'
 import { createConnectionLedger } from './lib/connectionLedger.js'
+import { createFailoverMemory, type FailoverMemory } from './lib/proxyFailover.js'
 import { fetchTextViaUpstream } from './lib/upstreamText.js'
 import { createNodeUpstreamRequest, upstreamRequestProfileFor } from './lib/nodeUpstreamRequest.js'
 import { createTranscodeService, prepareTranscodeDir, resolveTranscodeDir } from './lib/transcodeService.js'
@@ -451,6 +452,10 @@ function sanitizeEpgUrls(value: unknown): string[] | undefined {
 // fetches) and by the proxy's segment traffic (by Referer); read by /api/iptv/connections.
 const connectionLedger = createConnectionLedger()
 
+// The failover record (v0.113.0): the bounded ring the System tab reads. In-memory by design —
+// it answers "recently", not "for ever"; the container log remains the durable copy.
+const failoverMemory: FailoverMemory = createFailoverMemory()
+
 /** The Referer path is only a stream identity when it is one of this app's relay paths (primary
  *  or playlist-scoped) — an M3U-profile playlist's /__fetch/ Referer or garbage is not a
  *  connection worth counting. */
@@ -488,7 +493,8 @@ const proxyDeps: ProxyServerDeps = {
       res.end('Transcode serve error')
     })
   },
-  onRelayActivity: recordRelayActivity
+  onRelayActivity: recordRelayActivity,
+  onFailover: (event) => failoverMemory.record(event)
 }
 const proxyServer = createProxyServer(proxyDeps)
 proxyServer.listen(PROXY_INTERNAL_PORT, '127.0.0.1', () => {
@@ -1635,6 +1641,8 @@ app.get('/api/admin/health', requireAuth, requireAdmin, (req, res) => {
           secureRequest: isSecureRequest(req)
         },
         provider: credentials ? await probeProvider(credentials) : { configured: false },
+        // v0.113.0 — the backup portal's recent activity, newest first.
+        failoverEvents: failoverMemory.events,
         backups: listBackups(DATA_DIR),
         errors: recentErrors(20)
       })

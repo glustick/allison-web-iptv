@@ -103,6 +103,8 @@ export interface HealthReport {
   }
   search: SearchStatus
   provider: Record<string, unknown> & { reachable?: boolean; error?: string; configured?: boolean }
+  /** v0.113.0 — the backup portal's recent failover activity, newest first (bounded ring). */
+  failoverEvents?: Array<{ primary: string; direction: 'to-backup' | 'to-primary'; reason: string; at: number }>
   backups: Array<{ name: string; bytes: number; modifiedAt: string }>
   errors: Array<{ at: string; message: string }>
 }

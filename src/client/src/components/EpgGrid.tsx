@@ -459,11 +459,22 @@ export function EpgGrid({
   // Favourites-only (v0.93.0): the guide is where a hundred channels become a wall, and the handful
   // someone actually watches is the useful view of it.
   const [favouritesOnly, setFavouritesOnly] = useState(false)
+  // v0.113.0 — a name filter over the guide's rows, composing with the favourites toggle. With a
+  // 12k-channel catalogue behind 'All', typing three characters is the difference between the
+  // guide and a haystack.
+  const [channelFilter, setChannelFilter] = useState('')
   const favouriteSet = useMemo(() => new Set(favouriteKeys ?? []), [favouriteKeys])
   const shownChannels = useMemo(() => {
-    if (!favouritesOnly) return channels
-    return channels.filter((channel) => favouriteSet.has(`${playlistRefOf(channel) ?? ''}:${channel.stream_id}`))
-  }, [channels, favouritesOnly, favouriteSet])
+    let rows = channels
+    if (favouritesOnly) {
+      rows = rows.filter((channel) => favouriteSet.has(`${playlistRefOf(channel) ?? ''}:${channel.stream_id}`))
+    }
+    const needle = channelFilter.trim().toLowerCase()
+    if (needle.length > 0) {
+      rows = rows.filter((channel) => channel.name.toLowerCase().includes(needle))
+    }
+    return rows
+  }, [channels, favouritesOnly, favouriteSet, channelFilter])
   // This device's reminders (v0.91.0), kept in step with the watcher and any other tab through
   // the store's own change event rather than by polling localStorage.
   const [reminders, setReminders] = useState<Reminder[]>(() => readReminders())
@@ -789,6 +800,14 @@ export function EpgGrid({
             </div>
           )}
         </div>
+        <input
+          type="search"
+          placeholder="Filter channels…"
+          aria-label="Filter the guide by channel name"
+          value={channelFilter}
+          onChange={(event) => setChannelFilter(event.target.value)}
+          style={{ width: '10rem' }}
+        />
         {(favouriteKeys?.length ?? 0) > 0 && (
           <button
             type="button"

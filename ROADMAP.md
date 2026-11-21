@@ -8,6 +8,23 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.113.0 — see the walls: a guide you can filter, failovers you can see, filters that stay.**
+
+- **The guide gained a channel filter.** Favourites-only existed; against the full catalogue
+  ('All'), twelve thousand rows were still a haystack. A name filter composes with the
+  favourites toggle — three typed characters now find the channel.
+- **Backup-portal failovers are visible.** The failover has logged to the container since
+  v0.72.0 and answered nothing in the UI; a bounded in-memory ring (last 20 events, pure module,
+  recorded at both failover sites in the proxy) now reaches System → **Backup-portal failovers**:
+  when, which direction, and why. Empty means the primary has carried everything; the container
+  log stays the durable record.
+- **The Auth log's filters survive a reload** — per device in localStorage, the same pattern as
+  every other convenience here. An admin who always watches one account's failures stops
+  re-selecting them every visit.
+
+Tests: 1128 (unchanged — the ring rides the tested failover module; the rest is display and
+persistence over typed fields). Typecheck, lint and both builds clean.
+
 **v0.112.0 — the ops round: what is transcoding and for whom, what the provider allows, and what a channel is numbered.**
 
 Three gaps, each verified absent before building (several candidates — the reminders panel, the

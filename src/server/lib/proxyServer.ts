@@ -94,6 +94,10 @@ export function rewriteM3u8ForProxy(body: string, sourceUrl: URL): string {
 }
 
 export interface ProxyServerDeps {
+  /** The failover record (v0.113.0) — called at both failover sites so the System tab can
+   *  answer "has the backup been carrying traffic, and when did it last happen?" without
+   *  grepping the container log. Optional: tests construct deps without it. */
+  onFailover?: (event: { primary: string; direction: 'to-backup' | 'to-primary'; reason: string }) => void
   // Swapped whenever the user connects to a (possibly different) profile — null before any
   // profile has connected yet. A request-specific override is also supported so a single server
   // can serve multiple browser sessions without a single global target being shared across all
@@ -589,6 +593,7 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
             attemptOnBackup = true
             notePrimaryFailure(failoverState, primaryBase, Date.now())
             console.warn(`[proxy] primary ${target.host} failed (${err.message}) — failing over to the backup portal`)
+            deps.onFailover?.({ primary: primaryBase, direction: 'to-backup', reason: err.message })
             attemptUpstream(backupUrl)
           } else {
             attemptOnBackup = false
@@ -658,6 +663,7 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
             console.warn(
               `[proxy] primary ${target.host} answered ${upstreamRes.statusCode} — failing over to the backup portal`
             )
+            deps.onFailover?.({ primary: primaryBase, direction: 'to-backup', reason: `HTTP ${upstreamRes.statusCode}` })
             attemptUpstream(backupUrl)
           } else {
             attemptOnBackup = false
