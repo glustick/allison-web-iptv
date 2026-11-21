@@ -187,12 +187,20 @@ export interface TranscodeSession {
   /** Whether this session keeps every segment it produces (VOD) — the disk-bound sweep's
    *  candidate set (v0.103.0). Live sessions hold kilobytes and are never its business. */
   isVod: boolean
+  /** The app-side stream path this session reads (v0.112.0) — WHAT the System tab's transcodes
+   *  table is showing. Derived from the input URL inside the service (see below); 'provider
+   *  stream (direct)' when the input is not this app's own relay, whose URL carries credentials
+   *  and must never reach a response. */
+  source: string
   /** Whether startTranscode has settled for this session (v0.103.0). The disk-bound sweep must
    *  not stop a session whose start is still deciding its own outcome — a stop mid-start reads
    *  as 'Transcode cancelled' to the caller who asked for it (measured by this release's own
    *  test). Flipped true at every success return; failures remove the session anyway. */
   startSettled: boolean
 }
+
+/** The app-side stream/timeshift path inside one of this app's own relay URLs (v0.112.0). */
+const APP_SIDE_PATH = /https?:\/\/[^/]+(\/api\/(?:iptv\/playlists\/[^/]+\/)?(?:stream|timeshift)\/[^/?]+)/
 
 export const TRANSCODE_DIR_PREFIX = 'allisoniptv-transcode-'
 
@@ -1038,6 +1046,10 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       throw new Error('Transcode cancelled')
     }
     const session: TranscodeSession = {
+      // The app-side path of whatever this session reads. The relay URL this app hands ffmpeg
+      // embeds the path verbatim; a DIRECT provider input embeds credentials in its path, so it
+      // is recorded only as 'provider stream (direct)' — the label travels to the admin surface,
+      // the credentials never do.
       proc,
       dir,
       startedAt: Date.now(),
@@ -1046,6 +1058,10 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       subtitleTracks: [],
       inputStreamListEnded: false,
       owner: owner ?? null,
+      // v0.112.0 — WHAT this session reads: the app-side path when the input is this app's own
+      // relay (whose URL embeds it verbatim), never a direct provider URL (whose path carries
+      // credentials — those never reach an admin surface).
+      source: APP_SIDE_PATH.exec(sourceUrl)?.[1] ?? 'provider stream (direct)',
       isVod,
       startSettled: false
     }
@@ -1505,6 +1521,7 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
       idleSeconds: number
       owner: string | null
       isVod: boolean
+      source: string
     }>
   > {
     const now = Date.now()
@@ -1521,7 +1538,8 @@ export function createTranscodeService(deps: TranscodeServiceDeps): TranscodeSer
           bytesPerSecond: averageBytesPerSecond(bytes, runningSeconds),
           idleSeconds: Math.round((now - session.lastServedAt) / 1000),
           owner: session.owner,
-          isVod: session.isVod
+          isVod: session.isVod,
+          source: session.source
         }
       })
     )

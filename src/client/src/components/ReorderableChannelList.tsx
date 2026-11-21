@@ -24,6 +24,9 @@ export interface ReorderableRow {
    *  list for reorder/remove, exactly like storedStreamId (v0.78.0). */
   storedPlaylistId?: string
   name: string
+  /** The provider's own channel number, when the source list carries one (v0.112.0) — the same
+   *  number a TV remote or the provider's own EPG addresses the channel by. */
+  num?: number
   kind: 'live' | 'movie' | 'series'
   /** Channel artwork, when the entry (or a loaded channel list) has it. */
   icon?: string | null
@@ -125,6 +128,7 @@ export function ReorderableChannelList({
             ) : (
               <span className="reorder-icon placeholder" aria-hidden="true" />
             )}
+            {typeof row.num === 'number' && row.num > 0 && <span className="reorder-num">{row.num}</span>}
             <span className="reorder-label">{row.name}</span>
             {row.badge && <span className="resume-badge">{row.badge}</span>}
           </button>

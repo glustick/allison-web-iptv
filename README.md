@@ -6,7 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.111.0 — the multi-view round)
+## Current state (v0.112.0 — the ops round)
+
+System → Active transcodes gained **Account** and **Source** columns (whose session, reading
+what — provider credentials never reach the table). The playlists panel states each playlist's
+**provider connection limit**; list-view rows show the provider's **channel number**. 1128
+tests; typecheck, lint and both builds clean.
+
+## Previous release (v0.111.0 — the multi-view round)
 
 Playing tiles gained a **⇄ change-channel** button (re-point a tile without losing its slot);
 programme search gained a **range select** (24h/3 days/7 days) and **description snippets** on

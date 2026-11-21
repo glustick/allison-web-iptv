@@ -385,6 +385,8 @@ export function SystemPanel(): JSX.Element {
             <thead>
               <tr>
                 <th>Session</th>
+                <th>Account</th>
+                <th>Source</th>
                 <th>Running</th>
                 <th>Output</th>
                 <th>Disk used</th>
@@ -396,6 +398,14 @@ export function SystemPanel(): JSX.Element {
               {(health?.transcode.active ?? []).map((session) => (
                 <tr key={session.sessionId}>
                   <td>{session.sessionId}</td>
+                  {/* v0.112.0 — the two questions the row never answered: WHOSE session is this,
+                      and WHAT is it reading? The source is the app-side path (a provider URL's
+                      credentials never reach this table); a film row says so explicitly. */}
+                  <td>{session.owner ?? <span className="admin-muted">—</span>}</td>
+                  <td>
+                    <code>{session.source}</code>
+                    {session.isVod && <span className="admin-muted"> (film)</span>}
+                  </td>
                   <td>{session.runningSeconds}s</td>
                   <td>{session.hasPlaylist ? 'playlist ready' : 'starting'}</td>
                   <td>{formatBytesShort(session.bytes)}</td>
@@ -413,7 +423,7 @@ export function SystemPanel(): JSX.Element {
               ))}
               {health && health.transcode.active.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="admin-empty">
+                  <td colSpan={8} className="admin-empty">
                     None running
                   </td>
                 </tr>

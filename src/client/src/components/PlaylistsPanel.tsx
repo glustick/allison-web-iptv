@@ -23,6 +23,9 @@ interface PlaylistRow {
   label: string
   server: string
   username: string
+  /** The provider's own concurrent-stream limit, captured at credential-save (v0.86.0); null
+   *  when the panel never answered. Shown read-only: it is the provider's number, not ours. */
+  maxConnections: number | null
   /** True when a password is stored server-side. */
   passwordSet: boolean
   /** Only ever what the operator just typed — never a value that came from the server. */
@@ -31,13 +34,18 @@ interface PlaylistRow {
   key: string
 }
 
-function toRows(playlists: Array<Omit<PlaylistRow, 'password' | 'key'>>): PlaylistRow[] {
+type IncomingPlaylist = Omit<PlaylistRow, 'password' | 'key' | 'maxConnections'> & {
+  maxConnections?: unknown
+}
+
+function toRows(playlists: IncomingPlaylist[]): PlaylistRow[] {
   return playlists.map((playlist) => ({
     id: playlist.id,
     label: playlist.label,
     server: playlist.server,
     username: playlist.username,
     passwordSet: playlist.passwordSet,
+    maxConnections: typeof playlist.maxConnections === 'number' && Number.isFinite(playlist.maxConnections) && playlist.maxConnections > 0 ? playlist.maxConnections : null,
     password: '',
     key: playlist.id
   }))
@@ -55,7 +63,7 @@ export function PlaylistsPanel() {
     setError(null)
     try {
       const response = await fetch('/api/iptv/playlists')
-      const body = (await response.json()) as { playlists?: Array<Omit<PlaylistRow, 'password' | 'key'>>; error?: string }
+      const body = (await response.json()) as { playlists?: IncomingPlaylist[]; error?: string }
       if (!response.ok) throw new Error(body.error ?? `Could not load playlists (${response.status})`)
       setRows(toRows(body.playlists ?? []))
     } catch (err) {
@@ -77,7 +85,7 @@ export function PlaylistsPanel() {
   function addRow(): void {
     setRows((current) => [
       ...current,
-      { id: '', label: '', server: '', username: '', passwordSet: false, password: '', key: `new-${Date.now()}` }
+      { id: '', label: '', server: '', username: '', passwordSet: false, maxConnections: null, password: '', key: `new-${Date.now()}` }
     ])
     setNote(null)
   }
@@ -167,6 +175,13 @@ export function PlaylistsPanel() {
               Remove
             </button>
           </div>
+          {row.id && (
+            <p className="setup-hint" style={{ margin: '0.25rem 0 0 0.25rem' }}>
+              {row.maxConnections !== null
+                ? `Provider limit: ${row.maxConnections} concurrent stream${row.maxConnections === 1 ? '' : 's'}`
+                : 'Provider limit: not reported'}
+            </p>
+          )}
         </div>
       ))}
 

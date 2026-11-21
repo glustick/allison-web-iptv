@@ -83,6 +83,10 @@ export interface HealthReport {
       bytesPerSecond: number | null
       /** v0.109.0 — whether this session retains its whole output (a film): the disk-bound row. */
       isVod: boolean
+      /** v0.112.0 — whose account started this, and WHAT it reads (the app-side stream path;
+       *  never a provider URL). */
+      owner: string | null
+      source: string
       /** Seconds since anything fetched this session's output. The server stops a session at 120. */
       idleSeconds: number
     }>

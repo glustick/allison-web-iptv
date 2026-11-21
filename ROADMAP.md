@@ -8,6 +8,27 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.112.0 — the ops round: what is transcoding and for whom, what the provider allows, and what a channel is numbered.**
+
+Three gaps, each verified absent before building (several candidates — the reminders panel, the
+shortcuts help — already existed and were left alone):
+
+- **Active transcodes answers "whose, and what".** The System tab's table gained **Account** and
+  **Source** columns: the session's owner (v0.102.0's attribution, finally surfaced) and the
+  app-side stream path it reads — recorded on the session itself, derived from the relay URL,
+  with a direct provider input recorded only as "provider stream (direct)" because its path
+  carries credentials that must never reach an admin surface. A film row says "(film)".
+- **The playlists panel states the provider's own limit.** `maxConnections` was captured per
+  playlist at credential-save (v0.86.0) and shown only in the multi-view surfaces; the
+  management panel now says "Provider limit: N concurrent streams" (or "not reported") under
+  each saved row. Read-only — it is the provider's number, not ours.
+- **Channel numbers in the list view.** The provider's own `num` — what a TV remote or the
+  provider's EPG addresses the channel by — was carried by every channel object and shown
+  nowhere. List rows now show it, muted and tabular, before the name.
+
+Tests: 1128 (unchanged — the source derivation rides the relay-path rule the ledger already
+tests; the rest is display over typed fields). Typecheck, lint and both builds clean.
+
 **v0.111.0 — the multi-view round: tiles you can re-point, search that reaches the weekend, and a way back.**
 
 Three gaps verified against the code before building (the reminders panel and the shortcuts help

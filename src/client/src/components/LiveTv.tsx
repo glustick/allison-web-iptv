@@ -570,6 +570,7 @@ export function LiveTv({
             storedStreamId: libraryEntries[index]?.streamId ?? channel.stream_id,
             storedPlaylistId: libraryEntries[index]?.playlistId ?? '',
             name: channel.name,
+            num: channel.num,
             kind: 'live' as const,
             icon: providerIconById.get(channel.stream_id) ?? null
           }))
