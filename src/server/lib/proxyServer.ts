@@ -654,7 +654,16 @@ export function createProxyServer(deps: ProxyServerDeps): Server {
         // direction. 4xx is deliberately NOT a failover trigger — a 400/403 segment refusal
         // is the signature-expiry rescue's business (below), and an auth problem would fail
         // identically on both portals.
-        if (primaryBase !== null && backupUrl && !failedOver && upstreamRes.statusCode >= 500) {
+        // v0.117.0 — 429 joins the failover: a rate-limited primary is the provider saying
+        // "this account is over its concurrent limit", and the OTHER portal is exactly where
+        // that pressure does not exist. Transport failures already fail over; this closes the
+        // status-code half.
+        if (
+          primaryBase !== null &&
+          backupUrl &&
+          !failedOver &&
+          (upstreamRes.statusCode >= 500 || upstreamRes.statusCode === 429)
+        ) {
           upstreamRes.on('data', () => {}) // Drain the failed body — the other portal's answer is the one being waited for.
           failedOver = true
           if (!attemptOnBackup) {

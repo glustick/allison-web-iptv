@@ -9,7 +9,7 @@ const base = {
   hasFatalError: false,
   ended: false,
   paused: false,
-  kicksSinceLastFragment: 0
+  kicksSinceLastFragment: 0, bufferAheadSeconds: 30
 }
 
 describe('liveRecoveryActions', () => {
@@ -40,12 +40,12 @@ describe('liveRecoveryActions', () => {
     expect(longStale.kickLoader).toBe(true)
     // …without resuming playback: the viewer chose pause; only the source is repaired.
     expect(longStale.resumePlayback).toBe(false)
-    const escalated = liveRecoveryActions({ ...base, lastFragmentAt: base.now - LIVE_STALE_WHILE_PAUSED_MS * 3, playheadAtBufferEnd: false, paused: true, kicksSinceLastFragment: 2 })
+    const escalated = liveRecoveryActions({ ...base, lastFragmentAt: base.now - LIVE_STALE_WHILE_PAUSED_MS * 3, playheadAtBufferEnd: false, paused: true, kicksSinceLastFragment: 2, bufferAheadSeconds: 30 })
     expect(escalated.reloadSource).toBe(true)
   })
 
   it('escalates to a full source reload after two kicks produced no fragments', () => {
-    const actions = liveRecoveryActions({ ...base, lastFragmentAt: base.now - LIVE_STALE_AFTER_MS * 5, kicksSinceLastFragment: 2 })
+    const actions = liveRecoveryActions({ ...base, lastFragmentAt: base.now - LIVE_STALE_AFTER_MS * 5, kicksSinceLastFragment: 2, bufferAheadSeconds: 30 })
     // No resumePlayback here by design: the reload path rebuilds the player and its own
     // attach sequence resumes the element, and a viewer-paused stream must stay paused.
     expect(actions).toEqual({ resumePlayback: false, kickLoader: false, reloadSource: true })

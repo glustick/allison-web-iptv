@@ -46,6 +46,9 @@ export interface LiveStallSnapshot {
   paused: boolean
   /** How many loader kicks have been applied since the last fragment arrived. */
   kicksSinceLastFragment: number
+  /** Seconds of playable buffer ahead of the playhead (v0.117.0) — the triage the kick-vs-reload
+   *  decision now uses, instead of guessing from the buffer's end alone. */
+  bufferAheadSeconds: number
 }
 
 export interface LiveRecoveryActions {
@@ -86,7 +89,46 @@ export function liveRecoveryActions(snapshot: LiveStallSnapshot): LiveRecoveryAc
   if (snapshot.kicksSinceLastFragment >= 2) {
     return { resumePlayback: false, kickLoader: false, reloadSource: true }
   }
+  // v0.117.0 — the buffer-aware triage the desktop sibling shipped (its 0.30.0): with almost no
+  // buffer left, a kick is a delay — the screen freezes before the kick can help, so the reload
+  // ladder starts NOW instead of after two visible freezes. With buffer still playing, the kick
+  // is harmless and the gentle rung goes first.
+  if (snapshot.bufferAheadSeconds < BUFFER_EMPTY_SECONDS) {
+    return { resumePlayback: false, kickLoader: false, reloadSource: true }
+  }
   return { resumePlayback: !snapshot.paused, kickLoader: true, reloadSource: false }
+}
+
+/** Below this much buffer ahead, the screen is about to freeze — escalation over gentleness. */
+export const BUFFER_EMPTY_SECONDS = 2
+
+/** How far behind the live edge a playhead may drift before recovery drags it back. Far enough
+ *  that a long pause-and-return never triggers it, close enough that "still watching" is true. */
+export const LIVE_REJOIN_BEHIND_SECONDS = 45
+
+/** The live-edge rejoin rung (v0.117.0, ported from the desktop's 0.30.0): a LIVE playhead that
+ *  has drifted far behind hls.js's own sync position — while the buffer still plays fine, which
+ *  is why the stale rules above stay silent — is not "watching" anymore; it is a slow slide to
+ *  a buffer starved minutes from now. One seek to the edge fixes it. Never fires on paused
+ *  elements (the viewer chose that position) or without a real sync position. */
+export function shouldRejoinLiveEdge(snapshot: {
+  paused: boolean
+  currentTime: number
+  liveSyncPosition: number | null
+  bufferAheadSeconds: number
+}): boolean {
+  if (snapshot.paused) return false
+  if (snapshot.liveSyncPosition === null) return false
+  const behind = snapshot.liveSyncPosition - snapshot.currentTime
+  return behind > LIVE_REJOIN_BEHIND_SECONDS && snapshot.bufferAheadSeconds > 0
+}
+
+/** The reconnect backoff (v0.117.0, ported from the desktop's 0.30.0): attempt 0 waits 2s,
+ *  each further attempt doubles, capped at 15s — a flapping provider gets spaced retries
+ *  instead of four identical 2s slams into the same wall. */
+export function networkRetryDelayMs(attempt: number): number {
+  const capped = Math.max(0, Math.min(attempt, 3))
+  return Math.min(2_000 * 2 ** capped, 15_000)
 }
 
 /** The playhead-at-exhausted-buffer check the snapshot's `playheadAtBufferEnd` comes from. */

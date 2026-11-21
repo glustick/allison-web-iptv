@@ -35,6 +35,12 @@ export interface MultiViewTileState {
 
 export function useMultiViewTile(videoRef: React.RefObject<HTMLVideoElement | null>, url: string | null): MultiViewTileState {
   const [error, setError] = useState<string | null>(null)
+  // v0.117.0 — bumped by the bounded auto-retry; the effect re-attaches fresh.
+  const [attachNonce, setAttachNonce] = useState(0)
+  // Counts THIS url's auto-retries across effect re-runs; a url change resets it. Without this,
+  // every re-attach would start from zero and a dead channel would retry forever.
+  const retryCountRef = useRef(0)
+  const retriedUrlRef = useRef<string | null>(null)
   // Muted state is applied to the element directly by the caller (video.muted = ...), never a
   // dependency here: re-attaching on an audio toggle would reload the tile's whole stream — the
   // desktop port's own documented gotcha, not repeated.
@@ -43,21 +49,38 @@ export function useMultiViewTile(videoRef: React.RefObject<HTMLVideoElement | nu
   useEffect(() => {
     mutedRef.current = true
     setError(null)
+    // A different channel: its retry budget starts clean.
+    if (url !== retriedUrlRef.current) {
+      retryCountRef.current = 0
+      retriedUrlRef.current = url
+    }
     const video = videoRef.current
     if (!video || !url) return
     video.muted = true
 
-    let hls: Hls | null = null
+        let hls: Hls | null = null
+    let retryTimer: number | null = null
     if (url.endsWith('.m3u8') && Hls.isSupported()) {
       hls = new Hls(TILE_HLS_CONFIG)
       hls.loadSource(url)
       hls.attachMedia(video)
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) return
-        // Stop the instance: a fatal tile error is terminal by design — no retries, no
-        // conversion, no ladder. The message names the details the main player would act on.
         hls?.destroy()
         hls = null
+        // v0.117.0 — bounded auto-retry (desktop parity): provider blips killed tiles that
+        // stayed dead until a human noticed. Two spaced retries per URL change, then the
+        // terminal message (no conversion, no ladder — the main player remains the watch
+        // surface that can convert).
+        if (url !== retriedUrlRef.current) retriedUrlRef.current = url
+        if (retryCountRef.current < 2) {
+          retryCountRef.current += 1
+          const delay = 15_000 * retryCountRef.current
+          retryTimer = window.setTimeout(() => {
+            setAttachNonce((n) => n + 1)
+          }, delay)
+          return
+        }
         setError(`Tile stopped: ${data.details}`)
       })
     } else {
@@ -65,11 +88,12 @@ export function useMultiViewTile(videoRef: React.RefObject<HTMLVideoElement | nu
     }
     video.play().catch(() => {})
     return () => {
+      if (retryTimer !== null) window.clearTimeout(retryTimer)
       hls?.destroy()
       video.removeAttribute('src')
       video.load()
     }
-  }, [videoRef, url])
+  }, [videoRef, url, attachNonce])
 
   return { error }
 }

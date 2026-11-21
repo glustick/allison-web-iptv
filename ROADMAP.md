@@ -8,6 +8,40 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.117.0 — the stability round: the desktop's proven ladder upgrades, ported.**
+
+The desktop sibling shipped three recovery upgrades in its 0.30.0/0.31.0 stability rounds that
+the web player never received; this release ports them all, plus two web-specific pieces:
+
+- **Live-edge rejoin rung** — a playhead drifting far behind the live edge (while the buffer
+  still plays, which is why the stale rules stayed silent) is a slow slide to a future freeze.
+  One seek to hls.js's own sync position, once per run, re-armed when fragments flow. Never on
+  a paused element.
+- **Buffer-aware triage** — with under 2s of buffer left, the ladder escalates straight to the
+  reload rung instead of spending two visible freezes on gentle kicks; with buffer playing, the
+  kick goes first.
+- **Reconnect backoff** — network retries double per attempt (2s → 4s → 8s → capped 15s)
+  instead of four identical 2-second slams into the same wall. The reset-on-recovery behaviour
+  is unchanged.
+- **VOD reload continuity** — the film player's own reload path re-applied the ORIGINAL resume
+  point, discarding everything watched since. `lib/vodContinuity.ts` remembers where each title
+  actually got to (bounded, in-memory — the durable copy remains the resume store) and a reload
+  continues from there.
+- **Health-informed attach** — a channel declared not-broadcasting minutes ago says so in the
+  first second of the next attempt (the honest sentence up front, before 30 seconds of frozen-
+  window detection), and the declaration clears the moment fragments flow.
+- **Network-return revive** — the network coming back is the same "the world changed" event a
+  tab-restore is; revive instead of waiting for the next stall to be noticed.
+- **Tile auto-retry** — provider blips killed tiles that stayed dead until a human noticed;
+  two spaced auto-retries per channel now run before the terminal message.
+- **429 joins the failover** — a rate-limited primary is the provider saying this account is
+  over its concurrent limit, and the other portal is exactly where that pressure does not
+  exist; transport failures already failed over.
+
+Tests: 1131 (3 new on the off-air hints' TTL semantics; the rejoin/backoff/triage rules ride
+liveStreamRecovery's tested surface with its fixtures extended). Typecheck, lint and both
+builds clean.
+
 **v0.116.0 — ten more, the trust-the-surface round.**
 
 Every candidate verified first; "return to live" during catch-up already existed and was dropped.

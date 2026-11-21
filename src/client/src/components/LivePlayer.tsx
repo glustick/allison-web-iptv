@@ -21,7 +21,9 @@ import { useSessionExpired } from '../lib/sessionWatch'
 import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRecovery'
 import { shouldAcceptVisibleEvent, shouldAutoRevive, shouldKickRecovery } from '../lib/reviveOnVisible'
 import { createPlaylistStallTracker } from '../lib/playlistStall'
+import { networkRetryDelayMs, shouldRejoinLiveEdge } from '../lib/liveStreamRecovery'
 import { OFF_AIR_PROBE_MS, parsePlaylistWindow, probeVerdict, type PlaylistWindow } from '../lib/offAirProbe'
+import { clearNotBroadcasting, rememberNotBroadcasting, wasRecentlyNotBroadcasting } from '../lib/offAirHints'
 import { isDeadSessionTerminal, shouldRestartDeadSession, SESSION_HEALTH_POLL_MS } from '../lib/sessionHealth'
 import { canDecodeAudioCodec } from '../lib/audioCodecSupport'
 import { loadPlayerPrefs, pickTrackIndex, savePlayerPrefs, trackKey } from '../lib/playerPrefs'
@@ -46,7 +48,6 @@ import { TrackControls, type PlayerTrack } from './TrackControls'
 // recover, unlike the desktop app which self-heals and was confirmed live not to exhibit the
 // same freezing.
 const MAX_NETWORK_RETRIES = 4
-const NETWORK_RETRY_DELAY_MS = 2000
 const MAX_MEDIA_ERROR_RECOVERIES = 3
 const ERROR_RESET_AFTER_MS = 15000
 
@@ -330,8 +331,33 @@ export function LivePlayer({
       engineRef.current = route.route === 'direct' ? route.engine : nativeHls ? 'native' : 'hls'
     }
     const sourceUrl = getSourceUrl(url)
+    // Health-informed attach (v0.117.0, desktop 0.31.0 parity): a channel declared
+    // not-broadcasting minutes ago says so NOW — the honest sentence before the attach, not
+    // after 30 seconds of frozen-window detection. The detector still confirms; the hint only
+    // moves the message forward.
+    if (wasRecentlyNotBroadcasting(url)) {
+      logEvent('[player] this channel was declared not-broadcasting recently — attaching anyway, with the notice up front')
+      setStatusNotice(
+        'This channel was not broadcasting a few minutes ago — checking whether it has recovered…'
+      )
+    }
     let hls: Hls | null = null
     let networkRetryCount = 0
+    // v0.117.0 — seconds of playable buffer ahead of the playhead, sampled by the watchdog and
+    // the triage/rejoin rules.
+    const bufferAheadOf = (element: HTMLVideoElement): number => {
+      let ahead = 0
+      for (let i = 0; i < element.buffered.length; i += 1) {
+        if (element.buffered.start(i) <= element.currentTime && element.currentTime <= element.buffered.end(i)) {
+          ahead = element.buffered.end(i) - element.currentTime
+        }
+      }
+      return ahead
+    }
+    // The live-edge rejoin (see shouldRejoinLiveEdge): one seek per run, re-armed when fragments
+    // flow again — a viewer who intentionally sought backwards must not be dragged forward
+    // every second until they pause.
+    let rejoinArmed = true
     let mediaErrorRecoveryCount = 0
     let errorResetTimer: ReturnType<typeof setTimeout> | null = null
     let networkRetryTimer: ReturnType<typeof setTimeout> | null = null
@@ -420,7 +446,8 @@ let stallCount = 0
           hasFatalError: fatalErrorShown,
           ended: video.ended,
           paused: video.paused,
-          kicksSinceLastFragment
+          kicksSinceLastFragment,
+          bufferAheadSeconds: bufferAheadOf(video)
         })
         if (actions.kickLoader && hlsRef.current) {
           kicksSinceLastFragment += 1
@@ -432,8 +459,31 @@ let stallCount = 0
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
+    // v0.117.0 — the network coming back is the same "the world changed, check the player"
+    // event a tab-restore is: revive instead of waiting for the next stall to be noticed.
+    window.addEventListener('online', onVisible)
     const recoveryTimer = setInterval(() => {
       if (!hls || gaveUp || fatalErrorShown) return
+      // v0.117.0 — the live-edge rejoin rung (desktop 0.30.0 parity): a playhead drifting far
+      // behind the edge while the buffer still plays is a slow slide to a future freeze. One
+      // seek, re-armed when fragments flow again.
+      if (rejoinArmed && !video.paused) {
+        const syncPosition = hls.liveSyncPosition
+        if (
+          shouldRejoinLiveEdge({
+            paused: video.paused,
+            currentTime: video.currentTime,
+            liveSyncPosition: typeof syncPosition === 'number' ? syncPosition : null,
+            bufferAheadSeconds: bufferAheadOf(video)
+          })
+        ) {
+          rejoinArmed = false
+          logEvent(
+            `[player] playhead ${video.currentTime.toFixed(0)}s is far behind the live edge (${syncPosition?.toFixed(0)}s) — rejoining`
+          )
+          video.currentTime = syncPosition as number
+        }
+      }
       const actions = liveRecoveryActions({
         now: Date.now(),
         lastFragmentAt,
@@ -442,7 +492,8 @@ let stallCount = 0
         hasFatalError: fatalErrorShown,
         ended: video.ended,
         paused: video.paused,
-        kicksSinceLastFragment
+        kicksSinceLastFragment,
+        bufferAheadSeconds: bufferAheadOf(video)
       })
       if (actions.reloadSource) {
         gaveUp = true
@@ -608,6 +659,9 @@ let stallCount = 0
       instance.loadSource(sourceUrl)
       instance.attachMedia(video)
       instance.on(Hls.Events.FRAG_BUFFERED, () => {
+        rejoinArmed = true
+        // Fragments flowing is proof of life — the off-air hint for this channel is stale now.
+        clearNotBroadcasting(url)
         noteFragmentActivity()
         setStatusNotice(null)
         // Playback provably works again — the auto-revive budget and the reload ladder both
@@ -637,6 +691,7 @@ let stallCount = 0
         if (!stalled) return
         if (video.paused || !isPlayheadAtBufferEnd(video)) return
         gaveUp = true
+        rememberNotBroadcasting(url)
         logEvent(
           `[player] playlist window frozen at ${details.startSN}-${details.endSN} — declaring the channel not broadcasting`
         )
@@ -769,7 +824,7 @@ let stallCount = 0
             if (networkRetryCount <= MAX_NETWORK_RETRIES) {
               if (networkRetryTimer) clearTimeout(networkRetryTimer)
       if (offAirProbeTimer !== null) window.clearInterval(offAirProbeTimer)
-              networkRetryTimer = setTimeout(() => instance.startLoad(), NETWORK_RETRY_DELAY_MS)
+              networkRetryTimer = setTimeout(() => instance.startLoad(), networkRetryDelayMs(networkRetryCount))
             } else {
               fatalErrorShown = true
               // A silent provider is the common failure here, and it reaches the player as a 502/504
@@ -920,6 +975,7 @@ let stallCount = 0
       clearInterval(recoveryTimer)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
+      window.removeEventListener('online', onVisible)
       video.removeEventListener('error', onNativeError)
       video.removeEventListener('waiting', handleWaiting)
       video.removeEventListener('playing', handlePlaying)

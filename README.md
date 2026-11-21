@@ -6,7 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.116.0 — ten more, the trust-the-surface round)
+## Current state (v0.117.0 — the stability round)
+
+The desktop's proven recovery upgrades, ported: **live-edge rejoin**, **buffer-aware triage**,
+**reconnect backoff**, **VOD reload continuity**, **health-informed attach** (off-air channels
+say so immediately), **network-return revive**, **tile auto-retry**, and **429 failover** to
+the backup portal. 1131 tests; typecheck, lint and both builds clean.
+
+## Previous release (v0.116.0 — ten more, the trust-the-surface round)
 
 Auth log **date range**; **Send test** for the Discord webhook; the guide header **says the
 day**; season **▶ Play next**; tile **Retry**; a login **password eye**; guide toggles

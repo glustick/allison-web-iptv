@@ -16,6 +16,7 @@ import { SubtitleStyleButton } from './SubtitleStyleButton'
 import { PlayerMenu } from './PlayerMenu'
 import { appendEvent, type PlaybackEvent } from '../lib/playbackEvents'
 import { SleepTimerButton } from './SleepTimerButton'
+import { rememberVodPosition, vodContinuityPosition } from '../lib/vodContinuity'
 import { MediaStats } from './MediaStats'
 import { TrackControls, type PlayerTrack } from './TrackControls'
 
@@ -164,7 +165,11 @@ export function NativeVideoPlayer({
     let resumeApplied = false
     const applyResume = (): void => {
       if (resumeApplied) return
-      const target = initialPositionSeconds ?? 0
+      // v0.117.0 — reload continuity (desktop 0.30.0 parity): a re-attach of the SAME title
+      // continues from where it actually got to, not from the resume point the opener passed —
+      // which is minutes stale after a watch. The reporter keeps the continuity map current.
+      const continuity = vodContinuityPosition(titleKey)
+      const target = Math.max(initialPositionSeconds ?? 0, continuity ?? 0)
       resumeApplied = true
       if (target <= 5) return
       const duration = video.duration
@@ -179,6 +184,7 @@ export function NativeVideoPlayer({
 
     const report = (): void => {
       const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null
+      rememberVodPosition(titleKey, video.currentTime)
       onProgressRef.current?.(video.currentTime, duration)
     }
     const reportIfPlaying = (): void => {
