@@ -6,7 +6,14 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.114.0 — ten more)
+## Current state (v0.115.0 — ten more, the living-room edition)
+
+**Channel-number jump** (type digits in Live TV), guide filter **matches numbers**, **/**
+focuses it, **"With guide"** toggle, **480p** quality, **episode filter** in a series, the
+multi-view **audible tile persists**, **🎲 Surprise me**, **artwork in search results**, and
+**per-entry history removal**. 1128 tests; typecheck, lint and both builds clean.
+
+## Previous release (v0.114.0 — ten more)
 
 Guide **day-jump**; programme search **matches descriptions**; **catch-up from search results**;
 reminder **dates**; auth log **CSV export**; **end all other sessions**; **tile swap**;

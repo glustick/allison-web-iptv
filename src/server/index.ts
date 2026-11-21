@@ -1855,6 +1855,24 @@ app.post('/api/prefs/history', requireAuth, (req, res) => {
   }
 })
 
+// One history row's removal (v0.115.0) — the per-entry Remove beside the existing clear-all.
+// The row is a composite channel (kind + stream + playlist), which is the identity the history
+// view itself shows.
+app.post('/api/prefs/history/remove', requireAuth, (req, res) => {
+  const session = req.authSession as AuthSession
+  try {
+    const body = (req.body ?? {}) as { kind?: unknown; streamId?: unknown; playlistId?: unknown }
+    prefsStore.removeHistoryEntry(session.username, {
+      kind: (body.kind === 'movie' || body.kind === 'series' ? body.kind : 'live') as 'live' | 'movie' | 'series',
+      streamId: Number(body.streamId),
+      playlistId: typeof body.playlistId === 'string' ? body.playlistId : undefined
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    handlePrefsError(res, err, 'remove history entry')
+  }
+})
+
 app.delete('/api/prefs/history', requireAuth, (req, res) => {
   const session = req.authSession as AuthSession
   try {

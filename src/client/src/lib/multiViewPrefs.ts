@@ -27,6 +27,9 @@ export interface MultiViewSlot {
 export interface MultiViewPrefs {
   layout: MultiViewLayout
   slots: Array<MultiViewSlot | null>
+  /** The tile that was making sound (v0.115.0) — restored muted-state on reload, session-only
+   *  behaviour kept per device. Null = every tile muted. */
+  lastAudible: number | null
   /**
    * Whether adding a tile to an account already AT its provider-stated limit may stop that
    * account's idlest tile automatically (v0.107.0) — the alternative is the blocked row and a
@@ -36,7 +39,12 @@ export interface MultiViewPrefs {
   autoRelease: boolean
 }
 
-export const DEFAULT_MULTI_VIEW_PREFS: MultiViewPrefs = { layout: 2, slots: [null, null], autoRelease: true }
+export const DEFAULT_MULTI_VIEW_PREFS: MultiViewPrefs = {
+  layout: 2,
+  slots: [null, null],
+  autoRelease: true,
+  lastAudible: null
+}
 
 /**
  * Grow pads with empty slots, shrink drops the overflow — the desktop store's resize semantics,
@@ -73,13 +81,17 @@ export function loadMultiViewPrefs(storage: Pick<Storage, 'getItem'> | null = sa
   try {
     const raw = storage.getItem(KEY)
     if (!raw) return DEFAULT_MULTI_VIEW_PREFS
-    const parsed = JSON.parse(raw) as { layout?: unknown; slots?: unknown; autoRelease?: unknown }
+    const parsed = JSON.parse(raw) as { layout?: unknown; slots?: unknown; autoRelease?: unknown; lastAudible?: unknown }
     const layout: MultiViewLayout = parsed.layout === 4 ? 4 : 2
     // autoRelease is absent on every pre-v0.107 store, and defaults ON — `=== false` is the only
     // way an operator has ever said no.
     const autoRelease = parsed.autoRelease !== false
-    if (!Array.isArray(parsed.slots)) return { layout, slots: resizeSlots([], layout), autoRelease }
-    return { layout, slots: resizeSlots(parsed.slots.map(parseSlot), layout), autoRelease }
+    const lastAudible =
+      typeof parsed.lastAudible === 'number' && Number.isInteger(parsed.lastAudible) && parsed.lastAudible >= 0
+        ? parsed.lastAudible
+        : null
+    if (!Array.isArray(parsed.slots)) return { layout, slots: resizeSlots([], layout), autoRelease, lastAudible }
+    return { layout, slots: resizeSlots(parsed.slots.map(parseSlot), layout), autoRelease, lastAudible }
   } catch {
     return DEFAULT_MULTI_VIEW_PREFS
   }

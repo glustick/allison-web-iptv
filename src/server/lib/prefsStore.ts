@@ -163,6 +163,14 @@ export interface PrefsStore {
   listHistory(username: string, limit?: number): HistoryEntry[]
   recordHistory(username: string, channel: ChannelRef): void
   clearHistory(username: string): void
+  /** Removes every visit of one composite channel (v0.115.0) — the history list's per-row
+   *  Remove. The visible row is a distinct channel (most-recent-first, deduped), so removing
+   *  "the entry" means removing that channel's visits, keyed like the view: kind + stream +
+   *  playlist. */
+  removeHistoryEntry(
+    username: string,
+    channel: { kind: MediaKind; streamId: number; playlistId?: string }
+  ): void
   listCategories(username: string): CustomCategory[]
   createCategory(username: string, name: string): CustomCategory
   renameCategory(username: string, id: number, name: string): void
@@ -381,6 +389,21 @@ export function createPrefsStore({ dataDir }: { dataDir: string }): PrefsStore {
         category: row.category,
         watchedAt: row.watched_at
       }))
+    },
+
+    removeHistoryEntry(username: string, channel: ChannelRef): void {
+      const db = requireDb()
+      const kind = validateKind(channel.kind)
+      const streamId = validateStreamId(channel.streamId)
+      const playlistId = cleanPlaylistId(channel.playlistId)
+      // The username in the WHERE is the scoping: without it, one account could delete
+      // another's rows by guessing stream ids.
+      db.prepare('DELETE FROM history WHERE username = ? AND kind = ? AND stream_id = ? AND playlist_id = ?').run(
+        username,
+        kind,
+        streamId,
+        playlistId
+      )
     },
 
     recordHistory(username: string, channel: ChannelRef): void {

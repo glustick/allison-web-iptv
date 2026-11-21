@@ -464,18 +464,42 @@ export function EpgGrid({
   // 12k-channel catalogue behind 'All', typing three characters is the difference between the
   // guide and a haystack.
   const [channelFilter, setChannelFilter] = useState('')
+  const channelFilterRef = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      // '/' focuses the filter, unless the user is already typing somewhere else.
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      event.preventDefault()
+      channelFilterRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const favouriteSet = useMemo(() => new Set(favouriteKeys ?? []), [favouriteKeys])
+  // v0.115.0 — "with guide only": a channel the matcher never connected shows an empty row and
+  // a Map… button; when the viewer wants programmes rather than mapping work, those rows are
+  // noise. listings here is the aggregated window's own record.
+  const [guideOnly, setGuideOnly] = useState(false)
   const shownChannels = useMemo(() => {
     let rows = channels
     if (favouritesOnly) {
       rows = rows.filter((channel) => favouriteSet.has(`${playlistRefOf(channel) ?? ''}:${channel.stream_id}`))
     }
+    if (guideOnly) {
+      rows = rows.filter((channel) => (aggregated.data?.listings ?? {})[liveChannelKey(channel)]?.length > 0)
+    }
     const needle = channelFilter.trim().toLowerCase()
     if (needle.length > 0) {
-      rows = rows.filter((channel) => channel.name.toLowerCase().includes(needle))
+      // The name OR the provider's own channel number — "668" is how the remote says it.
+      rows = rows.filter(
+        (channel) =>
+          channel.name.toLowerCase().includes(needle) || String(channel.num ?? '').includes(needle)
+      )
     }
     return rows
-  }, [channels, favouritesOnly, favouriteSet, channelFilter])
+  }, [channels, favouritesOnly, favouriteSet, channelFilter, guideOnly, aggregated.data])
   // This device's reminders (v0.91.0), kept in step with the watcher and any other tab through
   // the store's own change event rather than by polling localStorage.
   const [reminders, setReminders] = useState<Reminder[]>(() => readReminders())
@@ -718,6 +742,16 @@ export function EpgGrid({
                     onClick={() => jumpToResult(result)}
                     style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.35rem 0.5rem', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
                   >
+                    {/* v0.115.0 — the channel's artwork, when the catalogue carries it: at a
+                        glance, the row is recognisable before it is readable. */}
+                    {channel?.stream_icon ? (
+                      <img
+                        src={channel.stream_icon}
+                        alt=""
+                        loading="lazy"
+                        style={{ width: 20, height: 20, objectFit: 'contain', marginRight: 6, verticalAlign: 'middle' }}
+                      />
+                    ) : null}
                     <strong>{result.programme.title}</strong>
                     <span className="epg-note"> {describeResultTime(result.programme.startMs, result.programme.stopMs, Date.now())}</span>
                     {channel && <span className="epg-note"> · {channel.name}</span>}
@@ -842,6 +876,15 @@ export function EpgGrid({
           onChange={(event) => setChannelFilter(event.target.value)}
           style={{ width: '10rem' }}
         />
+        <button
+          type="button"
+          className={guideOnly ? 'admin-small-btn active' : 'admin-small-btn'}
+          aria-pressed={guideOnly}
+          title="Hide channels the guide has no programmes for"
+          onClick={() => setGuideOnly((value) => !value)}
+        >
+          With guide
+        </button>
         {(favouriteKeys?.length ?? 0) > 0 && (
           <button
             type="button"

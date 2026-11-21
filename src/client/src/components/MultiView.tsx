@@ -137,7 +137,12 @@ function TileView({
 
 export function MultiView({ client, categories, favourites, playlists, limits, onPlayInMain }: MultiViewProps): JSX.Element {
   const [prefs, setPrefs] = useState(() => loadMultiViewPrefs())
-  const [activeAudio, setActiveAudio] = useState<number | null>(null)
+  // The audible tile persists per device (v0.115.0): a reloaded tab restores which tile was
+  // making sound instead of dropping every tile to mute. Clamped to the current layout.
+  const [activeAudio, setActiveAudio] = useState<number | null>(() => {
+    const saved = loadMultiViewPrefs().lastAudible
+    return saved !== null && saved < loadMultiViewPrefs().slots.length ? saved : null
+  })
   const [pickingSlot, setPickingSlot] = useState<number | null>(null)
   // v0.114.0 — the swap flow: click ⇋ on one tile, then on the tile to trade places with.
   // Clicking the same tile again cancels. Sound stays with the SLOT, not the channel: the
@@ -172,6 +177,9 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
   useEffect(() => {
     saveMultiViewPrefs(prefs)
   }, [prefs])
+  useEffect(() => {
+    saveMultiViewPrefs({ ...prefs, lastAudible: activeAudio })
+  }, [prefs.layout, prefs.slots, activeAudio])
 
   const setLayout = (layout: MultiViewLayout): void => {
     // A dropped tile's audio goes with it; the surviving indices keep their meaning.

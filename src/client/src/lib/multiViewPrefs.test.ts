@@ -55,10 +55,11 @@ describe('toggleActiveAudio', () => {
 describe('load/save round-trip', () => {
   it('persists and restores a full tile set with layout', () => {
     const storage = fakeStorage()
-    saveMultiViewPrefs({ layout: 4, autoRelease: true, slots: [SLOT, null, { streamId: 668, name: 'Main Event UHD', playlistId: 'p2' }, null] }, storage)
+    saveMultiViewPrefs({ layout: 4, autoRelease: true, lastAudible: 1, slots: [SLOT, null, { streamId: 668, name: 'Main Event UHD', playlistId: 'p2' }, null] }, storage)
     expect(loadMultiViewPrefs(storage)).toEqual({
       layout: 4,
       autoRelease: true,
+      lastAudible: 1,
       slots: [SLOT, null, { streamId: 668, name: 'Main Event UHD', playlistId: 'p2' }, null]
     })
   })
@@ -75,18 +76,18 @@ describe('load/save round-trip', () => {
         slots: [SLOT, { streamId: 'not-a-number', name: 'Broken' }, { name: 'No id' }, 'junk', { streamId: -3, name: 'Negative' }]
       })
     })
-    expect(loadMultiViewPrefs(storage)).toEqual({ layout: 4, autoRelease: true, slots: [SLOT, null, null, null] })
+    expect(loadMultiViewPrefs(storage)).toEqual({ layout: 4, autoRelease: true, lastAudible: null, slots: [SLOT, null, null, null] })
   })
 
   it('falls back to a clean layout-2 grid when the saved shape is unparseable', () => {
     const storage = fakeStorage({ 'iptv:multi-view-prefs': 'not json at all{' })
     expect(loadMultiViewPrefs(storage)).toEqual(DEFAULT_MULTI_VIEW_PREFS)
     const noSlots = fakeStorage({ 'iptv:multi-view-prefs': JSON.stringify({ layout: 4 }) })
-    expect(loadMultiViewPrefs(noSlots)).toEqual({ layout: 4, autoRelease: true, slots: [null, null, null, null] })
+    expect(loadMultiViewPrefs(noSlots)).toEqual({ layout: 4, autoRelease: true, lastAudible: null, slots: [null, null, null, null] })
   })
 
   it('normalizes an unknown layout to 2', () => {
-    const storage = fakeStorage({ 'iptv:multi-view-prefs': JSON.stringify({ layout: 9, slots: [SLOT] , autoRelease: true}) })
+    const storage = fakeStorage({ 'iptv:multi-view-prefs': JSON.stringify({ layout: 9, slots: [SLOT] , autoRelease: true, lastAudible: null}) })
     expect(loadMultiViewPrefs(storage).layout).toBe(2)
     expect(loadMultiViewPrefs(storage).slots).toEqual([SLOT, null])
   })

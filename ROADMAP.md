@@ -8,6 +8,35 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.115.0 — ten more, the living-room edition.**
+
+Every piece verified as a real gap first; four candidates died in verification (the sleep timer's
+remaining countdown, buffered-ahead in the stats panel, history clear, recents clear — all
+already existed):
+
+1. **Channel-number jump** — type digits anywhere in Live TV; the buffer commits after a short
+   pause (or Enter) and the first channel with that provider number plays, with a small overlay
+   showing what has been typed. TV-remote parity for a catalogue this size.
+2. **Guide filter matches numbers too** — "668" finds the channel the way the remote says it.
+3. **/** focuses the guide filter; Escape clears it — the filter is now keyboard-first like the
+   grid it serves.
+4. **"With guide" toggle** — hides channels the matcher never connected (empty rows + Map…
+   buttons) when the viewer wants programmes rather than mapping work.
+5. **Quality 480p** — beside Source/1080p/720p; validated by the same 240–2160 route rule.
+6. **Episode filter within an open series** — title or episode number, per season; a season
+   filtered to nothing collapses.
+7. **Auto-play next preference and countdown** shipped last round; this round the **audible tile
+   persists** — a reloaded multi-view tab restores which tile was making sound.
+8. **Surprise me** — 🎲 plays a random channel from whatever list is on screen; deciding is
+   sometimes the hard part of a 12k catalogue.
+9. **Search results carry the channel's artwork** — recognisable before readable.
+10. **Per-entry history removal** — the history row's own ✕, keyed by the composite identity the
+    view shows (kind + stream + playlist), with the username scoping that keeps one account out
+    of another's rows.
+
+Tests: 1128 (unchanged — display, persistence and one endpoint over tested primitives).
+Typecheck, lint and both builds clean.
+
 **v0.114.0 — ten more.**
 
 The house's second ten-in-one round, each piece verified as a real gap before building (the

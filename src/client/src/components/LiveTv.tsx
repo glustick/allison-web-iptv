@@ -27,6 +27,7 @@ import {
   fetchPrefs,
   recordHistory,
   removeChannelFromCategory,
+  removeHistory,
   reorderCategoryChannels,
   renameCategory,
   setFavouriteOrder,
@@ -523,6 +524,53 @@ export function LiveTv({
   // provider's own categories, where a virtualised 27k-row table is the right tool.
   // Artwork for library rows: the icon stored with the entry, falling back to the provider's
   // channel list when it happens to be loaded (e.g. after visiting All).
+  // v0.115.0 — channel-number jump: type digits anywhere in Live TV, the buffer commits after a
+  // short pause (or Enter), and the first channel with that provider number plays. TV-remote
+  // parity for a catalogue this size; the overlay says what has been typed so far.
+  const [numberBuffer, setNumberBuffer] = useState('')
+  const numberBufferRef = useRef('')
+  const numberCommitRef = useRef<number | null>(null)
+  const numberJump = (digits: string): void => {
+    const wanted = Number(digits)
+    if (!Number.isFinite(wanted)) return
+    const catalogue = [...providerChannels, ...additionalChannels]
+    const channel = catalogue.find((entry) => entry.num === wanted)
+    if (!channel) return
+    selectChannel(channel)
+  }
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      if (!/^\d$/.test(event.key)) return
+      // A channel number can be up to five digits here; beyond that the oldest digit drops.
+      numberBufferRef.current = (numberBufferRef.current + event.key).slice(-5)
+      setNumberBuffer(numberBufferRef.current)
+      event.preventDefault()
+      if (numberCommitRef.current !== null) window.clearTimeout(numberCommitRef.current)
+      numberCommitRef.current = window.setTimeout(() => {
+        numberJump(numberBufferRef.current)
+        numberBufferRef.current = ''
+        setNumberBuffer('')
+        numberCommitRef.current = null
+      }, 1200)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      if (numberCommitRef.current !== null) window.clearTimeout(numberCommitRef.current)
+    }
+  })
+
+  // v0.115.0 — surprise me: one click plays a random channel from whatever list is on screen
+  // (favourites view: a random favourite; All: anywhere in the catalogue).
+  const surprise = (): void => {
+    const pool = channels.filter((channel) => channel.stream_id > 0)
+    if (pool.length === 0) return
+    selectChannel(pool[Math.floor(Math.random() * pool.length)])
+  }
+
   const providerIconById = useMemo(() => {
     const map = new Map<number, string>()
     for (const channel of providerChannels) if (channel.stream_icon) map.set(channel.stream_id, channel.stream_icon)
@@ -1258,6 +1306,16 @@ export function LiveTv({
           >
             ◧ Multi-view
           </button>
+          {/* v0.115.0 — one click plays a random channel from the list on screen. For a
+              catalogue this size, deciding is sometimes the hard part. */}
+          <button
+            type="button"
+            className="admin-small-btn"
+            title="Play a random channel from this list"
+            onClick={surprise}
+          >
+            🎲 Surprise me
+          </button>
         </div>
 
         {(selection.type === 'favourites' || selection.type === 'custom') && !picking && libraryView === 'guide' ? (
@@ -1375,6 +1433,34 @@ export function LiveTv({
                           name: row.name,
                           playlistId: row.storedPlaylistId || undefined
                         } as LiveStream)
+                      }
+                    >
+                      ✕
+                    </button>
+                  </>
+                )
+              }
+
+              // v0.115.0 — the history row's own Remove: one bad entry stops polluting the
+              // most-recent list, without clearing the rest.
+              if (selection.type === 'history') {
+                return (
+                  <>
+                    {star}
+                    <button
+                      type="button"
+                      className="admin-small-btn danger"
+                      title="Remove this channel from history"
+                      onClick={() =>
+                        void removeHistory({
+                          kind: 'live',
+                          streamId: row.storedStreamId ?? row.streamId,
+                          playlistId: row.storedPlaylistId || undefined,
+                          name: row.name
+                        })
+                          .then(fetchPrefs)
+                          .then(applyPrefs)
+                          .catch((err: unknown) => handlePrefsError(err, 'Could not remove the history entry'))
                       }
                     >
                       ✕

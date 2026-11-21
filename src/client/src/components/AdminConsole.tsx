@@ -156,6 +156,16 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
   const savedFilters = readAuditFilters()
   const [auditUser, setAuditUser] = useState(savedFilters.user)
   const [auditOutcome, setAuditOutcome] = useState(savedFilters.outcome)
+  // v0.115.0 — free-text over the loaded rows (username/ip/user-agent), plus click-a-username:
+  // the server filters by account and outcome; the text narrows what those returned.
+  const [auditText, setAuditText] = useState('')
+  const shownAudit = auditText.trim().length > 0
+    ? auditEntries.filter((entry) =>
+        [entry.username, entry.ip, entry.userAgent].some((field) =>
+          field.toLowerCase().includes(auditText.trim().toLowerCase())
+        )
+      )
+    : auditEntries
   useEffect(() => {
     try {
       window.localStorage.setItem(AUDIT_FILTERS_KEY, JSON.stringify({ user: auditUser, outcome: auditOutcome }))
@@ -559,6 +569,13 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
             value={auditUser}
             onChange={(event) => setAuditUser(event.target.value)}
           />
+          <input
+            className="multiview-picker-filter"
+            type="search"
+            placeholder="Search rows (name, IP, device)…"
+            value={auditText}
+            onChange={(event) => setAuditText(event.target.value)}
+          />
           <select
             value={auditOutcome}
             onChange={(event) => setAuditOutcome(event.target.value)}
@@ -577,6 +594,7 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
               onClick={() => {
                 setAuditUser('')
                 setAuditOutcome('')
+                setAuditText('')
               }}
             >
               Clear
@@ -604,18 +622,28 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {auditEntries.length === 0 && (
+              {shownAudit.length === 0 && (
                 <tr>
                   <td colSpan={5} className="admin-empty">No auth events recorded yet</td>
                 </tr>
               )}
-              {auditEntries.map((entry, index) => (
+              {shownAudit.map((entry, index) => (
                 <tr key={`${entry.at}:${index}`}>
                   <td>{formatTimestamp(Date.parse(entry.at))}</td>
                   <td>
                     <span className={`audit-outcome audit-outcome-${entry.outcome}`}>{entry.outcome}</span>
                   </td>
-                  <td>{entry.username}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="admin-small-btn"
+                      style={{ padding: '0 4px', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+                      title={`Filter the log to ${entry.username}`}
+                      onClick={() => setAuditUser(entry.username)}
+                    >
+                      {entry.username}
+                    </button>
+                  </td>
                   <td>{entry.ip}</td>
                   <td className="audit-agent">{entry.userAgent || <span className="admin-muted">—</span>}</td>
                 </tr>

@@ -104,6 +104,8 @@ function EpisodeList({
 }): JSX.Element {
   const [info, setInfo] = useState<SeriesInfo | null>(null)
   const [hideWatched, setHideWatched] = useState(false)
+  // v0.115.0 - an episode filter for the open series: a hundred-episode list needs it.
+  const [episodeFilter, setEpisodeFilter] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -140,9 +142,18 @@ function EpisodeList({
     (info.episodes[key] ?? []).some((episode) => watchedFor(Number(episode.id)))
   )
   const visibleInSeason = (seasonNumber: number): SeriesEpisode[] =>
-    (info.episodes[String(seasonNumber)] ?? []).filter(
-      (episode) => !hideWatched || !watchedFor(Number(episode.id))
-    )
+    (info.episodes[String(seasonNumber)] ?? []).filter((episode) => {
+      if (hideWatched && watchedFor(Number(episode.id))) return false
+      // v0.115.0 — the episode filter matches title or episode number, per season; a season
+      // whose every episode is filtered out collapses, exactly like hideWatched does.
+      const needle = episodeFilter.trim().toLowerCase()
+      if (needle.length > 0) {
+        return (
+          episode.title.toLowerCase().includes(needle) || String(episode.episode_num ?? '').includes(needle)
+        )
+      }
+      return true
+    })
   const seasonNumbers = Object.keys(info.episodes)
     .map(Number)
     .filter((n) => visibleInSeason(n).length > 0)
@@ -179,6 +190,14 @@ function EpisodeList({
           >
             {hideWatched ? 'Show watched' : 'Hide watched'}
           </button>
+          <input
+            type="search"
+            placeholder="Filter episodes…"
+            aria-label="Filter episodes by title or number"
+            value={episodeFilter}
+            onChange={(event) => setEpisodeFilter(event.target.value)}
+            style={{ width: '11rem' }}
+          />
         </div>
       )}
       {seasonNumbers.map((seasonNumber) => (

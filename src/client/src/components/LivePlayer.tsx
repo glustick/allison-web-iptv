@@ -1105,6 +1105,7 @@ let stallCount = 0
           <option value="">Quality: Source</option>
           <option value="1080">Quality: 1080p</option>
           <option value="720">Quality: 720p</option>
+          <option value="480">Quality: 480p</option>
         </select>
         <button type="button" className="admin-small-btn" style={{ padding: '4px 8px' }} title="Picture in picture" onClick={() => {
           const video = videoRef.current

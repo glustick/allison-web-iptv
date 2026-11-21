@@ -142,6 +142,19 @@ export async function clearHistory(): Promise<HistoryEntry[]> {
   return data.history ?? []
 }
 
+/** Removes one history row (v0.115.0) — the composite identity the history view itself shows. */
+export async function removeHistory(channel: ChannelRef): Promise<void> {
+  await request<{ ok: boolean }>('/api/prefs/history/remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      kind: channel.kind,
+      streamId: channel.streamId,
+      playlistId: channel.playlistId ?? ''
+    })
+  })
+}
+
 /** Records where playback got to. The server ignores live TV, too-early positions and
  *  anything inside the final seconds of a title (those clear the entry instead). */
 export async function setResumePosition(
