@@ -23,6 +23,7 @@ import { liveChannelKey, playlistRefOf, type LiveStream, type ShortEpgProgram } 
 import type { AlsoOnMatch } from '../lib/crossPlaylist'
 
 const HOUR_MS = 3_600_000
+const DAY_MS = 24 * HOUR_MS
 // The channel row height, in one place: the List renders rows at this size and the keyboard
 // arrows scroll by exactly one of them.
 const ROW_HEIGHT = 40
@@ -640,6 +641,9 @@ export function EpgGrid({
       />
       <div className="epg-time-header">
         <div className="epg-grid-nav">
+          <button onClick={() => setWindowOffsetMs((o) => o - DAY_MS)} title="Back a day">
+            ◀◀
+          </button>
           <button onClick={() => setWindowOffsetMs((o) => o - HOUR_MS)} title="Earlier">
             ◀
           </button>
@@ -648,6 +652,9 @@ export function EpgGrid({
           </button>
           <button onClick={() => setWindowOffsetMs((o) => o + HOUR_MS)} title="Later">
             ▶
+          </button>
+          <button onClick={() => setWindowOffsetMs((o) => o + DAY_MS)} title="Forward a day">
+            ▶▶
           </button>
         </div>
         <div className="epg-grid-nav epg-programme-search" style={{ position: 'relative' }}>
@@ -725,6 +732,29 @@ export function EpgGrid({
                     )}
                     {/* v0.111.0 — finding a future programme in search converts straight into the
                         guide's own reminder, without first jumping to its row. */}
+                    {/* v0.114.0 — an in-progress result can start from its beginning (catch-up)
+                        without the detour through the grid row. */}
+                    {channel &&
+                     result.programme.startMs < Date.now() &&
+                     result.programme.stopMs > Date.now() &&
+                     onPlayCatchup && (
+                      <button
+                        type="button"
+                        className="admin-small-btn"
+                        style={{ position: 'static', marginLeft: '0.4rem' }}
+                        title={`Play ${result.programme.title} from the start (catch-up)`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onPlayCatchup(channel, {
+                            startMs: result.programme.startMs,
+                            stopMs: result.programme.stopMs,
+                            title: result.programme.title
+                          })
+                        }}
+                      >
+                        ▶ from start
+                      </button>
+                    )}
                     {channel && result.programme.startMs > Date.now() && (
                       <button
                         type="button"
@@ -782,7 +812,11 @@ export function EpgGrid({
                 <div className="epg-reminder-row" key={reminder.id}>
                   <span className="epg-reminder-title">{reminder.title}</span>
                   <span className="epg-reminder-meta">
-                    {formatTime(reminder.startMs)} · {reminder.channelName}
+                    {formatTime(reminder.startMs)}
+                    {new Date(reminder.startMs).toDateString() !== new Date().toDateString() &&
+                      ` · ${new Date(reminder.startMs).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}`}
+                    {' · '}
+                    {reminder.channelName}
                   </span>
                   <button
                     type="button"

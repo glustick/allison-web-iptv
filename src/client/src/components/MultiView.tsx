@@ -52,6 +52,8 @@ function TileView({
   url,
   onToggleAudio,
   onChangeChannel,
+  onSwap,
+  swapPending,
   onRemove,
   onPlayInMain
 }: {
@@ -59,9 +61,12 @@ function TileView({
   index: number
   activeAudio: number | null
   url: string
+  swapPending: boolean
   onToggleAudio: (index: number) => void
   /** Re-open the picker for this slot — change the channel without tearing the tile down (v0.111.0). */
   onChangeChannel: (index: number) => void
+  /** Enter/complete a two-click swap (v0.114.0). */
+  onSwap: (index: number) => void
   onRemove: (index: number) => void
   onPlayInMain: (slot: MultiViewSlot) => void
 }): JSX.Element {
@@ -97,6 +102,14 @@ function TileView({
           </button>
           <button
             type="button"
+            className={swapPending ? 'admin-small-btn active' : 'admin-small-btn'}
+            title={swapPending ? 'Cancel this swap' : 'Swap this tile with another'}
+            onClick={() => onSwap(index)}
+          >
+            ⇋
+          </button>
+          <button
+            type="button"
             className="admin-small-btn"
             title="Change this tile's channel"
             onClick={() => onChangeChannel(index)}
@@ -126,6 +139,10 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
   const [prefs, setPrefs] = useState(() => loadMultiViewPrefs())
   const [activeAudio, setActiveAudio] = useState<number | null>(null)
   const [pickingSlot, setPickingSlot] = useState<number | null>(null)
+  // v0.114.0 — the swap flow: click ⇋ on one tile, then on the tile to trade places with.
+  // Clicking the same tile again cancels. Sound stays with the SLOT, not the channel: the
+  // viewer listening at that position keeps the sound.
+  const [swappingFrom, setSwappingFrom] = useState<number | null>(null)
   // The live count behind the toolbar's sentence and the picker's warning (v0.85.0) — polled
   // only while the grid is mounted, which is the only surface that adds connections in bulk.
   const connections: ConnectionSnapshot | null = useConnectionCount()
@@ -169,6 +186,26 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
       return { ...prev, slots }
     })
     setPickingSlot(null)
+  }
+
+  const requestSwap = (index: number): void => {
+    if (swappingFrom === null) {
+      setSwappingFrom(index)
+      return
+    }
+    if (swappingFrom === index) {
+      setSwappingFrom(null)
+      return
+    }
+    const from = swappingFrom
+    setSwappingFrom(null)
+    setPrefs((prev) => {
+      const slots = resizeSlots([...prev.slots], prev.layout)
+      const temp = slots[from]
+      slots[from] = slots[index]
+      slots[index] = temp
+      return { ...prev, slots }
+    })
   }
 
   const remove = (index: number): void => {
@@ -246,6 +283,11 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
           {prefs.autoRelease ? 'Auto-release ✓' : 'Auto-release ✕'}
         </button>
         <span className="epg-note">{connectionNote.text}{accountAttribution(connections)}</span>
+        {swappingFrom !== null && (
+          <span className="epg-note">
+            Pick the tile to swap with — click the ⇋ tile again to cancel.
+          </span>
+        )}
         {releaseNote && (
           <>
             <span className="epg-note">{releaseNote}</span>
@@ -272,6 +314,8 @@ export function MultiView({ client, categories, favourites, playlists, limits, o
               }
               onToggleAudio={(clicked) => setActiveAudio((current) => toggleActiveAudio(current, clicked))}
               onChangeChannel={setPickingSlot}
+              onSwap={requestSwap}
+              swapPending={swappingFrom === index}
               onRemove={remove}
               onPlayInMain={onPlayInMain}
             />

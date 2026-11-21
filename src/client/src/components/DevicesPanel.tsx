@@ -81,6 +81,33 @@ export function DevicesPanel({ onClose }: { onClose: () => void }): JSX.Element 
     }
   }
 
+  // v0.114.0 — ends every non-current sign-in through the same per-session endpoint, then
+  // refreshes once. Sequential on purpose: hammering the store with parallel destroys made the
+  // list flicker through intermediate states for no gain.
+  const [endingOthers, setEndingOthers] = useState(false)
+  const endOthers = async (): Promise<void> => {
+    const others = (sessions ?? []).filter((session) => !session.current)
+    if (others.length === 0) return
+    setEndingOthers(true)
+    setError(null)
+    try {
+      for (const session of others) {
+        setBusy(session.tokenHash)
+        const res = await fetch(`/api/auth/sessions/${encodeURIComponent(session.tokenHash)}/logout`, { method: 'POST' })
+        if (!res.ok) {
+          const data = (await res.json()) as { error?: string }
+          throw new Error(data.error ?? 'Could not end a sign-in')
+        }
+      }
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not end the other sign-ins')
+    } finally {
+      setBusy(null)
+      setEndingOthers(false)
+    }
+  }
+
   return (
     <div className="multiview-picker-overlay" onClick={onClose}>
       <div className="multiview-picker devices-panel" onClick={(event) => event.stopPropagation()} role="dialog" aria-label="Account activity">
@@ -96,7 +123,23 @@ export function DevicesPanel({ onClose }: { onClose: () => void }): JSX.Element 
         </p>
         {error && <div className="login-error">{error}</div>}
 
-        <div className="device-section">Signed in now</div>
+        <div className="device-section" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          Signed in now
+          {/* v0.114.0 — the one-click version of ending every OTHER sign-in. The per-row End
+              buttons stay; this is for the "I left a tab somewhere" cleanup, and the loop rides
+              the same per-session endpoint rather than a bulk one, so each row's outcome is
+              visible in the list as it happens. */}
+          {(sessions?.filter((session) => !session.current).length ?? 0) > 0 && (
+            <button
+              type="button"
+              className="admin-small-btn"
+              disabled={endingOthers}
+              onClick={() => void endOthers()}
+            >
+              {endingOthers ? 'Ending…' : `End ${sessions?.filter((session) => !session.current).length} other session${(sessions?.filter((session) => !session.current).length ?? 0) === 1 ? '' : 's'}`}
+            </button>
+          )}
+        </div>
         {!sessions && !error && <div className="setup-hint">Reading your sign-ins…</div>}
         {sessions?.length === 0 && <div className="setup-hint">No active sign-ins.</div>}
         {sessions?.map((session) => (

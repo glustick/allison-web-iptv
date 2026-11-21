@@ -47,6 +47,7 @@ export function NativeVideoPlayer({
   titleKey,
   initialPositionSeconds,
   onProgress,
+  onEnded,
   onStop
 }: {
   url: string
@@ -56,6 +57,9 @@ export function NativeVideoPlayer({
   /** Called with the current position/duration as playback proceeds, on pause, on seek and at
    *  the end — the caller persists it; the player decides nothing about storage. */
   onProgress?: (positionSeconds: number, durationSeconds: number | null) => void
+  /** Fires once when the title reaches its end (v0.114.0) — the autoplay-next hook. The
+   *  player's own reporting is unaffected. */
+  onEnded?: () => void
   /** Ends playback entirely — the sleep timer's own stop path, and the caller's. */
   onStop?: () => void
 }): JSX.Element {
@@ -179,7 +183,11 @@ export function NativeVideoPlayer({
     const progressTimer = setInterval(reportIfPlaying, 10_000)
     video.addEventListener('pause', report)
     video.addEventListener('seeked', report)
-    video.addEventListener('ended', report)
+    const handleEnded = (): void => {
+      report()
+      onEnded?.()
+    }
+    video.addEventListener('ended', handleEnded)
     window.addEventListener('pagehide', report)
     const markPlaying = (): void => setPreparing(false)
     video.addEventListener('playing', markPlaying)
@@ -252,7 +260,7 @@ export function NativeVideoPlayer({
         video.removeEventListener('loadedmetadata', applyResume)
         video.removeEventListener('pause', report)
         video.removeEventListener('seeked', report)
-        video.removeEventListener('ended', report)
+        video.removeEventListener('ended', handleEnded)
         window.removeEventListener('pagehide', report)
         hls.destroy()
         hlsRef.current = null
@@ -334,7 +342,7 @@ export function NativeVideoPlayer({
       video.removeEventListener('loadedmetadata', applyResume)
       video.removeEventListener('pause', report)
       video.removeEventListener('seeked', report)
-      video.removeEventListener('ended', report)
+      video.removeEventListener('ended', handleEnded)
       window.removeEventListener('pagehide', report)
       if (releaseTimer) clearTimeout(releaseTimer)
       video.removeAttribute('src')

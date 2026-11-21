@@ -57,6 +57,10 @@ export function PlaylistsPanel() {
   const [saving, setSaving] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // v0.114.0 — the per-row connection test: the row key → what the probe answered (or the
+  // error). The provider's LIVE numbers, beside the stored limit line.
+  const [testResults, setTestResults] = useState<Record<string, string>>({})
+  const [testingKey, setTestingKey] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -76,6 +80,43 @@ export function PlaylistsPanel() {
   useEffect(() => {
     void load()
   }, [load])
+
+  async function testRow(row: PlaylistRow): Promise<void> {
+    setTestingKey(row.key)
+    setNote(null)
+    try {
+      const body = row.id
+        ? { id: row.id }
+        : { server: row.server, username: row.username, password: row.password || ' ' }
+      const response = await fetch('/api/iptv/playlists/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      const data = (await response.json()) as {
+        reachable?: boolean
+        auth?: unknown
+        maxConnections?: unknown
+        error?: string
+      }
+      if (!response.ok) throw new Error(data.error ?? `Test failed (${response.status})`)
+      if (!data.reachable) {
+        setTestResults((current) => ({ ...current, [row.key]: `unreachable — ${data.error ?? 'no answer'}` }))
+      } else if (data.auth === 1 || data.auth === '1' || data.auth === true) {
+        const limit = data.maxConnections
+        setTestResults((current) => ({
+          ...current,
+          [row.key]: `reachable · signed in · provider reports ${typeof limit === 'string' || typeof limit === 'number' ? limit : 'no'} concurrent-stream limit`
+        }))
+      } else {
+        setTestResults((current) => ({ ...current, [row.key]: 'reachable but the sign-in was REFUSED — check the username/password' }))
+      }
+    } catch (err) {
+      setTestResults((current) => ({ ...current, [row.key]: err instanceof Error ? err.message : 'Test failed' }))
+    } finally {
+      setTestingKey(null)
+    }
+  }
 
   function patchRow(key: string, patch: Partial<PlaylistRow>): void {
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)))
@@ -171,10 +212,24 @@ export function PlaylistsPanel() {
               onChange={(event) => patchRow(row.key, { password: event.target.value })}
               style={{ minWidth: 140 }}
             />
+            <button
+              type="button"
+              className="admin-small-btn"
+              disabled={testingKey === row.key || (!row.id && (!row.server || !row.username))}
+              title={row.id ? "Probe this playlist's provider now" : 'Type a server and username to test'}
+              onClick={() => void testRow(row)}
+            >
+              {testingKey === row.key ? 'Testing…' : 'Test'}
+            </button>
             <button type="button" className="admin-small-btn" onClick={() => removeRow(row.key)}>
               Remove
             </button>
           </div>
+          {testResults[row.key] && (
+            <p className="setup-hint" style={{ margin: '0.25rem 0 0 0.25rem' }}>
+              Last test: {testResults[row.key]}
+            </p>
+          )}
           {row.id && (
             <p className="setup-hint" style={{ margin: '0.25rem 0 0 0.25rem' }}>
               {row.maxConnections !== null

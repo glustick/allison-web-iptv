@@ -8,6 +8,39 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.114.0 — ten more.**
+
+The house's second ten-in-one round, each piece verified as a real gap before building (the
+sleep timer's remaining countdown, the movies progress badge, history clear, and the reminder
+banner's Watch button all already existed and were left alone):
+
+1. **Guide day-jump** — ◀◀ / ▶▶ move a whole day, beside the hour buttons; weekend planning
+   stopped meaning forty clicks.
+2. **Programme search matches descriptions too** — "what's it about" queries find programmes
+   whose titles do not carry the words.
+3. **Catch-up from search results** — an in-progress result carries ▶ from start, straight to
+   the catch-up path, without the detour through its grid row.
+4. **Reminder dates** — the reminders list shows the weekday and date on anything not today;
+   "18:00" alone was ambiguous the moment a reminder was set for Sunday.
+5. **Auth log exports CSV** — the filtered rows on screen, escaped properly, named by date.
+6. **End every other session** — the devices panel gains the one-click cleanup, riding the same
+   per-session endpoint so each row's outcome is visible as it happens.
+7. **Swap two tiles** — ⇋ on one tile, ⇋ on another; sound stays with the slot.
+8. **Auto-play next episode** — per device, OFF by default, a ten-second countdown with Play
+   now / Cancel, wired through the player's ended event and the same playEpisode path the Next
+   button uses. Starting the next episode costs a provider connection — that is the viewer's
+   call, not the app's.
+9. **Per-playlist connection test** — the Playlists panel gains Test: an honest probe of the
+   provider's player_api (saved rows resolve credentials server-side; typed rows use what you
+   typed; the server URL passes the same loopback/metadata refusal as every server-side fetch),
+   reporting reachability, sign-in, and the provider's CURRENT stream limit beside the stored one.
+10. **Mark previous episodes watched** — per episode row, using the existing bulk endpoint over
+    everything before it; the catch-up case ("I watched 1–7 out of order") stopped being seven
+    clicks.
+
+Tests: 1128 (unchanged — all ten are wiring over tested primitives and one pure probe reusing
+the providerWatch shape). Typecheck, lint and both builds clean.
+
 **v0.113.0 — see the walls: a guide you can filter, failovers you can see, filters that stay.**
 
 - **The guide gained a channel filter.** Favourites-only existed; against the full catalogue

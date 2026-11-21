@@ -6,7 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.113.0 — see the walls)
+## Current state (v0.114.0 — ten more)
+
+Guide **day-jump**; programme search **matches descriptions**; **catch-up from search results**;
+reminder **dates**; auth log **CSV export**; **end all other sessions**; **tile swap**;
+**auto-play next episode** (per device, off by default, ten-second countdown); **per-playlist
+connection test**; **mark previous episodes watched**. 1128 tests; typecheck, lint and both
+builds clean.
+
+## Previous release (v0.113.0 — see the walls)
 
 The guide gained a **channel-name filter** (composes with favourites-only); System gained
 **Backup-portal failovers** (a bounded ring, newest first — when, which direction, why); the

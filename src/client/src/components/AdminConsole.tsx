@@ -521,6 +521,30 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
           <button type="button" className="admin-small-btn" onClick={() => void refreshAudit(auditUser, auditOutcome)}>
             Refresh
           </button>
+          <button
+            type="button"
+            className="admin-small-btn"
+            title="Download the rows currently shown (the filtered set) as CSV"
+            onClick={() => {
+              // The rows on screen — the filtered set, not the whole store: what you see is
+              // what you export, the same rule the filters themselves follow.
+              const escape = (value: string): string => `"${value.replaceAll('"', '""')}"`
+              const lines = [
+                ['at', 'outcome', 'username', 'ip', 'user_agent'].join(','),
+                ...auditEntries.map((entry) =>
+                  [entry.at, entry.outcome, entry.username, entry.ip, entry.userAgent].map(escape).join(',')
+                )
+              ]
+              const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
+              const link = document.createElement('a')
+              link.href = URL.createObjectURL(blob)
+              link.download = `auth-log-${new Date().toISOString().slice(0, 10)}.csv`
+              link.click()
+              URL.revokeObjectURL(link.href)
+            }}
+          >
+            Export CSV
+          </button>
         </div>
         <p className="setup-hint">
           Sign-ins, sign-outs, failed attempts and every admin action that shapes logins — password

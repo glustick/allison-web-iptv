@@ -6,6 +6,7 @@ import { isFinished } from '../lib/continueWatching'
 import { isWatched, watchedKey } from '../lib/watchState'
 import { firstUnwatchedEpisode, orderedEpisodes } from '../lib/nextEpisode'
 import { nextEpisode } from '../lib/nextEpisode'
+import { AUTOPLAY_COUNTDOWN_SECONDS, readAutoplayNext, writeAutoplayNext } from '../lib/autoplayNext'
 import { sortSeries, type SeriesSort } from '../lib/librarySort'
 import { filterByText } from '../lib/listFilter'
 import { ListFilter } from './ListFilter'
@@ -273,6 +274,41 @@ export function Series({
   const [episodeInfo, setEpisodeInfo] = useState<{ seriesId: number; info: SeriesInfo } | null>(null)
   // Series favourites: prefs already stores them (kind 'series'); this tab just never showed them.
   const [nowPlaying, setNowPlaying] = useState<{ episode: SeriesEpisode; playlistId?: string } | null>(null)
+  // v0.114.0 — autoplay-next: per-device, OFF by default. When the ended episode has a
+  // successor and the pref is on, a ten-second countdown banner offers the continuation
+  // (Play now / Cancel); firing calls the same playEpisode path the Next button uses.
+  const [autoplayOn, setAutoplayOn] = useState(() => readAutoplayNext())
+  const [autoplayCountdown, setAutoplayCountdown] = useState<{ episode: SeriesEpisode; secondsLeft: number } | null>(null)
+  const autoplayTimer = useRef<number | null>(null)
+  // playEpisode is defined below; the countdown effect reaches it through a ref so the interval
+  // never captures a stale callback.
+  const playEpisodeRef = useRef<((episode: SeriesEpisode) => void) | null>(null)
+  useEffect(() => {
+    if (autoplayCountdown === null) return
+    if (autoplayTimer.current !== null) window.clearInterval(autoplayTimer.current)
+    autoplayTimer.current = window.setInterval(() => {
+      setAutoplayCountdown((current) => {
+        if (!current) return null
+        if (current.secondsLeft <= 1) {
+          window.clearInterval(autoplayTimer.current ?? undefined)
+          autoplayTimer.current = null
+          playEpisodeRef.current?.(current.episode)
+          return null
+        }
+        return { ...current, secondsLeft: current.secondsLeft - 1 }
+      })
+    }, 1000)
+    return () => {
+      if (autoplayTimer.current !== null) window.clearInterval(autoplayTimer.current)
+      autoplayTimer.current = null
+    }
+  }, [autoplayCountdown?.episode.id])
+  const toggleAutoplay = (): void => {
+    const next = !autoplayOn
+    setAutoplayOn(next)
+    writeAutoplayNext(next)
+    if (!next) setAutoplayCountdown(null)
+  }
   const [startAt, setStartAt] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
   // True once the category fetch has *answered* — an empty catalogue that arrived as an answer is
@@ -494,6 +530,7 @@ export function Series({
     },
     []
   )
+  playEpisodeRef.current = (episode: SeriesEpisode): void => playEpisode(episode, 0, nowPlaying?.playlistId)
 
   const handleProgress = useCallback(
     (positionSeconds: number, durationSeconds: number | null): void => {
@@ -608,7 +645,18 @@ export function Series({
             titleKey={`series:${nowPlaying.playlistId ?? ''}:${nowPlaying.episode.id}`}
             initialPositionSeconds={startAt}
             onProgress={handleProgress}
-            onStop={() => setNowPlaying(null)}
+            onEnded={() => {
+              if (!nowPlaying || !autoplayOn) return
+              const following = episodeInfo && openSeries && episodeInfo.seriesId === openSeries.series_id
+                ? nextEpisode(episodeInfo.info.episodes, { id: nowPlaying.episode.id })
+                : null
+              if (!following) return
+              setAutoplayCountdown({ episode: following, secondsLeft: AUTOPLAY_COUNTDOWN_SECONDS })
+            }}
+            onStop={() => {
+              setAutoplayCountdown(null)
+              setNowPlaying(null)
+            }}
           />
         )}
         {nowPlaying && (
@@ -635,6 +683,39 @@ export function Series({
                   </button>
                 )
               })()}
+              {/* v0.114.0 — the autoplay countdown, and its per-device switch. */}
+              {nowPlaying && (
+                <button
+                  type="button"
+                  className={autoplayOn ? 'admin-small-btn active' : 'admin-small-btn'}
+                  aria-pressed={autoplayOn}
+                  title="When an episode ends, start the next one after a short countdown"
+                  onClick={toggleAutoplay}
+                >
+                  Auto-play next {autoplayOn ? '✓' : '✕'}
+                </button>
+              )}
+              {autoplayCountdown && (
+                <span className="setup-hint" style={{ marginLeft: 6 }}>
+                  {autoplayCountdown.episode.title} starts in {autoplayCountdown.secondsLeft}s
+                  <button
+                    type="button"
+                    className="admin-small-btn"
+                    style={{ marginLeft: 6 }}
+                    onClick={() => playEpisode(autoplayCountdown.episode, 0, nowPlaying?.playlistId)}
+                  >
+                    Play now
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-small-btn"
+                    style={{ marginLeft: 4 }}
+                    onClick={() => setAutoplayCountdown(null)}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              )}
               {openSeries && (
                 <span className="now-playing-actions">
                   <button

@@ -2101,6 +2101,64 @@ function publicPlaylists(playlists: Playlist[]): Array<Omit<Playlist, 'password'
   return playlists.map(({ password, ...rest }) => ({ ...rest, passwordSet: password.length > 0 }))
 }
 
+// The per-playlist connection test (v0.114.0): one honest probe of a provider's own
+// player_api, answered to the Playlists panel. Resolves credentials server-side for a SAVED
+// playlist (the browser never holds them), or uses the typed credentials for a row that has
+// not been saved yet. The server URL is validated with the same posture as every other
+// server-fetched URL — loopback and link-local refused. Read-only: it reports, never writes.
+app.post('/api/iptv/playlists/test', requireAuth, (req, res) => {
+  void (async (): Promise<void> => {
+    const session = req.authSession as AuthSession
+    const body = (req.body ?? {}) as { id?: unknown; server?: unknown; username?: unknown; password?: unknown }
+    let server: string
+    let username: string
+    let password: string
+    if (typeof body.id === 'string') {
+      const credentials = body.id === '' ? resolveAccountCredentials(session.username) : resolvePlaylistCredentials(session.username, body.id)
+      if (!credentials) {
+        res.status(404).json({ error: 'Unknown playlist' })
+        return
+      }
+      server = credentials.server
+      username = credentials.username
+      password = credentials.password
+    } else if (typeof body.server === 'string' && typeof body.username === 'string' && typeof body.password === 'string') {
+      try {
+        // Same posture as every URL this server fetches: a validated URL, not a pattern match.
+        assertSafeExternalUrl(body.server)
+      } catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : 'Refusing to test that server' })
+        return
+      }
+      server = body.server
+      username = body.username
+      password = body.password
+    } else {
+      res.status(400).json({ error: 'Give a playlist id, or server/username/password to test' })
+      return
+    }
+    const base = server.trim().replace(/\/+$/, '')
+    const url = `${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+    try {
+      // The probeProvider shape, uncached — an explicit test wants the answer NOW, and a stale
+      // 30s cache would make the button look broken.
+      const text = await fetchTextViaUpstream(undefined, url, 10_000, undefined, 8_000)
+      const parsed = JSON.parse(text) as { user_info?: Record<string, unknown> }
+      const info = parsed.user_info ?? {}
+      res.json({
+        ok: true,
+        reachable: true,
+        auth: info.auth,
+        status: info.status,
+        activeConnections: info.active_cons,
+        maxConnections: info.max_connections
+      })
+    } catch (err) {
+      res.json({ ok: true, reachable: false, error: err instanceof Error ? err.message : String(err) })
+    }
+  })()
+})
+
 // The account's Xtream profiles (v0.52.0). Read without secrets, written whole — and written through
 // the playlist envelope, so an account's guide URLs and alert webhook are untouched by playlist edits.
 app.get('/api/iptv/playlists', requireAuth, (req, res) => {
@@ -2760,7 +2818,12 @@ app.get('/api/epg/search', requireAuth, (req, res) => {
       const results: Array<{ key: string; programme: EpgWindowProgramme }> = []
       for (const [key, programmes] of Object.entries(window.listings)) {
         for (const programme of programmes) {
-          if (programme.title.toLowerCase().includes(needle)) {
+          // v0.114.0 — the description matches too: "what's it about" queries ("documentary",
+          // a team name in the synopsis) now find programmes whose titles do not carry it.
+          if (
+            programme.title.toLowerCase().includes(needle) ||
+            (programme.description ?? '').toLowerCase().includes(needle)
+          ) {
             results.push({ key, programme })
             if (results.length >= 200) break
           }
