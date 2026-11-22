@@ -21,7 +21,7 @@ import {
   type PrefsState,
   type ResumePosition
 } from '../lib/prefs'
-import type { Category, VodStream } from '../lib/types'
+import type { VodInfo, Category, VodStream } from '../lib/types'
 
 const EMPTY_PREFS: PrefsState = { favourites: [], categories: [], history: [], resume: [], watched: [] }
 
@@ -79,6 +79,9 @@ export function Movies({
   const [hideWatched, setHideWatched] = useState(false)
   const [movies, setMovies] = useState<VodStream[]>([])
   const [nowPlaying, setNowPlaying] = useState<VodStream | null>(null)
+  // v0.119.0 - the film's own metadata, fetched once per play (the catalogue rows do not
+  // carry plot/genre/year). Cleared with the title.
+  const [vodInfo, setVodInfo] = useState<VodInfo | null>(null)
   // The position this playback started from, so the player seeks there once and the UI can show
   // whether we resumed or started fresh.
   const [startAt, setStartAt] = useState(0)
@@ -306,6 +309,14 @@ export function Movies({
       setStartAt(resumeFrom)
       finishedMarkedRef.current = null
       setNowPlaying(stream)
+      // v0.119.0 - fetch the film's own metadata once per play (the catalogue lacks plot).
+      setVodInfo(null)
+      if (session.client && stream.stream_id > 0) {
+        session.client
+          .getVodInfo(stream.stream_id)
+          .then(setVodInfo)
+          .catch(() => setVodInfo(null))
+      }
       void recordHistory({
         kind: 'movie',
         streamId,
@@ -370,7 +381,7 @@ export function Movies({
   const streamUrl = nowPlaying ? nowPlayingClient.getStreamUrl('movie', nowPlaying.stream_id, nowPlaying.container_extension) : null
   const sortedMovies = useMemo(() => sortFilms(movies, librarySort), [movies, librarySort])
   const filterMovie = useCallback((movie: VodStream) => movie.name, [])
-  const listRows: Array<{ streamId: number; playlistId?: string; name: string; rating?: string }> =
+  const listRows: Array<{ streamId: number; playlistId?: string; name: string; rating?: string; added?: string }> =
     selection.type === 'favourites'
       ? movieFavourites.map((favourite) => ({ streamId: favourite.streamId, playlistId: favourite.playlistId || undefined, name: favourite.name }))
       : selection.type === 'history'
@@ -379,7 +390,8 @@ export function Movies({
             streamId: movie.stream_id,
             playlistId: playlistRefOf(movie),
             name: movie.name,
-            rating: movie.rating
+            rating: movie.rating,
+            added: movie.added
           }))
   const isRowWatched = useCallback(
     (row: { streamId: number; playlistId?: string }): boolean =>
@@ -434,7 +446,10 @@ export function Movies({
               titleKey={`movie:${playlistRefOf(nowPlaying) ?? ''}:${nowPlaying.stream_id}`}
               initialPositionSeconds={startAt}
               onProgress={handleProgress}
-              onStop={() => setNowPlaying(null)}
+              onStop={() => {
+                setVodInfo(null)
+                setNowPlaying(null)
+              }}
             />
             <div className="now-playing-bar">
               <span>
@@ -444,6 +459,27 @@ export function Movies({
                 )}
                 {startAt > 0 && <span className="resume-note"> · resumed at {formatClock(startAt)}</span>}
               </span>
+              {/* v0.119.0 - the film's own metadata: genre, year, plot (first 220 chars), and the
+                  provider's YouTube trailer when it carries one. Fetched once per play. */}
+              {vodInfo && (vodInfo.genre || vodInfo.releasedate || vodInfo.plot) && (
+                <span className="setup-hint" style={{ display: 'block' }}>
+                  {vodInfo.genre ? vodInfo.genre + ' · ' : ''}
+                  {vodInfo.releasedate ? vodInfo.releasedate.slice(0, 4) + ' · ' : ''}
+                  {vodInfo.plot.length > 220 ? vodInfo.plot.slice(0, 220) + '…' : vodInfo.plot}
+                  {vodInfo.youtube_trailer && (
+                    <>
+                      {' '}
+                      <a
+                        href={`https://www.youtube.com/watch?v=${vodInfo.youtube_trailer}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        ▶ Trailer
+                      </a>
+                    </>
+                  )}
+                </span>
+              )}
               <span className="now-playing-actions">
                 <button
                   type="button"
@@ -594,6 +630,14 @@ export function Movies({
                 >
                   <span>{row.name}</span>
                   {row.rating && /^\d/.test(row.rating) && <span className="rating-badge">★ {row.rating}</span>}
+                  {/* v0.119.0 - recently added, from the catalogue's own timestamp: a provider
+                      that adds content weekly deserves a visible "New". */}
+                  {(() => {
+                    const added = row.added ? Date.parse(row.added) : NaN
+                    return Number.isFinite(added) && Date.now() - added < 14 * 86_400_000 ? (
+                      <span className="watched-badge">New</span>
+                    ) : null
+                  })()}
                   {row.playlistId && row.playlistId !== 'primary' && (
                     <span className="setup-hint" style={{ marginLeft: 6, fontSize: '0.68rem', opacity: 0.75 }}>
                       {additional.find((e) => e.id === row.playlistId)?.label ?? row.playlistId}

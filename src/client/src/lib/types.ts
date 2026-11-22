@@ -91,6 +91,16 @@ export interface VodStream {
   playlistLabel?: string
 }
 
+/** The film's own metadata from get_vod_info (v0.119.0) - fields the list catalogue lacks. */
+export interface VodInfo {
+  plot: string
+  genre: string
+  releasedate: string
+  cast: string
+  director: string
+  youtube_trailer: string
+}
+
 export interface SeriesItem {
   num: number
   name: string
@@ -114,6 +124,9 @@ export interface SeriesEpisode {
   title: string
   container_extension: string
   season: number
+  /** The episode's own synopsis (v0.119.0) - get_series_info carries it per episode under
+   *  `info.plot`; optional because some providers answer without the info object at all. */
+  plot?: string
 }
 
 export interface SeriesInfo {

@@ -122,6 +122,15 @@ export function LivePlayer({
   // The same decisions the console has always recorded, kept where a viewer can read them
   // (v0.100.0) — a freeze is exactly when nobody has DevTools open.
   const [playbackEvents, setPlaybackEvents] = useState<PlaybackEvent[]>([])
+  // v0.119.0 - a transient OSD: keyboard actions are invisible by definition, so volume, mute
+  // and seek say what they did for a second and a half.
+  const [osdMessage, setOsdMessage] = useState<string | null>(null)
+  const osdTimer = useRef<number | null>(null)
+  const showOsd = useCallback((message: string): void => {
+    setOsdMessage(message)
+    if (osdTimer.current !== null) window.clearTimeout(osdTimer.current)
+    osdTimer.current = window.setTimeout(() => setOsdMessage(null), 1500)
+  }, [])
   const [showDiagnostics, setShowDiagnostics] = useState(false)
   const logEvent = useCallback((message: string): void => {
     // The console line and the panel entry, both — the panel is for the viewer, the console
@@ -344,6 +353,7 @@ export function LivePlayer({
     }
     let hls: Hls | null = null
     let networkRetryCount = 0
+
     // v0.117.0 — seconds of playable buffer ahead of the playhead, sampled by the watchdog and
     // the triage/rejoin rules.
     const bufferAheadOf = (element: HTMLVideoElement): number => {
@@ -513,14 +523,17 @@ let stallCount = 0
         case 'volume-up':
           event.preventDefault()
           element.volume = Math.min(1, element.volume + 0.1)
+          showOsd(`Volume ${Math.round(element.volume * 100)}%`)
           break
         case 'volume-down':
           event.preventDefault()
           element.volume = Math.max(0, element.volume - 0.1)
+          showOsd(`Volume ${Math.round(element.volume * 100)}%`)
           break
         case 'mute':
           event.preventDefault()
           element.muted = !element.muted
+          showOsd(element.muted ? 'Muted' : 'Unmuted')
           break
         case 'fullscreen':
           event.preventDefault()
@@ -1329,6 +1342,18 @@ let stallCount = 0
         <WebCodecsPlayer url={url} />
       ) : (
         <video ref={videoRef} controls />
+      )}
+      {osdMessage && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+            background: 'rgba(0,0,0,0.75)', color: '#fff', padding: '6px 14px', borderRadius: 6,
+            fontSize: '0.9rem', zIndex: 5, pointerEvents: 'none'
+          }}
+        >
+          {osdMessage}
+        </div>
       )}
       <ShortcutsHelp open={showShortcuts} seekable={seekable} onClose={() => setShowShortcuts(false)} />
       <TrackControls

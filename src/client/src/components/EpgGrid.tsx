@@ -490,6 +490,14 @@ export function EpgGrid({
   const channelFilterRef = useRef<HTMLInputElement | null>(null)
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
+      // v0.119.0 - [ and ] move the guide a day, matching the ◀◀ ▶▶ buttons, unless typing.
+      if ((event.key === '[' || event.key === ']') && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const target = event.target as HTMLElement | null
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+        event.preventDefault()
+        setWindowOffsetMs((current) => current + (event.key === ']' ? DAY_MS : -DAY_MS))
+        return
+      }
       // '/' focuses the filter, unless the user is already typing somewhere else.
       if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return
       const target = event.target as HTMLElement | null

@@ -3,6 +3,7 @@ import type { Session } from '../lib/appAuth'
 import { reportNowPlaying } from '../lib/activityReporter'
 import { LivePlayer } from './LivePlayer'
 import { MultiView } from './MultiView'
+import { accountAttribution, connectionStatus, useConnectionCount } from '../lib/connectionBudget'
 import type { PlaylistLimits } from '../lib/connectionBudget'
 import { EpgGrid } from './EpgGrid'
 import { NowNextGuide } from './NowNextGuide'
@@ -619,6 +620,12 @@ export function LiveTv({
       if (numberCommitRef.current !== null) window.clearTimeout(numberCommitRef.current)
     }
   })
+  // v0.119.0 - the first channel whose number starts with the typed prefix, named while typing.
+  const numberPreviewChannel = useMemo(() => {
+    if (numberBuffer.length === 0) return null
+    const catalogue = [...providerChannels, ...additionalChannels]
+    return catalogue.find((entry) => String(entry.num ?? '').startsWith(numberBuffer)) ?? null
+  }, [numberBuffer, providerChannels, additionalChannels])
 
   // v0.115.0 — surprise me: one click plays a random channel from whatever list is on screen
   // (favourites view: a random favourite; All: anywhere in the catalogue).
@@ -1385,6 +1392,18 @@ export function LiveTv({
           </button>
         </div>
 
+        {numberBuffer.length > 0 && (
+          <div
+            role="status"
+            style={{
+              position: 'fixed', bottom: 20, right: 20, zIndex: 50,
+              background: 'rgba(0,0,0,0.8)', color: '#fff', padding: '8px 14px', borderRadius: 8
+            }}
+          >
+            <strong style={{ fontVariantNumeric: 'tabular-nums', marginRight: 8 }}>{numberBuffer}</strong>
+            {numberPreviewChannel ? numberPreviewChannel.name : 'no match yet…'}
+          </div>
+        )}
         {(selection.type === 'favourites' || selection.type === 'custom') && !picking && libraryView === 'guide' ? (
         <>
           {/* Reordering channels lives in the List view — the guide is a grid and has no drag, by
@@ -1581,7 +1600,8 @@ export function LiveTv({
               >
                 Cancel
               </button>
-            </div>
+            
+          <ConnectionNote limits={playlistLimits} /></div>
             <ul className="channel-picker-list">
               {providerChannels.map((channel) => (
                 <li key={channel.stream_id}>
@@ -1675,3 +1695,12 @@ export function LiveTv({
 
 // Kept for the grid's own typing convenience: library rows are live-stream shaped.
 export type { MediaKind }
+
+// v0.119.0 - the connection sentence, visible outside the multi-view grid: the same poll and
+// rules the toolbar uses, rendered where the household can see it while watching normally.
+function ConnectionNote({ limits }: { limits: PlaylistLimits }): JSX.Element | null {
+  const connections = useConnectionCount()
+  if (connections === null) return null
+  const note = connectionStatus(connections, limits[''] ?? null)
+  return <span className="epg-note">{note.text}{accountAttribution(connections)}</span>
+}

@@ -6,7 +6,15 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.118.0 — the shortcuts round)
+## Current state (v0.119.0 — the metadata round)
+
+**Movie details + Trailer** (get_vod_info passthrough), **episode synopsis** from
+get_series_info, a **"New" badge** for recent arrivals, an **OSD** for keyboard actions, the
+**connection sentence on the main page**, **number-jump preview**, **season jump**, **[ ]**
+day keys, a **persisted picker scope**, and **picker artwork**. 1131 tests; typecheck, lint
+and both builds clean.
+
+## Previous release (v0.118.0 — the shortcuts round)
 
 **The advertised keyboard shortcuts are wired** (both players: play/pause, seek, volume, mute,
 fullscreen, ? — they had been documented-but-unwired since v0.90). Plus: series plot/genre/year

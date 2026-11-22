@@ -72,7 +72,24 @@ export function MultiViewPicker({
   onAssign,
   onClose
 }: MultiViewPickerProps): JSX.Element {
-  const [scope, setScope] = useState('fav')
+  // v0.119.0 - the scope persists per device: an admin who always tiles from Recent stops
+  // re-selecting it every visit.
+  const SCOPE_KEY = 'iptv:multiview-scope'
+  const [scope, setScope] = useState<string>(() => {
+    try {
+      return window.localStorage.getItem(SCOPE_KEY) ?? 'fav'
+    } catch {
+      return 'fav'
+    }
+  })
+  const setScopePersisted = (next: string): void => {
+    setScope(next)
+    try {
+      window.localStorage.setItem(SCOPE_KEY, next)
+    } catch {
+      // An unavailable store keeps the scope session-only.
+    }
+  }
   const [filter, setFilter] = useState('')
   const [fetched, setFetched] = useState<Record<string, LiveStream[]>>({})
   const [fetchError, setFetchError] = useState<string | null>(null)
@@ -172,7 +189,7 @@ export function MultiViewPicker({
           </button>
         </div>
         <div className="multiview-picker-scopes">
-          <select value={scope} onChange={(event) => setScope(event.target.value)}>
+          <select value={scope} onChange={(event) => setScopePersisted(event.target.value)}>
             <option value="fav">★ Favourites ({favourites.length})</option>
             {recent.length > 0 && <option value="recent">Recently watched ({recent.length})</option>}
             <option value="all">Main — all channels</option>

@@ -1,13 +1,11 @@
-import type {
-  XtreamAuthResponse,
+import type { SeriesEpisode, VodInfo, XtreamAuthResponse,
   Category,
   LiveStream,
   VodStream,
   SeriesItem,
   SeriesInfo,
   ShortEpgProgram,
-  MediaKind
-} from './types'
+  MediaKind } from './types'
 
 // Ported from the desktop app's xtream.ts — the real Xtream API returns programme
 // title/description base64-encoded (confirmed live against the real account this project's
@@ -144,8 +142,48 @@ export class XtreamClient {
     return this.getJson(this.playerApiUrl(params))
   }
 
+  /**
+   * The film's own info (get_vod_info passthrough, v0.119.0): plot, genre, year, cast and the
+   * provider's YouTube trailer id. The list catalogue does not carry these - a per-title call,
+   * made when a film starts playing.
+   */
+  async getVodInfo(vodId: number): Promise<VodInfo> {
+    const result = await this.getJson<{ info?: Partial<VodInfo> }>(
+      this.playerApiUrl({ action: 'get_vod_info', vod_id: String(vodId) })
+    )
+    return {
+      plot: result.info?.plot ?? '',
+      genre: result.info?.genre ?? '',
+      releasedate: result.info?.releasedate ?? '',
+      cast: result.info?.cast ?? '',
+      director: result.info?.director ?? '',
+      youtube_trailer: result.info?.youtube_trailer ?? ''
+    }
+  }
+
   getSeriesInfo(seriesId: number): Promise<SeriesInfo> {
-    return this.getJson(this.playerApiUrl({ action: 'get_series_info', series_id: String(seriesId) }))
+    // The raw response hides each episode's synopsis inside an `info` sibling object; the
+    // mapping lifts it onto the episode so the UI can show it without a second fetch.
+    return this.getJson<{
+      seasons?: unknown
+      episodes?: Record<string, Array<Record<string, unknown> & { info?: { plot?: string } }>>
+    }>(this.playerApiUrl({ action: 'get_series_info', series_id: String(seriesId) })).then((raw) => {
+      const seasons = raw.seasons ?? []
+      const episodes: Record<string, SeriesEpisode[]> = {}
+      for (const [seasonKey, list] of Object.entries(raw.episodes ?? {})) {
+        episodes[seasonKey] = (list ?? []).map((episode) => ({
+          id: String(episode['id'] ?? ''),
+          episode_num: Number(episode['episode_num'] ?? 0),
+          title: String(episode['title'] ?? ''),
+          container_extension: String(episode['container_extension'] ?? 'mp4'),
+          season: Number(episode['season'] ?? (Number(seasonKey) || 0)),
+          plot: typeof episode['info'] === 'object' && episode['info'] !== null
+            ? String((episode['info'] as { plot?: unknown }).plot ?? '') || undefined
+            : undefined
+        }))
+      }
+      return { seasons: seasons as SeriesInfo['seasons'], episodes }
+    })
   }
 
   // Real Xtream providers wrap this response as { epg_listings: [...] }, not a bare array —

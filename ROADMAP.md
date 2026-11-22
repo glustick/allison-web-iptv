@@ -8,6 +8,30 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.119.0 — ten more, the metadata round.**
+
+1. **Movie details + Trailer** — `getVodInfo` (a get_vod_info passthrough) fetched once per
+   play: plot, genre, year in the now-playing bar, and the provider's YouTube trailer as a
+   link when it carries one.
+2. **Episode synopsis** — `get_series_info` hides each episode's plot inside an `info` sibling
+   object the client never lifted; the mapping now does, and the playing episode's synopsis
+   renders under its title.
+3. **"New" badge** — films added within 14 days carry the badge, from the catalogue's own
+   timestamp.
+4. **Volume/seek OSD** — keyboard actions are invisible by definition; volume, mute and seek
+   say what they did for a second and a half.
+5. **The connection sentence outside Multi-view** — the same poll and rules, rendered where
+   the household watches normally.
+6. **Number-jump preview** — the typed digits name the channel they match so far.
+7. **Season jump** — a dropdown for seven-plus-season shows, scroll-to-anchor.
+8. **[ and ] move the guide a day** — matching the ◀◀ ▶▶ buttons, keyboard-first.
+9. **The picker's scope persists per device** — Recent stops being re-selected every visit.
+10. **The picker rows carry artwork** — favourites and Recent resolve icons from the loaded
+    channel lists.
+
+Tests: 1131 (unchanged — display, persistence and one passthrough call over typed fields).
+Typecheck, lint and both builds clean.
+
 **v0.118.0 — the shortcuts round: what the help panel promised finally happens.**
 
 The round's headline was found by verification, not imagination: `lib/playerKeys.ts` — pure,

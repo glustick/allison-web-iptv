@@ -200,8 +200,29 @@ function EpisodeList({
           />
         </div>
       )}
+      {/* v0.119.0 - a ten-season show scrolls forever; the dropdown jumps. Only when it can do
+          something: seven or more seasons. */}
+      {seasonNumbers.length >= 7 && (
+        <select
+          className="prefs-select"
+          aria-label="Jump to season"
+          onChange={(event) => {
+            document.getElementById(`season-${event.target.value}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+          }}
+          defaultValue=""
+        >
+          <option value="" disabled>
+            Jump to season…
+          </option>
+          {seasonNumbers.map((n) => (
+            <option key={n} value={n}>
+              {info.seasons.find((s) => s.season_number === n)?.name || `Season ${n}`}
+            </option>
+          ))}
+        </select>
+      )}
       {seasonNumbers.map((seasonNumber) => (
-        <div key={seasonNumber}>
+        <div key={seasonNumber} id={`season-${seasonNumber}`}>
           {(() => {
             const all = info.episodes[String(seasonNumber)] ?? []
             const watchedCount = all.filter((episode) => watchedFor(Number(episode.id))).length
@@ -696,6 +717,12 @@ export function Series({
         {nowPlaying && (
           <div className="now-playing-bar">
               Now playing: {nowPlaying.episode.title}
+              {/* v0.119.0 - the episode's own synopsis, lifted from get_series_info. */}
+              {nowPlaying.episode.plot ? (
+                <span className="setup-hint" style={{ display: 'block' }}>
+                  {nowPlaying.episode.plot.length > 220 ? nowPlaying.episode.plot.slice(0, 220) + '…' : nowPlaying.episode.plot}
+                </span>
+              ) : null}
               {/* v0.118.0 - the series' own metadata, carried by the catalogue since the
                   beginning and rendered nowhere: plot, genre, year. */}
               {openSeries?.plot ? (
