@@ -22,6 +22,7 @@ import { isPlayheadAtBufferEnd, liveRecoveryActions } from '../lib/liveStreamRec
 import { shouldAcceptVisibleEvent, shouldAutoRevive, shouldKickRecovery } from '../lib/reviveOnVisible'
 import { createPlaylistStallTracker } from '../lib/playlistStall'
 import { networkRetryDelayMs, shouldRejoinLiveEdge } from '../lib/liveStreamRecovery'
+import { actionForKey, isTypingTarget, SEEK_STEP_SECONDS } from '../lib/playerKeys'
 import { OFF_AIR_PROBE_MS, parsePlaylistWindow, probeVerdict, type PlaylistWindow } from '../lib/offAirProbe'
 import { clearNotBroadcasting, rememberNotBroadcasting, wasRecentlyNotBroadcasting } from '../lib/offAirHints'
 import { isDeadSessionTerminal, shouldRestartDeadSession, SESSION_HEALTH_POLL_MS } from '../lib/sessionHealth'
@@ -384,6 +385,28 @@ export function LivePlayer({
     }
     video.addEventListener('waiting', handleWaiting)
     video.addEventListener('playing', handlePlaying)
+    // v0.118.0 - the wake lock: a phone that treats playback as idleness darkens its screen
+    // mid-stream. Progressive - unsupported platforms simply skip it - and released on pause
+    // so a deliberately paused player lets the device sleep as usual.
+    let wakeLock: { release: () => Promise<void> } | null = null
+    const acquireWakeLock = (): void => {
+      void (
+        navigator as Navigator & {
+          wakeLock?: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> }
+        }
+      )
+        .wakeLock?.request('screen')
+        .then((lock) => {
+          wakeLock = lock
+        })
+        .catch(() => {})
+    }
+    const releaseWakeLock = (): void => {
+      void wakeLock?.release().catch(() => {})
+      wakeLock = null
+    }
+    acquireWakeLock()
+    video.addEventListener('pause', releaseWakeLock)
 
     // Backgrounding recovery (see lib/liveStreamRecovery.ts): a suspended page stops hls.js's
     // live-refresh timer chain, and nothing restarts it on its own once the page is active
@@ -462,6 +485,56 @@ let stallCount = 0
     // v0.117.0 — the network coming back is the same "the world changed, check the player"
     // event a tab-restore is: revive instead of waiting for the next stall to be noticed.
     window.addEventListener('online', onVisible)
+    // v0.118.0 — the keyboard shortcuts the help panel has advertised since v0.90, finally
+    // wired: the pure rules existed and were tested, but no component ever called them —
+    // Space/K/arrows/M/F/? did nothing while the help said otherwise.
+    const onPlayerKey = (event: KeyboardEvent): void => {
+      if (isTypingTarget(event.target)) return
+      const action = actionForKey(event, { seekable: Boolean(seekable) })
+      if (!action) return
+      const element = videoRef.current
+      if (!element) return
+      switch (action) {
+        case 'toggle':
+          event.preventDefault()
+          if (element.paused) void element.play().catch(() => {})
+          else element.pause()
+          break
+        case 'seek-back':
+          event.preventDefault()
+          element.currentTime = Math.max(0, element.currentTime - SEEK_STEP_SECONDS)
+          break
+        case 'seek-forward': {
+          event.preventDefault()
+          const end = Number.isFinite(element.duration) ? element.duration : element.currentTime + SEEK_STEP_SECONDS
+          element.currentTime = Math.min(end, element.currentTime + SEEK_STEP_SECONDS)
+          break
+        }
+        case 'volume-up':
+          event.preventDefault()
+          element.volume = Math.min(1, element.volume + 0.1)
+          break
+        case 'volume-down':
+          event.preventDefault()
+          element.volume = Math.max(0, element.volume - 0.1)
+          break
+        case 'mute':
+          event.preventDefault()
+          element.muted = !element.muted
+          break
+        case 'fullscreen':
+          event.preventDefault()
+          if (document.pictureInPictureElement) void document.exitPictureInPicture().catch(() => {})
+          else if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+          else void element.requestFullscreen?.().catch(() => {})
+          break
+        case 'help':
+          event.preventDefault()
+          setShowShortcuts((value) => !value)
+          break
+      }
+    }
+    window.addEventListener('keydown', onPlayerKey)
     const recoveryTimer = setInterval(() => {
       if (!hls || gaveUp || fatalErrorShown) return
       // v0.117.0 — the live-edge rejoin rung (desktop 0.30.0 parity): a playhead drifting far
@@ -976,9 +1049,12 @@ let stallCount = 0
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
       window.removeEventListener('online', onVisible)
+      window.removeEventListener('keydown', onPlayerKey)
       video.removeEventListener('error', onNativeError)
       video.removeEventListener('waiting', handleWaiting)
       video.removeEventListener('playing', handlePlaying)
+      video.removeEventListener('pause', releaseWakeLock)
+      releaseWakeLock()
       if (errorResetTimer) clearTimeout(errorResetTimer)
       if (networkRetryTimer) clearTimeout(networkRetryTimer)
       clearInterval(silentAudioTimer)

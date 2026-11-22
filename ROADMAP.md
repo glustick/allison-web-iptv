@@ -8,6 +8,35 @@ enhancements, ranked.
 
 ## Current release
 
+**v0.118.0 — the shortcuts round: what the help panel promised finally happens.**
+
+The round's headline was found by verification, not imagination: `lib/playerKeys.ts` — pure,
+tested, documenting every key — has been **imported by nothing but the help panel since
+v0.90**. Space, K, the arrows, M, F, ? — all advertised, none wired. Both players now run the
+tested rules: play/pause, ±10s seek (seek-gated on live, always on films), volume up/down,
+mute, fullscreen, and ? opens the help that documents them. A bug wearing a feature's clothes.
+
+The other nine:
+
+- **Movie/Series details** — the catalogue's plot, genre and year have travelled with every
+  series since the beginning and rendered nowhere; the now-playing bar shows them.
+- **Auth log Load more** — 50 → 200 → 350 → 500, one-way, reset by Clear; an investigation
+  wants depth without narrowing the filters.
+- **Hide adult categories** — a per-device household toggle against a conservative keyword
+  list; hidden from the sidebar, reachable again by turning it off, and search still reaches
+  any title.
+- **Media Session** — the tab title and lock screen say what is playing.
+- **Wake lock** — a phone that treats playback as idleness stops darkening mid-stream;
+  released on pause.
+- **Guide wheel-to-pan** — the trackpad's horizontal wheel pans, the same gesture the drag
+  implements; a plain mouse's vertical wheel is left alone.
+- **Enter takes the first search result** — typing the name is the whole intent.
+- **Multi-view picker icons** — favourites and Recent rows resolve artwork from the loaded
+  channel lists.
+
+Tests: 1131 (unchanged — the keyboard rules were already tested; the wiring is the fix).
+Typecheck, lint and both builds clean.
+
 **v0.117.0 — the stability round: the desktop's proven ladder upgrades, ported.**
 
 The desktop sibling shipped three recovery upgrades in its 0.30.0/0.31.0 stability rounds that

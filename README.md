@@ -6,7 +6,16 @@ A self-hosted web service for Xtream Codes/M3U IPTV providers — a browser-base
 
 See `EFFORT-ASSESSMENT.md` for the full scoping writeup this project started from.
 
-## Current state (v0.117.0 — the stability round)
+## Current state (v0.118.0 — the shortcuts round)
+
+**The advertised keyboard shortcuts are wired** (both players: play/pause, seek, volume, mute,
+fullscreen, ? — they had been documented-but-unwired since v0.90). Plus: series plot/genre/year
+in the now-playing bar, auth-log **Load more**, a **hide-adult-categories** household toggle,
+**Media Session** lock-screen metadata, **wake lock** on mobile, guide **wheel-to-pan**,
+**Enter** takes the first search result, and **artwork** in the multi-view picker. 1131 tests;
+typecheck, lint and both builds clean.
+
+## Previous release (v0.117.0 — the stability round)
 
 The desktop's proven recovery upgrades, ported: **live-edge rejoin**, **buffer-aware triage**,
 **reconnect backoff**, **VOD reload continuity**, **health-informed attach** (off-air channels

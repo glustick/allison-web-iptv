@@ -696,6 +696,15 @@ export function Series({
         {nowPlaying && (
           <div className="now-playing-bar">
               Now playing: {nowPlaying.episode.title}
+              {/* v0.118.0 - the series' own metadata, carried by the catalogue since the
+                  beginning and rendered nowhere: plot, genre, year. */}
+              {openSeries?.plot ? (
+                <span className="setup-hint" style={{ display: 'block' }}>
+                  {openSeries.genre ? `${openSeries.genre} · ` : ''}
+                  {openSeries.releaseDate ? `${openSeries.releaseDate.slice(0, 4)} · ` : ''}
+                  {openSeries.plot.length > 220 ? openSeries.plot.slice(0, 220) + '…' : openSeries.plot}
+                </span>
+              ) : null}
               {nowPlaying.playlistId && (
                 <span className="setup-hint" style={{ marginLeft: 6 }}>
                   · {additional.find((e) => e.id === nowPlaying.playlistId)?.label ?? nowPlaying.playlistId}

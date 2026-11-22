@@ -717,6 +717,13 @@ export function EpgGrid({
             placeholder="Search programmes…"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              // v0.118.0 - Enter takes the first result: typing the name is the whole intent.
+              if (event.key === 'Enter' && searchResults && searchResults.length > 0) {
+                event.preventDefault()
+                jumpToResult(searchResults[0])
+              }
+            }}
             aria-label="Search programmes in the guide"
             style={{ width: '11rem' }}
           />
@@ -841,6 +848,18 @@ export function EpgGrid({
         </div>
         <div
           className="epg-time-header-track"
+          onWheel={(event) => {
+            // v0.118.0 - the trackpad's horizontal wheel pans the guide, the same gesture the
+            // drag already implements; vertical wheels (a plain mouse) do nothing rather than
+            // hijack the page scroll.
+            if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return
+            event.preventDefault()
+            // Each wheel notch maps to the same distance a full-width drag would cover, scaled
+            // by how far the wheel travelled across the track.
+            const track = event.currentTarget as HTMLElement
+            const width = track.clientWidth || 1
+            setWindowOffsetMs((current) => Math.round((current + (event.deltaX / width) * (windowEnd - windowStart))))
+          }}
           onPointerDown={startPan}
           onPointerMove={movePan}
           onPointerUp={endPan}

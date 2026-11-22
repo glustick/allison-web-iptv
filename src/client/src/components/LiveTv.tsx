@@ -490,6 +490,63 @@ export function LiveTv({
     [additionalLookupById, additional, libraryLookup]
   )
 
+  // v0.118.0 - "hide adult categories": a household toggle (per device) that filters the
+  // provider's sidebar against a conservative keyword list. The categories are hidden from the
+  // lists, not deleted: turning it off brings everything back, and search still reaches any title.
+  const HIDE_ADULT_KEY = 'iptv:hide-adult-categories'
+  const ADULT_KEYWORDS = ['xxx', 'porn', 'adult', 'erotic', '18+']
+  const [hideAdult, setHideAdult] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(HIDE_ADULT_KEY) === 'on'
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HIDE_ADULT_KEY, hideAdult ? 'on' : 'off')
+    } catch {
+      // An unavailable store keeps the toggle session-only.
+    }
+  }, [hideAdult])
+  const visibleCategories = useMemo(
+    () =>
+      hideAdult
+        ? categories.filter(
+            (cat) => !ADULT_KEYWORDS.some((word) => cat.category_name.toLowerCase().includes(word))
+          )
+        : categories,
+    [categories, hideAdult]
+  )
+
+  // v0.118.0 - the tab title and the lock screen say what is playing: eight tabs stop being
+  // eight identical labels, and a phone's media surface shows the channel without unlocking.
+  const APP_TITLE = 'Allison Web IPTV'
+  useEffect(() => {
+    if (nowPlaying) {
+      document.title = '\u25b6 ' + nowPlaying.name + ' \u2014 ' + APP_TITLE
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: nowPlaying.name,
+            artist: 'Allison Web IPTV'
+          })
+        } catch {
+          // Engines without MediaMetadata support simply keep their default surface.
+        }
+      }
+    } else {
+      document.title = APP_TITLE
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = null
+        } catch {
+          // As above.
+        }
+      }
+    }
+  }, [nowPlaying?.stream_id, nowPlaying?.name, nowPlaying])
+
   const channels: LiveStream[] = useMemo(() => {
     if (selection.type === 'favourites') {
       return liveFavourites.map((favourite) =>
@@ -1061,7 +1118,16 @@ export function LiveTv({
         >
           All
         </button>
-        {categories.map((cat) => (
+        <button
+          type="button"
+          className={hideAdult ? 'admin-small-btn active' : 'admin-small-btn'}
+          aria-pressed={hideAdult}
+          title="Hide categories whose names look adult (xxx, porn, ...) from this device"
+          onClick={() => setHideAdult((value) => !value)}
+        >
+          {hideAdult ? 'Hidden: adult \u2713' : 'Hide adult'}
+        </button>
+        {visibleCategories.map((cat) => (
           <button
             key={cat.category_id}
             className={selection.type === 'provider' && selection.id === cat.category_id ? 'category-btn active' : 'category-btn'}

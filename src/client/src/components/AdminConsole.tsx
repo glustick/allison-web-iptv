@@ -163,6 +163,9 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
   // what the range returned.
   const [auditFrom, setAuditFrom] = useState('')
   const [auditUntil, setAuditUntil] = useState('')
+  // v0.118.0 — Load more: the log's default 50 rows is a glance; an investigation wants depth
+  // without narrowing the filters. One-way deepening, reset by Clear.
+  const [auditLimit, setAuditLimit] = useState(50)
   const shownAudit = auditText.trim().length > 0
     ? auditEntries.filter((entry) =>
         [entry.username, entry.ip, entry.userAgent].some((field) =>
@@ -176,11 +179,11 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
     } catch {
       // A full or unavailable store is not worth failing the log over.
     }
-  }, [auditUser, auditOutcome, auditFrom, auditUntil])
+  }, [auditUser, auditOutcome, auditFrom, auditUntil, auditLimit])
   const refreshAudit = useCallback(
     async (username: string, outcome: string): Promise<void> => {
       try {
-        const params = new URLSearchParams(auditFilterQuery(username, outcome))
+        const params = new URLSearchParams(auditFilterQuery(username, outcome, auditLimit))
         if (auditFrom) params.set('from', new Date(`${auditFrom}T00:00:00`).toISOString())
         if (auditUntil) params.set('until', new Date(`${auditUntil}T23:59:59`).toISOString())
         const res = await fetch(`/api/admin/audit?${params.toString()}`)
@@ -641,6 +644,7 @@ export function AdminConsole({ appUser }: { appUser: AppUser }): JSX.Element {
                 setAuditText('')
                 setAuditFrom('')
                 setAuditUntil('')
+                setAuditLimit(50)
               }}
             >
               Clear

@@ -115,7 +115,11 @@ export function MultiViewPicker({
         name: entry.name,
         playlistId: entry.playlistId,
         playlistLabel: entry.playlistId ? playlists.find((p) => p.id === entry.playlistId)?.label : undefined,
-        icon: ''
+        // v0.118.0 - the icon comes from the playlist's own channel list when it is loaded;
+        // rows render without artwork otherwise, exactly like the main list does.
+        icon:
+          playlists.find((p) => p.id === entry.playlistId)?.channels.find((c) => c.stream_id === entry.streamId)
+            ?.stream_icon ?? ''
       }))
     } else if (scope === 'fav') {
       all = favourites.map((favourite) => ({
@@ -124,7 +128,9 @@ export function MultiViewPicker({
         name: favourite.name,
         playlistId: favourite.playlistId,
         playlistLabel: favourite.playlistId ? playlists.find((p) => p.id === favourite.playlistId)?.label : undefined,
-        icon: ''
+        icon:
+          playlists.find((p) => p.id === favourite.playlistId)?.channels.find((c) => c.stream_id === favourite.streamId)
+            ?.stream_icon ?? ''
       }))
     } else if (scope.startsWith('pl:')) {
       const playlist = playlists.find((p) => p.id === scope.slice(3))

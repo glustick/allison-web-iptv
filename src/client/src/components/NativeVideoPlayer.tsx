@@ -16,6 +16,7 @@ import { SubtitleStyleButton } from './SubtitleStyleButton'
 import { PlayerMenu } from './PlayerMenu'
 import { appendEvent, type PlaybackEvent } from '../lib/playbackEvents'
 import { SleepTimerButton } from './SleepTimerButton'
+import { actionForKey, isTypingTarget, SEEK_STEP_SECONDS } from '../lib/playerKeys'
 import { rememberVodPosition, vodContinuityPosition } from '../lib/vodContinuity'
 import { MediaStats } from './MediaStats'
 import { TrackControls, type PlayerTrack } from './TrackControls'
@@ -190,6 +191,50 @@ export function NativeVideoPlayer({
     const reportIfPlaying = (): void => {
       if (!video.paused) report()
     }
+    // v0.118.0 - the same keyboard shortcuts the live player gained; a finite duration is the
+    // film's timeline, so seeking is always meaningful here.
+    const onPlayerKey = (event: KeyboardEvent): void => {
+      if (isTypingTarget(event.target)) return
+      const action = actionForKey(event, { seekable: Number.isFinite(video.duration) && video.duration > 0 })
+      if (!action) return
+      switch (action) {
+        case 'toggle':
+          event.preventDefault()
+          if (video.paused) void video.play().catch(() => {})
+          else video.pause()
+          break
+        case 'seek-back':
+          event.preventDefault()
+          video.currentTime = Math.max(0, video.currentTime - SEEK_STEP_SECONDS)
+          break
+        case 'seek-forward':
+          event.preventDefault()
+          video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SEEK_STEP_SECONDS)
+          break
+        case 'volume-up':
+          event.preventDefault()
+          video.volume = Math.min(1, video.volume + 0.1)
+          break
+        case 'volume-down':
+          event.preventDefault()
+          video.volume = Math.max(0, video.volume - 0.1)
+          break
+        case 'mute':
+          event.preventDefault()
+          video.muted = !video.muted
+          break
+        case 'fullscreen':
+          event.preventDefault()
+          if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+          else void video.requestFullscreen?.().catch(() => {})
+          break
+        case 'help':
+          event.preventDefault()
+          setShowShortcuts((value) => !value)
+          break
+      }
+    }
+    window.addEventListener('keydown', onPlayerKey)
     const progressTimer = setInterval(reportIfPlaying, 10_000)
     video.addEventListener('pause', report)
     video.addEventListener('seeked', report)
@@ -201,6 +246,28 @@ export function NativeVideoPlayer({
     window.addEventListener('pagehide', report)
     const markPlaying = (): void => setPreparing(false)
     video.addEventListener('playing', markPlaying)
+    // v0.118.0 - the wake lock: a phone that treats playback as idleness darkens its screen
+    // mid-stream. Progressive - unsupported platforms simply skip it - and released on pause
+    // so a deliberately paused player lets the device sleep as usual.
+    let wakeLock: { release: () => Promise<void> } | null = null
+    const acquireWakeLock = (): void => {
+      void (
+        navigator as Navigator & {
+          wakeLock?: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> }
+        }
+      )
+        .wakeLock?.request('screen')
+        .then((lock) => {
+          wakeLock = lock
+        })
+        .catch(() => {})
+    }
+    const releaseWakeLock = (): void => {
+      void wakeLock?.release().catch(() => {})
+      wakeLock = null
+    }
+    acquireWakeLock()
+    video.addEventListener('pause', releaseWakeLock)
     // Known to need converting (lib/transcodeHints.ts): go straight there instead of spending
     if (streamNeedsTranscode(url)) {
       logEvent('[player] this title is remembered as needing conversion — starting there')
@@ -266,7 +333,10 @@ export function NativeVideoPlayer({
       return () => {
         report()
         clearInterval(progressTimer)
+      window.removeEventListener('keydown', onPlayerKey)
         video.removeEventListener('playing', markPlaying)
+      video.removeEventListener('pause', releaseWakeLock)
+      releaseWakeLock()
         video.removeEventListener('loadedmetadata', applyResume)
         video.removeEventListener('pause', report)
         video.removeEventListener('seeked', report)
